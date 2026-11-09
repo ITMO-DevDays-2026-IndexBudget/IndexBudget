@@ -26,7 +26,7 @@ IndexBudget подбирает набор дополнительных инде�
 
 | Обязательно для полного MVP | После MVP |
 | --- | --- |
-| Kotlin/JVM, JDK 21, Spring Boot CLI; PostgreSQL 16 и HypoPG; Docker Compose | Другие версии PostgreSQL, несколько БД, HTTP/GUI |
+| Kotlin/JVM, JDK 25 LTS, Spring Boot CLI; PostgreSQL 16 и HypoPG; Docker Compose | Другие версии PostgreSQL, несколько БД, HTTP/GUI |
 | JSON v2: 1–20 SQL и 1–3 профиля частот | Автоматический сбор нагрузки, generic/prepared plans |
 | Поддержанный SELECT; B-tree на 1–2 колонках; ограниченная генерация | Более широкий SQL, partial/expression/INCLUDE, другие методы индексов |
 | Общий вектор стоимости SQL; критерии среднего и худшего сценария | Устойчивость к изменению данных, автоматическое построение сценариев |
@@ -277,7 +277,7 @@ Effective deadline передаётся всем CPU-проходам и опе�
 
 ## 8 Архитектура, CLI и отчёты
 
-Стек: Kotlin/JVM на JDK 21, Spring Boot в режиме CLI (`WebApplicationType.NONE`), PostgreSQL JDBC, Gradle Kotlin DSL. Сериализация JSON — Jackson. PostgreSQL 16 с HypoPG и demo seed поднимается через Docker Compose. React, HTTP API, worker-сервер и polling не требуются.
+Стек: Kotlin/JVM на JDK 25 LTS (уточнено 10 ноября 2026 при создании каркаса), Spring Boot в режиме CLI (`WebApplicationType.NONE`), PostgreSQL JDBC, Gradle Kotlin DSL. Сериализация JSON — Jackson. PostgreSQL 16 с HypoPG и demo seed поднимается через Docker Compose. React, HTTP API, worker-сервер и polling не требуются.
 
 Контракт команды: `indexbudget analyze --workload <path> --output-dir <path>`. Настройки подключения берутся из окружения; DSN и пароли не попадают в отчёт, SQL и логи. Примеры входа хранятся в репозитории. Каждая команда выполняет один анализ и использует одну выделенную JDBC-сессию.
 
