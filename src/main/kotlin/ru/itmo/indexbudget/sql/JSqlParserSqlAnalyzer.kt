@@ -44,7 +44,7 @@ class JSqlParserSqlAnalyzer : SqlAnalyzer {
             validateSqlSize(query)
             val select = parseSingleSelect(query, context)
             val tables = JSqlParserAstValidator(query.id, context).validate(select)
-            select to tables.map { TableName(name = it.name, schema = it.schemaName) }
+            select to tables.map { TableName(name = decodePostgresIdentifier(it.name), schema = it.schemaName?.let(::decodePostgresIdentifier)) }
         } catch (error: AnalysisException) {
             if (error.error.queryId != null) throw error
             throw AnalysisException(error.error.copy(queryId = query.id), error)
@@ -89,3 +89,13 @@ internal data class JSqlParserParsedWorkload(
     override val referencedTables: Set<TableName>,
     val queriesById: Map<String, PlainSelect>,
 ) : ParsedWorkload
+
+/** Decode AST tokens at the SQL -> domain boundary; keep the AST and original SQL unchanged.
+ * PostgreSQL's UTF-8 scanner folds ASCII A-Z in unquoted identifiers, not arbitrary Unicode.
+ */
+internal fun decodePostgresIdentifier(token: String): String =
+    if (token.startsWith('"') && token.endsWith('"')) {
+        token.substring(1, token.length - 1).replace("\"\"", "\"")
+    } else {
+        token.map { if (it in 'A'..'Z') it.lowercaseChar() else it }.joinToString("")
+    }

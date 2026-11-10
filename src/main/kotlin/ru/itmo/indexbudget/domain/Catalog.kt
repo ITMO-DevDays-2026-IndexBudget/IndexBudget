@@ -2,7 +2,8 @@ package ru.itmo.indexbudget.domain
 
 data class TableRef(val schema: String, val name: String)
 
-/** The schema may be absent until PostgreSQL name resolution has been applied. */
+/** Physical identifier values: SQL quotes decoded, unquoted ASCII folded by the parser.
+ * Schema may be absent until PostgreSQL search_path resolution has been applied. */
 data class TableName(val name: String, val schema: String? = null)
 
 data class ColumnRef(val table: TableRef, val name: String)

@@ -30,15 +30,18 @@ class JdbcCatalogReader(private val connection: Connection) {
     fun readCatalog(tables: Set<TableName>, context: RunContext): CatalogSnapshot {
         context.checkDeadline()
         try {
-            val path = query("SELECT unnest(pg_catalog.current_schemas(true))", context) { getString(1) }
+            val path = query("SELECT pg_catalog.unnest(pg_catalog.current_schemas(true))", context) { getString(1) }
             val found = linkedMapOf<TableRef, CatalogTable>()
             val unresolved = mutableListOf<TableName>()
             for (name in tables.sortedWith(compareBy({ it.schema ?: "" }, { it.name }))) {
                 val qualified = listOfNotNull(name.schema, name.name).joinToString(".", transform = ::quoteIdentifier)
                 val relation = query(RELATION, context, qualified) {
-                    Relation(getLong("oid"), TableRef(getString("schema_name"), getString("relname")),
-                        getString("relkind"), getDouble("reltuples").takeIf { it >= 0 },
-                        getBoolean("statistics_available"), getBoolean("readable"))
+                    Relation(
+                        oid = getLong("oid"),
+                        ref = TableRef(schema = getString("schema_name"), name = getString("relname")),
+                        kind = getString("relkind"), rows = getDouble("reltuples").takeIf { it >= 0 },
+                        statistics = getBoolean("statistics_available"), readable = getBoolean("readable"),
+                    )
                 }.singleOrNull()
                 if (relation == null) {
                     unresolved += name
@@ -78,12 +81,14 @@ class JdbcCatalogReader(private val connection: Connection) {
 
     private fun readIndexes(relation: Relation, context: RunContext): List<ExistingIndex> {
         val rows = query(INDEXES, context, relation.oid) {
-            IndexRow(getLong("indexrelid"), getString("index_name"), getString("method"),
-                getBoolean("indisvalid"), getBoolean("indisready"),
-                getBoolean("indislive") && !getBoolean("indcheckxmin"), getBoolean("indisunique"),
-                getString("predicate"), getInt("position") > getInt("indnkeyatts"),
-                getString("attname"), getString("expression"), getInt("options"),
-                getString("collation"), getString("opclass"))
+            IndexRow(
+                oid = getLong("indexrelid"), name = getString("index_name"), method = getString("method"),
+                valid = getBoolean("indisvalid"), ready = getBoolean("indisready"),
+                accessible = getBoolean("indislive") && !getBoolean("indcheckxmin"), unique = getBoolean("indisunique"),
+                predicate = getString("predicate"), included = getInt("position") > getInt("indnkeyatts"),
+                column = getString("attname"), expression = getString("expression"), options = getInt("options"),
+                collation = getString("collation"), opclass = getString("opclass"),
+            )
         }
         return rows.groupBy { it.oid }.values.map { parts ->
             val index = parts.first()
@@ -108,9 +113,15 @@ class JdbcCatalogReader(private val connection: Connection) {
         return connection.prepareStatement(sql).use { statement ->
             // JDBC uses whole seconds; round upwards, then check the shared deadline after execution
             // and on each row. No EXPLAIN attempts are consumed by catalog reads.
-            statement.queryTimeout = ((context.remainingTime().toMillis() + 999) / 1000)
+            context.checkDeadline()
+            val remaining = context.remainingTime()
+            if (remaining.isZero) throw AnalysisException(
+                AnalysisError(ErrorCode.DEADLINE_EXCEEDED, "Analysis time budget exhausted"),
+            )
+            statement.queryTimeout = ((remaining.toMillis() + 999) / 1000)
                 .coerceIn(1, Int.MAX_VALUE.toLong()).toInt()
             if (parameter != null) statement.setObject(1, parameter)
+            context.checkDeadline()
             statement.executeQuery().use { result ->
                 val values = mutableListOf<T>()
                 while (result.next()) {
@@ -141,7 +152,7 @@ class JdbcCatalogReader(private val connection: Connection) {
         val RELATION = """
             SELECT c.oid, n.nspname AS schema_name, c.relname, c.relkind, c.reltuples,
                    pg_catalog.has_schema_privilege(n.oid, 'USAGE') AND
-                   pg_catalog.has_table_privilege(c.oid, 'SELECT') AS readable,
+                   pg_catalog.has_any_column_privilege(c.oid, 'SELECT') AS readable,
                    EXISTS (SELECT 1 FROM pg_catalog.pg_stats s
                            WHERE s.schemaname = n.nspname AND s.tablename = c.relname) AS statistics_available
             FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
@@ -159,17 +170,38 @@ class JdbcCatalogReader(private val connection: Connection) {
             LEFT JOIN pg_catalog.pg_collation co ON co.oid = a.attcollation
             LEFT JOIN pg_catalog.pg_namespace cn ON cn.oid = co.collnamespace
             LEFT JOIN LATERAL (
-                SELECT pg_catalog.format('%I.%I', ns.nspname, op.opcname) AS opclass
-                FROM pg_catalog.pg_opclass op
-                JOIN pg_catalog.pg_am am ON am.oid = op.opcmethod AND am.amname = 'btree'
-                JOIN pg_catalog.pg_namespace ns ON ns.oid = op.opcnamespace
-                WHERE op.opcdefault AND op.opcintype = CASE
-                    WHEN t.oid = 'pg_catalog.varchar'::pg_catalog.regtype THEN 'pg_catalog.text'::pg_catalog.regtype
-                    WHEN t.typelem <> 0 AND t.typsubscript = 'pg_catalog.array_subscript_handler'::pg_catalog.regproc
-                        THEN 'pg_catalog.anyarray'::pg_catalog.regtype
-                    WHEN t.typtype = 'r' THEN 'pg_catalog.anyrange'::pg_catalog.regtype
-                    WHEN t.typtype = 'm' THEN 'pg_catalog.anymultirange'::pg_catalog.regtype
-                    ELSE t.oid END
+                -- PostgreSQL GetDefaultOpClass: exact match, then a unique compatible
+                -- preferred type in the same category, then a unique compatible type.
+                -- Domains are unsupported by the SQL layer; do not invent defaults for them.
+                WITH compatible AS (
+                    SELECT pg_catalog.format('%I.%I', ns.nspname, op.opcname) AS opclass,
+                           CASE WHEN op.opcintype = t.oid THEN 0
+                                WHEN ot.typcategory = t.typcategory AND ot.typispreferred THEN 1
+                                ELSE 2 END AS priority
+                    FROM pg_catalog.pg_opclass op
+                    JOIN pg_catalog.pg_am am ON am.oid = op.opcmethod AND am.amname = 'btree'
+                    JOIN pg_catalog.pg_namespace ns ON ns.oid = op.opcnamespace
+                    JOIN pg_catalog.pg_type ot ON ot.oid = op.opcintype
+                    WHERE op.opcdefault AND t.typtype <> 'd' AND (
+                        op.opcintype = t.oid
+                        OR EXISTS (SELECT 1 FROM pg_catalog.pg_cast cast_entry
+                                   WHERE cast_entry.castsource = t.oid AND cast_entry.casttarget = op.opcintype
+                                     AND cast_entry.castmethod = 'b' AND cast_entry.castcontext = 'i')
+                        OR (op.opcintype IN ('pg_catalog.anyarray'::pg_catalog.regtype,
+                                            'pg_catalog.anycompatiblearray'::pg_catalog.regtype)
+                            AND t.typsubscript = 'pg_catalog.array_subscript_handler'::pg_catalog.regproc)
+                        OR (op.opcintype = 'pg_catalog.anyenum'::pg_catalog.regtype AND t.typtype = 'e')
+                        OR (op.opcintype IN ('pg_catalog.anyrange'::pg_catalog.regtype,
+                                            'pg_catalog.anycompatiblerange'::pg_catalog.regtype) AND t.typtype = 'r')
+                        OR (op.opcintype IN ('pg_catalog.anymultirange'::pg_catalog.regtype,
+                                            'pg_catalog.anycompatiblemultirange'::pg_catalog.regtype) AND t.typtype = 'm')
+                        OR (op.opcintype = 'pg_catalog.record'::pg_catalog.regtype AND t.typtype = 'c')
+                    )
+                ), best AS (
+                    SELECT opclass FROM compatible
+                    WHERE priority = (SELECT pg_catalog.min(priority) FROM compatible)
+                )
+                SELECT pg_catalog.min(opclass) AS opclass FROM best HAVING pg_catalog.count(*) = 1
             ) defaults ON true
             WHERE a.attrelid = ? AND a.attnum > 0 AND NOT a.attisdropped
             ORDER BY a.attnum
@@ -186,7 +218,7 @@ class JdbcCatalogReader(private val connection: Connection) {
             FROM pg_catalog.pg_index i
             JOIN pg_catalog.pg_class ic ON ic.oid = i.indexrelid
             JOIN pg_catalog.pg_am am ON am.oid = ic.relam
-            CROSS JOIN LATERAL unnest(i.indkey) WITH ORDINALITY AS k(attnum, position)
+            CROSS JOIN LATERAL pg_catalog.unnest(i.indkey) WITH ORDINALITY AS k(attnum, position)
             LEFT JOIN pg_catalog.pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum
             LEFT JOIN pg_catalog.pg_collation co ON co.oid = i.indcollation[(k.position - 1)::integer]
             LEFT JOIN pg_catalog.pg_namespace cn ON cn.oid = co.collnamespace

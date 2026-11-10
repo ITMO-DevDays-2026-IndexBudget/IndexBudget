@@ -31,6 +31,14 @@ class JSqlParserSqlAnalyzerTest {
     private val analyzer = JSqlParserSqlAnalyzer()
 
     @Test
+    fun `unquoted identifiers fold ASCII case without changing original SQL`() {
+        val sql = "SELECT id FROM PuBlIc.ReCoRdS"
+        val parsed = analyzer.parse(workload(sql), RunContext())
+        assertEquals(setOf(TableName("records", "public")), parsed.referencedTables)
+        assertEquals(sql, parsed.input.queries.single().sql)
+    }
+
+    @Test
     fun `supported select retains shared input and referenced tables`() {
         val sql = """
             SELECT r.id, g.*
@@ -61,7 +69,7 @@ class JSqlParserSqlAnalyzerTest {
             RunContext(),
         )
 
-        assertEquals(setOf(TableName("\"Records\"", "\"Custom\"")), parsed.referencedTables)
+        assertEquals(setOf(TableName("Records", "Custom")), parsed.referencedTables)
     }
 
     @Test
@@ -109,8 +117,8 @@ class JSqlParserSqlAnalyzerTest {
         assertEquals(setOf(expected), parsed.referencedTables)
         assertEquals(sql, parsed.input.queries.single().sql)
         val table = parsed.queriesById.getValue("query").fromItem as Table
-        assertEquals(expected.name, table.name)
-        assertEquals(expected.schema, table.schemaName)
+        assertEquals("\"" + expected.name.replace("\"", "\"\"") + "\"", table.name)
+        assertEquals(expected.schema?.let { "\"" + it.replace("\"", "\"\"") + "\"" }, table.schemaName)
     }
 
     @Test
@@ -125,7 +133,7 @@ class JSqlParserSqlAnalyzerTest {
         val parsed = analyzer.parse(workload(sql), RunContext()) as JSqlParserParsedWorkload
         val select = parsed.queriesById.getValue("query")
 
-        assertEquals(setOf(TableName("\"a.b\""), TableName("\"other.table\"")), parsed.referencedTables)
+        assertEquals(setOf(TableName("a.b"), TableName("other.table")), parsed.referencedTables)
         val columns = listOf(
             select.selectItems[0].expression as Column,
             (select.where as EqualsTo).leftExpression as Column,
@@ -287,10 +295,10 @@ class JSqlParserSqlAnalyzerTest {
 
         @JvmStatic
         fun quotedTableNames(): List<Arguments> = listOf(
-            Arguments.of("SELECT id FROM \"a.b\"", TableName("\"a.b\"")),
-            Arguments.of("SELECT id FROM \"a.b.c.d\"", TableName("\"a.b.c.d\"")),
-            Arguments.of("SELECT id FROM \"s.c\".\"a.b\"", TableName("\"a.b\"", "\"s.c\"")),
-            Arguments.of("SELECT id FROM \"a\"\"b.c\"", TableName("\"a\"\"b.c\"")),
+            Arguments.of("SELECT id FROM \"a.b\"", TableName("a.b")),
+            Arguments.of("SELECT id FROM \"a.b.c.d\"", TableName("a.b.c.d")),
+            Arguments.of("SELECT id FROM \"s.c\".\"a.b\"", TableName("a.b", "s.c")),
+            Arguments.of("SELECT id FROM \"a\"\"b.c\"", TableName("a\"b.c")),
         )
     }
 }

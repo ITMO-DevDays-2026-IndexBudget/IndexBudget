@@ -70,6 +70,24 @@ class JdbcCatalogReaderTest {
         assertTrue(statementClosed)
     }
 
+    @Test
+    fun `deadline expiring in prepare closes statement without executing SQL`() {
+        var now = 0L
+        val context = RunContext(limits = RunLimits(commandTimeout = Duration.ofNanos(2)), clock = NanoClock { now })
+        var closed = false
+        val statement = Proxy.newProxyInstance(javaClass.classLoader, arrayOf(PreparedStatement::class.java)) { _, method, _ ->
+            if (method.name != "close") throw AssertionError("Expired statement was used: " + method.name)
+            closed = true
+            null
+        } as PreparedStatement
+        val connection = connection { now = 2; statement }
+        val error = assertThrows(AnalysisException::class.java) {
+            JdbcCatalogReader(connection).readCatalog(emptySet(), context)
+        }
+        assertEquals(ErrorCode.DEADLINE_EXCEEDED, error.error.code)
+        assertTrue(closed)
+    }
+
     private fun connection(action: () -> Any?): Connection = Proxy.newProxyInstance(
         javaClass.classLoader, arrayOf(Connection::class.java), { _, _, _ -> action() },
     ) as Connection

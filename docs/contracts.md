@@ -99,13 +99,20 @@ Reader не открывает и не закрывает connection, не де�
 с переданным JDBC connection. В CLI пока не подключён.
 
 `TableName` содержит идентификаторы после обработки SQL-парсером: unquoted имена
-уже приведены к нижнему регистру, quoted имена сохранены буквально. Reader
+уже приведены к нижнему регистру (ASCII A–Z), quoted имена декодированы: внешние
+кавычки сняты, удвоенные кавычки заменены одной. Это выполняет
+`JSqlParserSqlAnalyzer.parse` при создании TableName; AST сохраняет исходные
+токены. SQL resolver должен применять ту же `decodePostgresIdentifier` к токенам
+AST перед сравнением с именами доменной модели. Повторно декодировать TableName нельзя. Reader
 экранирует каждый компонент отдельно и передаёт имя параметром в `to_regclass`.
 `CatalogSnapshot.searchPath` — эффективный `current_schemas(true)` этой сессии
 (включая неявные схемы). Таблицы разрешаются PostgreSQL по этому пути; разные
 ссылки на одну таблицу дают одну запись. Не найденные имена сохраняются в
 `unresolvedTables`; SQL resolver добавляет query ID к ошибке UNKNOWN_TABLE.
-Недоступная ролью relation даёт CATALOG_ERROR. Views/partitioned/foreign/other
+Relation без USAGE на схему или без SELECT хотя бы на одну колонку даёт
+CATALOG_ERROR. SELECT на всю таблицу не требуется; чтение метаданных всех
+колонок не означает право читать их значения. Доступ к конкретным колонкам
+используемого SQL проверяется PostgreSQL при планировании (EXPLAIN). Views/partitioned/foreign/other
 сохраняют kind: отклоняет их SQL resolver, а не повторный JDBC-запрос.
 
 Колонки идут в физическом порядке attnum, без dropped/system attributes и без
@@ -119,9 +126,15 @@ MISSING_STATISTICS для каждой relation без видимой стати
 перенести эти warnings в общий отчёт.
 
 Collation/opclass возвращаются как schema-qualified SQL identifiers с quoting.
-Default B-tree opclass определяется для точного типа, varchar/text и стандартных
-массивов/ranges/multiranges. Если default не установлен, поле остаётся null;
-для пользовательских типов подбор implicit casts не выполняется.
+Default B-tree opclass выбирается сначала по точному типу (в том числе oidvector),
+затем среди binary-compatible implicit casts из pg_cast и стандартных
+полиморфных совместимостей. При нескольких совместимых типах выбирается
+единственный preferred type той же категории; без него — единственный
+совместимый вариант. Это сохраняет, например, cidr → inet_ops и varchar →
+text_ops. Неоднозначность/отсутствие default даёт null. Для неподдержанных
+domain-типов default не подбирается. Алгоритм сверяется с PostgreSQL 16
+[GetDefaultOpClass](https://github.com/postgres/postgres/blob/REL_16_STABLE/src/backend/commands/indexcmds.c)
+и [IsBinaryCoercible](https://github.com/postgres/postgres/blob/REL_16_STABLE/src/backend/parser/parse_coerce.c).
 
 Индексы сохраняются независимо от метода, predicate, expressions, INCLUDE и
 валидности. Физические ключи упорядочены; expression-позиции записываются в
@@ -130,7 +143,10 @@ Default B-tree opclass определяется для точного типа, 
 для B-tree. `accessible` консервативно false для indislive=false/indcheckxmin=true;
 допустимость дубля также требует valid и ready. Индексы не изменяются.
 
-Общий RunContext проверяется до запросов, на каждой строке и после чтения.
+Общий RunContext проверяется до/после подготовки statement, непосредственно
+перед executeQuery, на каждой строке и после чтения. Нулевой остаток не
+превращается в положительный timeout. Каталожные функции, включая unnest,
+квалифицированы pg_catalog и не зависят от функций в workload search_path.
 JDBC queryTimeout ограничен остатком бюджета, округлённым вверх до секунды
 (гранулярность JDBC); это не жёсткая миллисекундная гарантия завершения сетевого
 вызова. Механизм отмены/сетевых таймаутов сессии относится к #15. SQLException
