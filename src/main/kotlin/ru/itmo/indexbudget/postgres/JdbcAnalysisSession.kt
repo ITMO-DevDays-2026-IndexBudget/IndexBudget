@@ -85,7 +85,16 @@ class JdbcAnalysisSession(
             fail(ErrorCode.INTERNAL_ERROR, "Evaluation requires unique candidates and every workload query exactly once")
         }
         val result = withHypotheses(context) {
-            for (candidate in candidates.sortedBy { it.id }) createHypothesis(candidate, context)
+            for (candidate in candidates.sortedBy { it.id }) {
+                try {
+                    createHypothesis(candidate, context)
+                } catch (error: AnalysisException) {
+                    if (error.error.code != ErrorCode.HYPOTHETICAL_INDEX_ERROR) throw error
+                    throw AnalysisException(error.error.copy(
+                        details = error.error.details + mapOf("candidate_id" to candidate.id),
+                    )).also { attributed -> error.suppressed.forEach(attributed::addSuppressed) }
+                }
+            }
             val costs = linkedMapOf<String, Double>()
             val plans = linkedMapOf<String, ExplainPlan>()
             for (resolved in workload.queries.sortedBy { it.id }) {

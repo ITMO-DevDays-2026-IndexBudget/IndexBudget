@@ -9,7 +9,7 @@ import ru.itmo.indexbudget.domain.MetricsCalculator
 import ru.itmo.indexbudget.domain.MetricsCalculatorImpl
 import ru.itmo.indexbudget.domain.ObjectiveComparator
 import ru.itmo.indexbudget.domain.ObjectiveComparatorImpl
-import ru.itmo.indexbudget.optimizer.GreedyOptimizer
+import ru.itmo.indexbudget.optimizer.LimitedRepairOptimizer
 import ru.itmo.indexbudget.optimizer.Optimizer
 import ru.itmo.indexbudget.postgres.AnalysisSessionFactory
 import ru.itmo.indexbudget.postgres.JdbcAnalysisSessionFactory
@@ -29,9 +29,9 @@ class AnalysisConfiguration {
     @Bean
     fun objectiveComparator(): ObjectiveComparator = ObjectiveComparatorImpl()
 
-    /** PoC strategy; fixed-S0 repair and its complete stop handling are added in #18. */
+    /** Greedy followed by one bounded pass over the fixed repair neighborhood. */
     @Bean
-    fun optimizer(): Optimizer = GreedyOptimizer()
+    fun optimizer(): Optimizer = LimitedRepairOptimizer()
 
     @Bean
     fun analysisSessionFactory(): AnalysisSessionFactory = JdbcAnalysisSessionFactory()

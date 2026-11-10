@@ -13,6 +13,27 @@ import ru.itmo.indexbudget.domain.*
 /** Fault injection only; backend isolation and transaction semantics are tested against PostgreSQL. */
 class JdbcAnalysisSessionTest {
     @Test
+    fun `hypothesis failure identifies the candidate within a whole configuration`() {
+        val jdbc = FakeJdbc()
+        jdbc.createFailureAt = 2
+        val context = RunContext()
+        JdbcAnalysisSession(jdbc.connection).use { session ->
+            val error = assertThrows(AnalysisException::class.java) {
+                session.evaluate(listOf(candidate().copy(id = "a"), candidate().copy(id = "b")), workload(), context)
+            }
+            assertEquals(ErrorCode.HYPOTHETICAL_INDEX_ERROR, error.error.code)
+            assertEquals("b", error.error.details["candidate_id"])
+            assertEquals("XX000", error.error.details["sql_state"])
+            assertFalse(error.stackTraceToString().contains(SECRET))
+            assertEquals(2, jdbc.resetAttempts)
+            assertEquals(0, context.statistics().explainAttempts)
+            assertEquals(1, context.statistics().evaluationAttempts)
+            assertEquals(0, context.statistics().completedEvaluations)
+            jdbc.assertResourcesReleased()
+        }
+    }
+
+    @Test
     fun `root cost is used without summing children and complete plans are saved`() {
         val first = """[{"Plan":{"Total Cost":12.5,"Plans":[{"Total Cost":900}]}}]"""
         val second = """[{"Plan":{"Total Cost":0}}]"""
@@ -286,6 +307,8 @@ class JdbcAnalysisSessionTest {
         var afterExplain: () -> Unit = {}
         var resetAttempts = 0
         var sizeBytes = 11L
+        var createFailureAt: Int? = null
+        private var createAttempts = 0
         var hypopgEnabled = "on"
         var closed = false
         private var explainAttempts = 0
@@ -331,7 +354,11 @@ class JdbcAnalysisSessionTest {
                                 resetFailures[resetAttempts]?.let { throw it }
                                 ""
                             }
-                            sql.contains("hypopg_create_index") -> 1234L
+                            sql.contains("hypopg_create_index") -> {
+                                createAttempts++
+                                if (createAttempts == createFailureAt) throw SQLException(SECRET, "XX000")
+                                1234L
+                            }
                             sql.contains("hypopg_relation_size") -> sizeBytes
                             sql.startsWith("EXPLAIN") -> {
                                 explainAttempts++
