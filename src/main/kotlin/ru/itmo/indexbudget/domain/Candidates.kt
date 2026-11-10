@@ -54,6 +54,8 @@ data class LocalGenerationStatistics(
     val deduplicatedDefinitions: Int,
     val retainedDefinitions: Int,
     val excludedColumns: List<ColumnRef> = emptyList(),
+    /** Before the local cap; null only for producers that do not observe this stage. */
+    val candidatesAfterExistingDeduplication: Int? = null,
 )
 
 data class CandidateDiagnostics(
