@@ -82,6 +82,29 @@ class ObjectiveComparatorTest {
     }
 
     @Test
+    fun `budgeted bytes take precedence over write units and ids`() {
+        val smaller = config(
+            ids = listOf("idx_z"),
+            worstRatio = 0.8,
+            meanRatio = 0.6,
+            budgetedBytes = 900,
+            writeUnitsPerHour = 20.0,
+        )
+        val fewerWrites = config(
+            ids = listOf("idx_a"),
+            worstRatio = 0.8,
+            meanRatio = 0.6,
+            budgetedBytes = 1_000,
+            writeUnitsPerHour = 10.0,
+        )
+
+        for (objective in Objective.entries) {
+            assertTrue(comparator.compare(smaller, fewerWrites, objective) < 0, objective.name)
+            assertTrue(comparator.compare(fewerWrites, smaller, objective) > 0, objective.name)
+        }
+    }
+
+    @Test
     fun `estimated bytes are not part of the key`() {
         val smallEstimate = config(
             ids = listOf("idx_a"),
@@ -123,6 +146,27 @@ class ObjectiveComparatorTest {
     }
 
     @Test
+    fun `write units take precedence over ids when budgeted bytes are equal`() {
+        val fewerWrites = config(
+            ids = listOf("idx_z"),
+            worstRatio = 0.8,
+            meanRatio = 0.6,
+            writeUnitsPerHour = 10.0,
+        )
+        val earlierId = config(
+            ids = listOf("idx_a"),
+            worstRatio = 0.8,
+            meanRatio = 0.6,
+            writeUnitsPerHour = 20.0,
+        )
+
+        for (objective in Objective.entries) {
+            assertTrue(comparator.compare(fewerWrites, earlierId, objective) < 0, objective.name)
+            assertTrue(comparator.compare(earlierId, fewerWrites, objective) > 0, objective.name)
+        }
+    }
+
+    @Test
     fun `write units are skipped when the write model is absent`() {
         val first = config(ids = listOf("idx_a"), worstRatio = 0.8, meanRatio = 0.6, writeUnitsPerHour = null)
         val second = config(ids = listOf("idx_a"), worstRatio = 0.8, meanRatio = 0.6, writeUnitsPerHour = null)
@@ -150,6 +194,17 @@ class ObjectiveComparatorTest {
         assertTrue(comparator.compare(sharedPrefix, laterFirstId, Objective.ROBUST) < 0)
         assertTrue(comparator.compare(sharedPrefix, longerWithSamePrefix, Objective.ROBUST) < 0)
         assertEquals(0, comparator.compare(sharedPrefix, sameIds, Objective.ROBUST))
+    }
+
+    @Test
+    fun `ids after a shared prefix distinguish equally sized configurations`() {
+        val earlier = config(ids = listOf("idx_a", "idx_b"), worstRatio = 0.8, meanRatio = 0.6)
+        val later = config(ids = listOf("idx_a", "idx_c"), worstRatio = 0.8, meanRatio = 0.6)
+
+        for (objective in Objective.entries) {
+            assertTrue(comparator.compare(earlier, later, objective) < 0, objective.name)
+            assertTrue(comparator.compare(later, earlier, objective) > 0, objective.name)
+        }
     }
 
     @Test
@@ -192,12 +247,33 @@ class ObjectiveComparatorTest {
 
     @Test
     fun `gate rejects equal rounded components`() {
-        val proposed = metrics(worstRatio = 0.9, meanRatio = 0.5)
         val current = metrics(worstRatio = 0.9, meanRatio = 0.5)
-        val roundedEqual = metrics(worstRatio = 0.9000000004, meanRatio = 0.5)
+        val roundedEquals = listOf(
+            current,
+            metrics(worstRatio = 0.8999999996, meanRatio = 0.5),
+            metrics(worstRatio = 0.9000000004, meanRatio = 0.5),
+            metrics(worstRatio = 0.9, meanRatio = 0.4999999996),
+            metrics(worstRatio = 0.9, meanRatio = 0.5000000004),
+        )
 
-        assertFalse(comparator.improvesPrimaryMetrics(proposed, current, Objective.ROBUST))
-        assertFalse(comparator.improvesPrimaryMetrics(roundedEqual, current, Objective.ROBUST))
+        for (proposed in roundedEquals) {
+            for (objective in Objective.entries) {
+                assertFalse(
+                    comparator.improvesPrimaryMetrics(proposed, current, objective),
+                    "$objective: R=${proposed.worstRatio}, M=${proposed.meanRatio}",
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `gate accepts a rounded plateau with a better secondary component`() {
+        val current = metrics(worstRatio = 0.9, meanRatio = 0.5)
+        val robustPlateau = metrics(worstRatio = 0.9000000004, meanRatio = 0.4)
+        val meanPlateau = metrics(worstRatio = 0.8, meanRatio = 0.5000000004)
+
+        assertTrue(comparator.improvesPrimaryMetrics(robustPlateau, current, Objective.ROBUST))
+        assertTrue(comparator.improvesPrimaryMetrics(meanPlateau, current, Objective.MEAN))
     }
 
     @Test
