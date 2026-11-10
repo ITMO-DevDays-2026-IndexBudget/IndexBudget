@@ -41,6 +41,9 @@ data class RunProgress(
     val completedPhases: List<AnalysisPhase>,
 )
 
+/** Safe metadata captured by the adapter on its existing session; never connection settings. */
+data class DatabaseVersions(val postgresVersion: String? = null, val hypopgVersion: String? = null)
+
 /**
  * Mutable state owned by one application invocation. Only cancellation is shared across threads.
  * No connections or secrets. Progress observers execute synchronously on the analysis thread.
@@ -70,6 +73,13 @@ class RunContext(
     /** Fingerprint of validated source JSON, before DTO defaults; never stores the source itself. */
     var inputHash: String? = null
         private set
+
+    var databaseVersions: DatabaseVersions = DatabaseVersions()
+        private set
+
+    fun recordDatabaseVersions(versions: DatabaseVersions) {
+        databaseVersions = versions
+    }
 
     fun recordInputHash(sha256: String) {
         check(inputHash == null) { "Input hash can only be recorded once per run" }
