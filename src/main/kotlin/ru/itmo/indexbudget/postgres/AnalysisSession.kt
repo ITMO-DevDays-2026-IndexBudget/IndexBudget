@@ -1,6 +1,7 @@
 package ru.itmo.indexbudget.postgres
 
 import ru.itmo.indexbudget.domain.CatalogSnapshot
+import ru.itmo.indexbudget.domain.DatabaseVersions
 import ru.itmo.indexbudget.domain.IndexCandidate
 import ru.itmo.indexbudget.domain.RunContext
 import ru.itmo.indexbudget.domain.TableName
@@ -13,6 +14,9 @@ import ru.itmo.indexbudget.optimizer.ConfigurationEvaluator
  * crosses this port. The application owns the session lifetime and closes it in finally.
  */
 interface AnalysisSession : ConfigurationEvaluator, AutoCloseable {
+    /** Already captured versions, with no SQL/getConnection call; unknown values remain null. */
+    val databaseVersions: DatabaseVersions get() = DatabaseVersions()
+
     /** Unqualified names are resolved against this connection's PostgreSQL search path. */
     fun readCatalog(tables: Set<TableName>, context: RunContext): CatalogSnapshot
 
