@@ -11,6 +11,9 @@ import org.junit.jupiter.api.condition.OS
 import org.junit.jupiter.api.io.TempDir
 import org.opentest4j.TestAbortedException
 import ru.itmo.indexbudget.application.WorkloadReader
+import ru.itmo.indexbudget.application.AnalysisRunner
+import ru.itmo.indexbudget.domain.*
+import ru.itmo.indexbudget.fixtures.ContractFixtures
 import tools.jackson.databind.json.JsonMapper
 import java.io.IOException
 import java.io.PrintWriter
@@ -268,6 +271,73 @@ class IndexBudgetCliTest {
         assertTrue(result.stderr.startsWith("INVALID_INPUT:"))
     }
 
+    @Test
+    fun `runner receives validated input and shared context with real progress counters`() {
+        val runner = AnalysisRunner { input, output, context ->
+            assertEquals(2, input.schemaVersion)
+            assertEquals(directory.resolve("run"), output)
+            assertEquals(listOf(AnalysisPhase.VALIDATION), context.completedPhases())
+            context.enterPhase(AnalysisPhase.BASELINE)
+            context.reserveEvaluationAttempt()
+            context.reserveExplainAttempt()
+            context.reserveExplainAttempt()
+            context.recordCompletedEvaluation()
+            context.recordCacheHit()
+            ContractFixtures.completedResult()
+        }
+        val result = invokeWith(IndexBudgetCli(WorkloadReader(), analysisRunner = runner),
+            "analyze", "--workload", "examples/workload-v2.json", "--output-dir", directory.resolve("run").toString())
+        assertEquals(0, result.code)
+        assertEquals("", result.stderr)
+        assertTrue(result.progress.first().startsWith("stage=validation "))
+        assertEquals("stage=baseline explain_attempts=2 completed_sets=1 cache_hits=1", result.progress.last())
+        assertFalse(result.progress.any { '%' in it })
+    }
+
+    @Test
+    fun `saved partial returns 3 and typed failures retain their exit codes`() {
+        val results = listOf(
+            ContractFixtures.partialResult() to 3,
+            SearchResult.Failed(Objective.ROBUST, AnalysisError(ErrorCode.INVALID_WRITE_PROFILE, "Invalid profile.")) to 2,
+            SearchResult.Failed(Objective.ROBUST, AnalysisError(ErrorCode.NUMERIC_ERROR, "Invalid metrics.")) to 1,
+        )
+        for ((searchResult, expectedCode) in results) {
+            val runner = AnalysisRunner { _, _, _ -> searchResult }
+            val result = invokeWith(IndexBudgetCli(WorkloadReader(), analysisRunner = runner),
+                "analyze", "--workload", "examples/workload-v2.json", "--output-dir", directory.resolve("run").toString())
+            assertEquals(expectedCode, result.code)
+        }
+    }
+
+    @Test
+    fun `export and unexpected failures cannot return partial or expose secrets`() {
+        for (failure in listOf(
+            AnalysisException(AnalysisError(ErrorCode.EXPORT_FAILED, "Cannot publish analysis artifacts.")),
+            IllegalStateException("postgresql://user:private-password@localhost/db"),
+        )) {
+            val runner = AnalysisRunner { _, _, _ -> throw failure }
+            val result = invokeWith(IndexBudgetCli(WorkloadReader(), analysisRunner = runner),
+                "analyze", "--workload", "examples/workload-v2.json", "--output-dir", directory.resolve("run").toString())
+            assertEquals(1, result.code)
+            assertFalse(result.stderr.contains("private-password"))
+        }
+    }
+
+    @Test
+    fun `command budget is not restarted after startup or validation`() {
+        var nanos = 0L
+        val context = RunContext(clock = NanoClock { nanos })
+        nanos = java.time.Duration.ofSeconds(90).toNanos()
+        val runner = AnalysisRunner { _, _, _ -> error("Expired command must not run") }
+        val stderr = StringWriter()
+        val code = IndexBudgetCli(WorkloadReader(), analysisRunner = runner).execute(
+            arrayOf("analyze", "--workload", "examples/workload-v2.json", "--output-dir", directory.resolve("run").toString()),
+            err = PrintWriter(stderr, true), context = context,
+        )
+        assertEquals(1, code)
+        assertTrue(stderr.toString().contains("DEADLINE_EXCEEDED:"))
+    }
+
     private fun analyze(output: Path, workload: Path = Path.of("examples/workload-v2.json")): Result =
         invoke("analyze", "--workload", workload.toString(), "--output-dir", output.toString())
 
@@ -298,12 +368,17 @@ class IndexBudgetCliTest {
         }
     }
 
-    private fun invoke(vararg args: String): Result {
+    private fun invoke(vararg args: String): Result = invokeWith(cli, *args)
+
+    private fun invokeWith(cli: IndexBudgetCli, vararg args: String): Result {
         val stdout = StringWriter()
         val stderr = StringWriter()
         val code = cli.execute(arrayOf(*args), PrintWriter(stdout, true), PrintWriter(stderr, true))
-        return Result(code, stdout.toString(), stderr.toString())
+        val lines = stderr.toString().lineSequence().filter { it.isNotEmpty() }.toList()
+        val diagnostics = lines.filterNot { it.startsWith("stage=") }
+        return Result(code, stdout.toString(), diagnostics.joinToString("\n", postfix = if (diagnostics.isEmpty()) "" else "\n"),
+            lines.filter { it.startsWith("stage=") })
     }
 
-    private data class Result(val code: Int, val stdout: String, val stderr: String)
+    private data class Result(val code: Int, val stdout: String, val stderr: String, val progress: List<String>)
 }

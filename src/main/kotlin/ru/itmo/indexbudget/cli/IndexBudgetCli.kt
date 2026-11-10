@@ -1,11 +1,17 @@
 package ru.itmo.indexbudget.cli
 
 import org.springframework.stereotype.Component
+import ru.itmo.indexbudget.application.AnalysisRunner
 import ru.itmo.indexbudget.application.OutputDirectoryValidator
+import ru.itmo.indexbudget.application.UnavailableAnalysisRunner
 import ru.itmo.indexbudget.application.WorkloadReader
 import ru.itmo.indexbudget.domain.AnalysisError
 import ru.itmo.indexbudget.domain.AnalysisException
+import ru.itmo.indexbudget.domain.AnalysisPhase
 import ru.itmo.indexbudget.domain.ErrorCode
+import ru.itmo.indexbudget.domain.RunContext
+import ru.itmo.indexbudget.domain.SearchResult
+import ru.itmo.indexbudget.domain.WorkloadInput
 import tools.jackson.core.JacksonException
 import tools.jackson.databind.json.JsonMapper
 import java.io.IOException
@@ -17,6 +23,7 @@ import java.nio.file.Path
 class IndexBudgetCli(
     private val workloadReader: WorkloadReader,
     private val outputDirectoryValidator: OutputDirectoryValidator = OutputDirectoryValidator(),
+    private val analysisRunner: AnalysisRunner = UnavailableAnalysisRunner(),
 ) {
     private val diagnosticMapper = JsonMapper.builder().build()
 
@@ -24,7 +31,13 @@ class IndexBudgetCli(
         args: Array<String>,
         out: PrintWriter = PrintWriter(System.out, true),
         err: PrintWriter = PrintWriter(System.err, true),
+        context: RunContext = RunContext(),
     ): Int {
+        context.observeProgress { progress ->
+            val counters = progress.statistics
+            err.println("stage=${progress.phase.name.lowercase()} explain_attempts=${counters.explainAttempts} " +
+                "completed_sets=${counters.completedEvaluations} cache_hits=${counters.cacheHits}")
+        }
         if (args.isEmpty() || args.contentEquals(arrayOf("--help")) ||
             args.contentEquals(arrayOf("analyze", "--help"))) {
             out.println(USAGE)
@@ -52,11 +65,17 @@ class IndexBudgetCli(
         if (options.keys != ANALYZE_OPTIONS) {
             return fail(err, ErrorCode.INVALID_INPUT, "Both --workload and --output-dir are required.")
         }
+        val input: WorkloadInput
+        val outputPath: Path
         try {
+            context.enterPhase(AnalysisPhase.VALIDATION)
             val workloadPath = Path.of(options.getValue("--workload"))
-            val outputPath = Path.of(options.getValue("--output-dir"))
-            workloadReader.read(workloadPath)
+            outputPath = Path.of(options.getValue("--output-dir"))
+            input = workloadReader.read(workloadPath, context)
+            context.checkDeadline()
             outputDirectoryValidator.validate(outputPath)
+            context.checkDeadline()
+            context.completePhase()
         } catch (failure: AnalysisException) {
             return fail(err, failure.error)
         } catch (_: InvalidPathException) {
@@ -69,9 +88,18 @@ class IndexBudgetCli(
             return fail(err, ErrorCode.INVALID_INPUT, "Workload JSON does not match the v2 input structure.")
         }
 
-        // Never present fixture output as a successful real analysis.
-        // SQL analysis, the PostgreSQL session and search are integrated in subsequent tasks.
-        return fail(err, ErrorCode.NOT_IMPLEMENTED, "This skeleton has no analysis pipeline yet. No reports were created.")
+        return try {
+            val result = analysisRunner.run(input, outputPath, context)
+            if (result is SearchResult.Failed) {
+                fail(err, result.error)
+            } else {
+                result.status.exitCode
+            }
+        } catch (failure: AnalysisException) {
+            fail(err, failure.error)
+        } catch (_: Exception) {
+            fail(err, ErrorCode.INTERNAL_ERROR, "Analysis failed unexpectedly.")
+        }
     }
 
     private fun fail(err: PrintWriter, code: ErrorCode, message: String): Int {
@@ -100,8 +128,9 @@ class IndexBudgetCli(
 
             Validates JSON v2, shared queries, frequency profiles and budgets.
             Use a new or empty output directory for each run.
-            The analysis pipeline is not implemented; analyze exits with code 1
-            after validation and does not create reports or connect to a database.
+            Runs the analysis pipeline when all production components are connected.
+            Missing components produce NOT_IMPLEMENTED (exit 1), without reports or a database connection.
+            Progress on stderr contains stages and actual EXPLAIN/set/cache counters.
 
             Exit codes: 0 completed/help; 1 failed; 2 invalid input; 3 partial.
             PostgreSQL configuration for the pipeline: INDEXBUDGET_DATABASE_URL.
