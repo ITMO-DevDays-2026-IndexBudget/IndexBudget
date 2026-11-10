@@ -124,6 +124,8 @@ class AnalysisPipeline(
             }
         } catch (error: AnalysisException) {
             failure = error.error
+            // The adapter preserves the primary failure and attaches safe typed cleanup failures.
+            cleanupErrors += error.suppressed.filterIsInstance<AnalysisException>().map { it.error }
         } catch (_: Exception) {
             // Unexpected parser/driver/implementation exceptions may contain SQL or credentials.
             failure = AnalysisError(ErrorCode.INTERNAL_ERROR, "Analysis component failed unexpectedly.")
@@ -183,6 +185,7 @@ class AnalysisPipeline(
         val shortlistedCandidates = shortlist.candidates
         for ((index, candidate) in shortlistedCandidates.withIndex()) {
             context.checkDeadline()
+            var pendingFailure: AnalysisException? = null
             try {
                 val bytes = session.estimateSize(candidate, context)
                 if (bytes < 0) throw AnalysisException(AnalysisError(
@@ -208,12 +211,15 @@ class AnalysisPipeline(
                         details = mapOf("candidate_id" to candidate.id),
                     ),
                 ))
+                if (error.suppressed.isNotEmpty()) pendingFailure = error
             }
             // Publish before checking the deadline: failed and unvisited entries keep unknown estimates.
             reportBatch = reportBatch.copy(
                 candidates = reportedCandidates.toList() + shortlistedCandidates.drop(index + 1),
             )
             onPrepared(reportBatch)
+            // A local rejection is recoverable only if its session cleanup succeeded.
+            pendingFailure?.let { throw it }
             context.checkDeadline()
         }
         return reportBatch.copy(candidates = preparedCandidates.toList())
@@ -250,7 +256,9 @@ class AnalysisPipeline(
             )
         }
         return if (primaryFailure != null) {
-            val reason = partialReason(primaryFailure.code)
+            val reason = partialReason(primaryFailure.code) ?: if (
+                primaryFailure.code == ErrorCode.HYPOTHETICAL_INDEX_ERROR
+            ) cleanupErrors.firstNotNullOfOrNull { partialReason(it.code) } else null
             if (reason != null && baseline != null && checkpoint != null) {
                 SearchResult.Partial(objective, baseline, checkpoint.bestRobust, checkpoint.bestMean,
                     diagnostics.copy(stopReasons = (diagnostics.stopReasons + reason).distinct()))

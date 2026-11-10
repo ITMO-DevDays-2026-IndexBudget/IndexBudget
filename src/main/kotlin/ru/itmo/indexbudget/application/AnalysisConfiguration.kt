@@ -8,6 +8,7 @@ import ru.itmo.indexbudget.domain.MetricsCalculator
 import ru.itmo.indexbudget.domain.ObjectiveComparator
 import ru.itmo.indexbudget.optimizer.Optimizer
 import ru.itmo.indexbudget.postgres.AnalysisSessionFactory
+import ru.itmo.indexbudget.postgres.JdbcAnalysisSessionFactory
 import ru.itmo.indexbudget.report.ReportBuilder
 import ru.itmo.indexbudget.report.ReportExporter
 import ru.itmo.indexbudget.sql.SqlAnalyzer
@@ -15,6 +16,9 @@ import ru.itmo.indexbudget.sql.SqlAnalyzer
 /** All production ports must be present; fixtures are never registered in the CLI. */
 @Configuration(proxyBeanMethods = false)
 class AnalysisConfiguration {
+    @Bean
+    fun analysisSessionFactory(): AnalysisSessionFactory = JdbcAnalysisSessionFactory()
+
     @Bean
     fun analysisRunner(
         sql: ObjectProvider<SqlAnalyzer>,
