@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root=${INDEXBUDGET_DEPLOY_ROOT:-"$HOME/indexbudget"}
+export JAVA_HOME="$root/jdk"
+release=$(readlink -f "$root/current")
+exec "$release/app/bin/indexbudget" "$@"
