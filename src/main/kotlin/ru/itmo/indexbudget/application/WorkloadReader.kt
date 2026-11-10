@@ -33,26 +33,7 @@ class WorkloadReader {
         .build()
 
     fun read(path: Path): WorkloadInput {
-        val bytes = Files.newInputStream(path).use { it.readNBytes(MAX_INPUT_BYTES + 1) }
-        if (bytes.size > MAX_INPUT_BYTES) {
-            invalid(Location("workload"), "Workload JSON must not exceed 1 MiB UTF-8.", ErrorCode.INPUT_LIMIT_EXCEEDED)
-        }
-        val json = try {
-            Charsets.UTF_8.newDecoder()
-                .onMalformedInput(CodingErrorAction.REPORT)
-                .onUnmappableCharacter(CodingErrorAction.REPORT)
-                .decode(ByteBuffer.wrap(bytes)).toString().removePrefix("\uFEFF")
-        } catch (_: CharacterCodingException) {
-            invalid(Location("workload"), "Workload JSON must be valid UTF-8.")
-        }
-        val tree = try {
-            mapper.readTree(json)
-        } catch (_: JacksonException) {
-            // Сообщения парсера могут содержать SQL, пароли или другие фрагменты входа.
-            invalid(Location("workload"), "Invalid JSON, duplicate object keys or trailing content.")
-        }
-        if (tree == null || !tree.isObject) invalid(Location("workload"), "Expected an object.")
-        val root = tree
+        val root = readJsonObject(path)
         val version = root.get("schema_version")
         if (version == null || !version.isIntegralNumber || !version.canConvertToInt() || version.intValue() != 2) {
             invalid(Location("schema_version"),
@@ -80,6 +61,29 @@ class WorkloadReader {
                 ErrorCode.INVALID_WRITE_PROFILE)
         }
         return WorkloadInput(queries, profiles, constraints, objective = objective, tableWriteRates = writeRates)
+    }
+
+    private fun readJsonObject(path: Path): JsonNode {
+        val bytes = Files.newInputStream(path).use { it.readNBytes(MAX_INPUT_BYTES + 1) }
+        if (bytes.size > MAX_INPUT_BYTES) {
+            invalid(Location("workload"), "Workload JSON must not exceed 1 MiB UTF-8.", ErrorCode.INPUT_LIMIT_EXCEEDED)
+        }
+        val json = try {
+            Charsets.UTF_8.newDecoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT)
+                .decode(ByteBuffer.wrap(bytes)).toString().removePrefix("\uFEFF")
+        } catch (_: CharacterCodingException) {
+            invalid(Location("workload"), "Workload JSON must be valid UTF-8.")
+        }
+        val tree = try {
+            mapper.readTree(json)
+        } catch (_: JacksonException) {
+            // Сообщения парсера могут содержать SQL, пароли или другие фрагменты входа.
+            invalid(Location("workload"), "Invalid JSON, duplicate object keys or trailing content.")
+        }
+        if (tree == null || !tree.isObject) invalid(Location("workload"), "Expected an object.")
+        return tree
     }
 
     private fun constraints(node: JsonNode?): Constraints {
@@ -116,7 +120,6 @@ class WorkloadReader {
     private fun profiles(node: JsonNode?, queries: List<QueryInput>): List<Profile> {
         val values = array(node, Location("profiles"), 3)
         val ids = mutableSetOf<String>()
-        val queryIds = queries.map { it.id }.toSet()
         val profiles = values.mapIndexed { index, entry ->
             val location = Location("profiles[$index]")
             val value = objectNode(entry, location, setOf("id", "weight", "calls_per_hour"))
@@ -124,19 +127,7 @@ class WorkloadReader {
             val profileLocation = location.copy(profileId = id)
             if (!ids.add(id)) invalid(profileLocation.child("id"), "Profile IDs must be unique.")
             val weight = number(value.get("weight"), profileLocation.child("weight"), positive = true)
-            val callsLocation = profileLocation.child("calls_per_hour")
-            val calls = value.get("calls_per_hour")
-            if (calls == null || !calls.isObject) invalid(callsLocation, "Expected an object with all query IDs.")
-            val keys = calls.properties().map { it.key }.toSet()
-            val missing = queryIds.firstOrNull { it !in keys }
-            if (missing != null) invalid(callsLocation.copy(queryId = missing), "Missing query ID in calls_per_hour.")
-            if (keys.any { it !in queryIds }) invalid(callsLocation, "Unknown query ID in calls_per_hour.")
-            val frequencies = queries.associate { query ->
-                query.id to number(calls.get(query.id), callsLocation.copy(queryId = query.id))
-            }
-            if (frequencies.values.none { it > 0.0 }) {
-                invalid(callsLocation, "Each profile must use at least one query with a positive frequency.")
-            }
+            val frequencies = readFrequencies(value.get("calls_per_hour"), profileLocation.child("calls_per_hour"), queries)
             Profile(id, weight, frequencies)
         }
         for (query in queries) {
@@ -145,6 +136,22 @@ class WorkloadReader {
             }
         }
         return profiles
+    }
+
+    private fun readFrequencies(node: JsonNode?, location: Location, queries: List<QueryInput>): Map<String, Double> {
+        if (node == null || !node.isObject) invalid(location, "Expected an object with all query IDs.")
+        val queryIds = queries.map { it.id }.toSet()
+        val keys = node.properties().map { it.key }.toSet()
+        val missing = queryIds.firstOrNull { it !in keys }
+        if (missing != null) invalid(location.copy(queryId = missing), "Missing query ID in calls_per_hour.")
+        if (keys.any { it !in queryIds }) invalid(location, "Unknown query ID in calls_per_hour.")
+        val frequencies = queries.associate { query ->
+            query.id to number(node.get(query.id), location.copy(queryId = query.id))
+        }
+        if (frequencies.values.none { it > 0.0 }) {
+            invalid(location, "Each profile must use at least one query with a positive frequency.")
+        }
+        return frequencies
     }
 
     private fun writeRates(node: JsonNode?): Map<String, TableWriteRates>? {
@@ -162,9 +169,9 @@ class WorkloadReader {
                 invalid(tableLocation.child("source"), "Only manual write rates are supported.")
             }
             entry.key to TableWriteRates(
-                number(value.get("inserts_per_hour"), tableLocation.child("inserts_per_hour")),
-                number(value.get("updates_per_hour"), tableLocation.child("updates_per_hour")),
-                number(value.get("deletes_per_hour"), tableLocation.child("deletes_per_hour")),
+                insertsPerHour = number(value.get("inserts_per_hour"), tableLocation.child("inserts_per_hour")),
+                updatesPerHour = number(value.get("updates_per_hour"), tableLocation.child("updates_per_hour")),
+                deletesPerHour = number(value.get("deletes_per_hour"), tableLocation.child("deletes_per_hour")),
             )
         }.toMap()
     }
@@ -225,8 +232,13 @@ class WorkloadReader {
     }
 
     private fun invalid(location: Location, message: String, code: ErrorCode = location.code): Nothing =
-        throw AnalysisException(AnalysisError(code, message, location.queryId, location.profileId,
-            details = mapOf("field" to location.field)))
+        throw AnalysisException(AnalysisError(
+            code = code,
+            message = message,
+            queryId = location.queryId,
+            profileId = location.profileId,
+            details = mapOf("field" to location.field),
+        ))
 
     companion object {
         private const val MAX_INPUT_BYTES = 1024 * 1024

@@ -41,14 +41,15 @@ class IndexBudgetCli(
         var offset = 1
         while (offset < args.size) {
             val option = args[offset]
-            if (option !in setOf("--workload", "--output-dir") || option in options ||
-                offset + 1 >= args.size || args[offset + 1].startsWith("--") || args[offset + 1].isBlank()) {
+            val value = args.getOrNull(offset + 1)
+            if (option !in ANALYZE_OPTIONS || option in options ||
+                value == null || value.startsWith("--") || value.isBlank()) {
                 return fail(err, ErrorCode.INVALID_INPUT, "Expected --workload <path> --output-dir <path>, once each.")
             }
-            options[option] = args[offset + 1]
+            options[option] = value
             offset += 2
         }
-        if (options.keys != setOf("--workload", "--output-dir")) {
+        if (options.keys != ANALYZE_OPTIONS) {
             return fail(err, ErrorCode.INVALID_INPUT, "Both --workload and --output-dir are required.")
         }
         try {
@@ -88,6 +89,7 @@ class IndexBudgetCli(
     }
 
     companion object {
+        private val ANALYZE_OPTIONS = setOf("--workload", "--output-dir")
         private val USAGE = """
             IndexBudget — PostgreSQL index selection CLI
 

@@ -7,6 +7,9 @@ import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
+import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.Arguments
+import org.junit.jupiter.params.provider.MethodSource
 import ru.itmo.indexbudget.domain.AnalysisError
 import ru.itmo.indexbudget.domain.AnalysisException
 import ru.itmo.indexbudget.domain.ErrorCode
@@ -51,17 +54,17 @@ class WorkloadReaderTest {
         for ((wire, objective) in listOf("robust" to Objective.ROBUST, "mean" to Objective.MEAN)) {
             assertEquals(objective, read(json(objective = quote(wire))).objective)
         }
-        assertEquals(5, read(json().replace(",\"max_indexes\":5", "")).constraints.maxIndexes)
+        assertEquals(5, read(json(constraints = constraintsJson(maxIndexes = null))).constraints.maxIndexes)
         for (objective in listOf("\"other\"", "\"ROBUST\"", "null", "42", "true", "\"\"")) {
             assertEquals("objective", failure(json(objective = objective)).details["field"])
         }
-        failure(json().replace("\"max_indexes\":5", "\"max_indexes\":null"))
+        failure(json(constraints = constraintsJson(maxIndexes = "null")))
     }
 
     @Test
     fun `legacy version includes migration guidance and other schema versions are rejected`() {
         for (version in listOf("1", "3", "2.0", "\"2\"", "null", "2147483648")) {
-            val error = failure(json().replace("\"schema_version\":2", "\"schema_version\":$version"),
+            val error = failure(json(schemaVersion = version),
                 ErrorCode.UNSUPPORTED_SCHEMA_VERSION)
             assertEquals("schema_version", error.details["field"])
             assertTrue(error.message.contains("queries"))
@@ -69,7 +72,7 @@ class WorkloadReaderTest {
         }
         failure("""{"schema_version":1}""", ErrorCode.UNSUPPORTED_SCHEMA_VERSION)
         failure("""{"schema_version":1,"calls_per_hour":100,"queries":[]}""", ErrorCode.UNSUPPORTED_SCHEMA_VERSION)
-        failure(json().replace("\"schema_version\":2,", ""), ErrorCode.UNSUPPORTED_SCHEMA_VERSION)
+        failure(json(schemaVersion = null), ErrorCode.UNSUPPORTED_SCHEMA_VERSION)
     }
 
     @Test
@@ -164,76 +167,76 @@ class WorkloadReaderTest {
         val frequency = failure(json(profiles = listOf(profile(calls = """{"q1":1e-400,"q2":1}"""))),
             ErrorCode.NUMERIC_ERROR)
         assertEquals("q1", frequency.queryId)
-        val budget = failure(json().replace("\"write_budget_units_per_hour\":null", "\"write_budget_units_per_hour\":1e-400"),
+        val budget = failure(json(constraints = constraintsJson(writeBudget = "1e-400")),
             ErrorCode.NUMERIC_ERROR)
         assertEquals("constraints.write_budget_units_per_hour", budget.details["field"])
-        val rates = failure(json(writeRates = rates(inserts = "1e-400")), ErrorCode.NUMERIC_ERROR)
+        val rates = failure(json(writeRates = ratesJson(inserts = "1e-400")), ErrorCode.NUMERIC_ERROR)
         assertEquals("table_write_rates[0].inserts_per_hour", rates.details["field"])
     }
 
     @Test
-    fun `budgets preserve zero and reject missing fractional coerced or out of range integers`() {
-        val zero = read(json().replace("\"storage_budget_bytes\":1024", "\"storage_budget_bytes\":0")
-            .replace("\"max_indexes\":5", "\"max_indexes\":0"))
+    fun `integer budgets preserve zero and the largest supported storage value`() {
+        val zero = read(json(constraints = constraintsJson(storage = "0", maxIndexes = "0")))
         assertEquals(0L, zero.constraints.storageBudgetBytes)
         assertEquals(0, zero.constraints.maxIndexes)
-        assertEquals(Long.MAX_VALUE, read(json().replace("\"storage_budget_bytes\":1024",
-            "\"storage_budget_bytes\":9223372036854775807")).constraints.storageBudgetBytes)
-        for (storage in listOf("-1", "1.5", "\"1024\"", "null", "true", "9223372036854775808")) {
-            val error = failure(json().replace("\"storage_budget_bytes\":1024", "\"storage_budget_bytes\":$storage"))
-            assertEquals("constraints.storage_budget_bytes", error.details["field"])
+        assertEquals(Long.MAX_VALUE, read(json(constraints = constraintsJson(storage = "9223372036854775807")))
+            .constraints.storageBudgetBytes)
+    }
+
+    @ParameterizedTest(name = "{0} = {1}")
+    @MethodSource("invalidConstraints")
+    fun `constraints reject invalid or missing values`(field: String, description: String, value: String?) {
+        val constraints = when (field) {
+            "storage_budget_bytes" -> constraintsJson(storage = value)
+            "write_budget_units_per_hour" -> constraintsJson(writeBudget = value)
+            "max_indexes" -> constraintsJson(maxIndexes = value)
+            else -> error("Unexpected constraint: $field")
         }
-        failure(json().replace("\"storage_budget_bytes\":1024,", ""))
-        for (count in listOf("-1", "6", "2.7", "\"5\"", "null", "false", "9223372036854775808")) {
-            assertEquals("constraints.max_indexes", failure(json().replace("\"max_indexes\":5",
-                "\"max_indexes\":$count")).details["field"])
-        }
+        val error = failure(json(constraints = constraints), context = "$field = $description")
+        assertEquals("constraints.$field", error.details["field"])
     }
 
     @Test
     fun `write budget must be explicit and zero requires a profile`() {
         assertNull(read(json()).constraints.writeBudgetUnitsPerHour)
         assertNull(read(json(writeRates = "null")).tableWriteRates)
-        assertTrue(requireNotNull(read(json(writeRates = rates())).tableWriteRates).isNotEmpty())
+        assertTrue(requireNotNull(read(json(writeRates = ratesJson())).tableWriteRates).isNotEmpty())
         for (budget in listOf("0", "100")) {
-            val withBudget = json().replace("\"write_budget_units_per_hour\":null", "\"write_budget_units_per_hour\":$budget")
+            val withBudget = json(constraints = constraintsJson(writeBudget = budget))
             failure(withBudget, ErrorCode.INVALID_WRITE_PROFILE)
-            val withRates = json(writeRates = rates()).replace("\"write_budget_units_per_hour\":null",
-                "\"write_budget_units_per_hour\":$budget")
+            val withRates = json(writeRates = ratesJson(), constraints = constraintsJson(writeBudget = budget))
             assertEquals(budget.toDouble(), read(withRates).constraints.writeBudgetUnitsPerHour)
-        }
-        failure(json().replace("\"write_budget_units_per_hour\":null,", ""))
-        for (budget in listOf("-1", "\"0\"", "false", "1e400")) {
-            failure(json().replace("\"write_budget_units_per_hour\":null", "\"write_budget_units_per_hour\":$budget"))
         }
         failure(json(writeRates = "{}"), ErrorCode.INVALID_WRITE_PROFILE)
     }
 
     @Test
-    fun `all three write rates are mandatory and source is manual by default`() {
-        for (field in listOf("inserts_per_hour", "updates_per_hour", "deletes_per_hour")) {
-            val incomplete = rates().replace("\"$field\":0,", "")
-            val error = failure(json(writeRates = incomplete), ErrorCode.INVALID_WRITE_PROFILE)
-            assertEquals("table_write_rates[0].$field", error.details["field"])
+    fun `write source is manual by default and rates retain their distinct values`() {
+        for (source in listOf("\"manual\"", null)) {
+            val workload = read(json(writeRates = ratesJson(inserts = "10", updates = "20", deletes = "30", source = source)))
+            val rates = requireNotNull(workload.tableWriteRates).getValue("public.records")
+            assertEquals(10.0, rates.insertsPerHour)
+            assertEquals(20.0, rates.updatesPerHour)
+            assertEquals(30.0, rates.deletesPerHour)
+            assertEquals(WriteRateSource.MANUAL, rates.source)
         }
-        assertEquals(WriteRateSource.MANUAL, read(json(writeRates = rates())).tableWriteRates?.get("public.records")?.source)
-        assertEquals(WriteRateSource.MANUAL, read(json(writeRates = rates().replace(",\"source\":\"manual\"", "")))
-            .tableWriteRates?.get("public.records")?.source)
         for (source in listOf("\"auto\"", "\"MANUAL\"", "null", "1")) {
-            failure(json(writeRates = rates().replace("\"source\":\"manual\"", "\"source\":$source")),
-                ErrorCode.INVALID_WRITE_PROFILE)
+            failure(json(writeRates = ratesJson(source = source)),
+                ErrorCode.INVALID_WRITE_PROFILE, context = "source = $source")
         }
     }
 
-    @Test
-    fun `write rates must be finite nonnegative numbers for each operation`() {
-        for (field in listOf("inserts_per_hour", "updates_per_hour", "deletes_per_hour")) {
-            for (value in listOf("-1", "null", "\"0\"", "false", "1e400")) {
-                val error = failure(json(writeRates = rates().replace("\"$field\":0", "\"$field\":$value")),
-                    ErrorCode.INVALID_WRITE_PROFILE)
-                assertEquals("table_write_rates[0].$field", error.details["field"])
-            }
+    @ParameterizedTest(name = "{0} = {1}")
+    @MethodSource("invalidWriteRates")
+    fun `write rates must be present finite nonnegative numbers`(field: String, description: String, value: String?) {
+        val rates = when (field) {
+            "inserts_per_hour" -> ratesJson(inserts = value)
+            "updates_per_hour" -> ratesJson(updates = value)
+            "deletes_per_hour" -> ratesJson(deletes = value)
+            else -> error("Unexpected write rate: $field")
         }
+        val error = failure(json(writeRates = rates), ErrorCode.INVALID_WRITE_PROFILE, "$field = $description")
+        assertEquals("table_write_rates[0].$field", error.details["field"])
     }
 
     @Test
@@ -266,11 +269,16 @@ class WorkloadReaderTest {
 
     @Test
     fun `duplicate keys trailing data invalid UTF8 and invalid Unicode are rejected`() {
-        failure(json().replace("\"schema_version\":2", "\"schema_version\":2,\"schema_version\":2"))
+        failure("""
+            {"schema_version":2,"schema_version":2,
+             "queries":[{"id":"q1","sql":"SELECT id FROM public.records"}],
+             "profiles":[{"id":"normal","weight":1,"calls_per_hour":{"q1":1}}],
+             "constraints":{"storage_budget_bytes":1024,"write_budget_units_per_hour":null}}
+        """.trimIndent())
         failure(json(profiles = listOf(profile(calls = """{"q1":1,"q1":2,"q2":1}"""))))
         failure(json() + " {}")
         failure("{private-sql-and-password}")
-        failure(json().replace("SELECT id FROM public.records", "\\uD800"))
+        failure(json(queries = listOf("""{"id":"q1","sql":"\uD800"}""", query("q2"))))
         for (bytes in listOf(byteArrayOf(0xc3.toByte(), 0x28), json().toByteArray(Charsets.UTF_16))) {
             val path = directory.resolve("encoding.json")
             Files.write(path, bytes)
@@ -280,8 +288,14 @@ class WorkloadReaderTest {
 
     @Test
     fun `unknown fields and wrong structures do not expose raw input`() {
-        for (bad in listOf("null", "[]", json().replace("\"queries\":[", "\"secret-password\":1,\"queries\":["),
-            json().replace("\"id\":\"q1\"", "\"id\":42"))) {
+        val unknownField = """
+            {"schema_version":2,"secret-password":1,
+             "queries":[{"id":"q1","sql":"SELECT id FROM public.records"}],
+             "profiles":[{"id":"normal","weight":1,"calls_per_hour":{"q1":1}}],
+             "constraints":{"storage_budget_bytes":1024,"write_budget_units_per_hour":null}}
+        """.trimIndent()
+        for (bad in listOf("null", "[]", unknownField,
+            json(queries = listOf("""{"id":42,"sql":"SELECT id FROM public.records"}""", query("q2"))))) {
             val error = failure(bad)
             assertFalse(error.message.contains("secret-password"))
         }
@@ -295,11 +309,16 @@ class WorkloadReaderTest {
         ),
         objective: String? = null,
         writeRates: String? = null,
-    ): String = """{"schema_version":2,${objective?.let { "\"objective\":$it," } ?: ""}
-        "queries":[${queries.joinToString(",")}],"profiles":[${profiles.joinToString(",")}],
-        "constraints":{"storage_budget_bytes":1024,"write_budget_units_per_hour":null,"max_indexes":5}
-        ${writeRates?.let { ",\"table_write_rates\":$it" } ?: ""}}
-    """.trimIndent()
+        constraints: String = constraintsJson(),
+        schemaVersion: String? = "2",
+    ): String = listOfNotNull(
+        schemaVersion?.let { "\"schema_version\":$it" },
+        objective?.let { "\"objective\":$it" },
+        "\"queries\":[${queries.joinToString(",")} ]",
+        "\"profiles\":[${profiles.joinToString(",")} ]",
+        "\"constraints\":$constraints",
+        writeRates?.let { "\"table_write_rates\":$it" },
+    ).joinToString(prefix = "{", postfix = "}")
 
     private fun query(id: String, sql: String = "SELECT id FROM public.records"): String =
         """{"id":${quote(id)},"sql":${quote(sql)}}"""
@@ -307,8 +326,28 @@ class WorkloadReaderTest {
     private fun profile(id: String = "normal", weight: String = "1", calls: String = """{"q1":1,"q2":1}"""): String =
         """{"id":${quote(id)},"weight":$weight,"calls_per_hour":$calls}"""
 
-    private fun rates(inserts: String = "0"): String =
-        """{"public.records":{"inserts_per_hour":$inserts,"updates_per_hour":0,"deletes_per_hour":0,"source":"manual"}}"""
+    // null опускает поле, строка "null" передаёт явный JSON null; остальные значения — сырые JSON-токены.
+    private fun constraintsJson(
+        storage: String? = "1024",
+        writeBudget: String? = "null",
+        maxIndexes: String? = "5",
+    ): String = listOfNotNull(
+        storage?.let { "\"storage_budget_bytes\":$it" },
+        writeBudget?.let { "\"write_budget_units_per_hour\":$it" },
+        maxIndexes?.let { "\"max_indexes\":$it" },
+    ).joinToString(prefix = "{", postfix = "}")
+
+    private fun ratesJson(
+        inserts: String? = "0",
+        updates: String? = "0",
+        deletes: String? = "0",
+        source: String? = "\"manual\"",
+    ): String = listOfNotNull(
+        inserts?.let { "\"inserts_per_hour\":$it" },
+        updates?.let { "\"updates_per_hour\":$it" },
+        deletes?.let { "\"deletes_per_hour\":$it" },
+        source?.let { "\"source\":$it" },
+    ).joinToString(prefix = "{\"public.records\":{", postfix = "}}")
 
     private fun quote(value: String): String = mapper.writeValueAsString(value)
 
@@ -318,10 +357,33 @@ class WorkloadReaderTest {
         return reader.read(path)
     }
 
-    private fun failure(json: String, code: ErrorCode = ErrorCode.INVALID_INPUT): AnalysisError {
-        val error = assertThrows(AnalysisException::class.java) { read(json) }.error
-        assertEquals(code, error.code)
-        assertTrue(error.details.containsKey("field"))
+    private fun failure(
+        json: String,
+        code: ErrorCode = ErrorCode.INVALID_INPUT,
+        context: String = "Input: ${json.take(512)}",
+    ): AnalysisError {
+        val error = assertThrows(AnalysisException::class.java, { read(json) }, context).error
+        assertEquals(code, error.code, context)
+        assertTrue(error.details.containsKey("field"), context)
         return error
+    }
+
+    companion object {
+        @JvmStatic
+        fun invalidConstraints(): List<Arguments> = listOf(
+            "storage_budget_bytes" to listOf(null, "-1", "1.5", "\"1024\"", "null", "true", "9223372036854775808"),
+            "max_indexes" to listOf("-1", "6", "2.7", "\"5\"", "null", "false", "9223372036854775808"),
+            "write_budget_units_per_hour" to listOf(null, "-1", "\"0\"", "false", "1e400"),
+        ).flatMap { (field, values) ->
+            values.map { value -> Arguments.of(field, value ?: "absent", value) }
+        }
+
+        @JvmStatic
+        fun invalidWriteRates(): List<Arguments> = listOf("inserts_per_hour", "updates_per_hour", "deletes_per_hour")
+            .flatMap { field ->
+                listOf(null, "-1", "null", "\"0\"", "false", "1e400").map { value ->
+                    Arguments.of(field, value ?: "absent", value)
+                }
+            }
     }
 }

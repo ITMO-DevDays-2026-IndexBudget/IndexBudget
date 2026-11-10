@@ -4,6 +4,9 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.CsvSource
+import org.junit.jupiter.params.provider.MethodSource
 
 class ProfileWeightsTest {
     @Test
@@ -12,7 +15,16 @@ class ProfileWeightsTest {
 
         assertEquals(mapOf("normal" to 0.9, "campaign" to 0.1), ProfileWeights.normalize(profiles))
         assertEquals(listOf(9.0, 1.0), profiles.map { it.weight })
-        assertEquals(ProfileWeights.normalize(profiles), ProfileWeights.normalize(profiles.reversed()))
+    }
+
+    @ParameterizedTest(name = "profile order [{0}, {1}, {2}]")
+    @CsvSource("0,1,2", "0,2,1", "1,0,2", "1,2,0", "2,0,1", "2,1,0")
+    fun `normalization is independent of input order for nonassociative sums`(first: Int, second: Int, third: Int) {
+        val profiles = listOf(profile("a", 1e16), profile("b", 1.0), profile("c", 1.0))
+        val reordered = listOf(profiles[first], profiles[second], profiles[third])
+
+        // (1e16 + 1) + 1 и (1 + 1) + 1e16 дают разные Double; порядок по ID фиксирует результат.
+        assertEquals(mapOf("a" to 1.0, "b" to 1e-16, "c" to 1e-16), ProfileWeights.normalize(reordered))
     }
 
     @Test
@@ -41,11 +53,10 @@ class ProfileWeightsTest {
         assertEquals("profiles.weight", error.details["field"])
     }
 
-    @Test
-    fun `invalid weights are explicit numeric errors even outside the JSON reader`() {
-        for (weight in listOf(0.0, -0.0, -1.0, Double.NaN, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY)) {
-            assertEquals("invalid", numericFailure(listOf(profile("invalid", weight))).profileId)
-        }
+    @ParameterizedTest(name = "invalid weight={0}")
+    @MethodSource("invalidWeights")
+    fun `invalid weights are explicit numeric errors even outside the JSON reader`(weight: Double) {
+        assertEquals("invalid", numericFailure(listOf(profile("invalid", weight))).profileId)
     }
 
     private fun profile(id: String, weight: Double) = Profile(id, weight, mapOf("q" to 1.0))
@@ -54,5 +65,11 @@ class ProfileWeightsTest {
         val failure = assertThrows(AnalysisException::class.java) { ProfileWeights.normalize(profiles) }
         assertEquals(ErrorCode.NUMERIC_ERROR, failure.error.code)
         return failure.error
+    }
+
+    companion object {
+        @JvmStatic
+        fun invalidWeights(): List<Double> =
+            listOf(0.0, -0.0, -1.0, Double.NaN, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY)
     }
 }
