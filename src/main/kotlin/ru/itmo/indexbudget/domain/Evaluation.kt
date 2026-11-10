@@ -66,4 +66,11 @@ data class SetMetrics(
 data class EvaluatedConfiguration(
     val evaluation: EvaluationResult,
     val metrics: SetMetrics,
-)
+) {
+    init {
+        val assessment = metrics.requireAdmissible()
+        require(assessment.searchRequired || evaluation.candidateIds.isEmpty()) {
+            "All-zero baselines may retain only the empty index set"
+        }
+    }
+}

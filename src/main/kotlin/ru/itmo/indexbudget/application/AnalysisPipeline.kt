@@ -67,9 +67,9 @@ class AnalysisPipeline(
             baseline = evaluatedBaseline
             val budget = metrics.assessBudget(emptyList(), input)
             require(budget.admissible) { "The empty set must be admissible" }
-            val empty = EvaluatedConfiguration(
-                evaluatedBaseline, metrics.calculate(input, evaluatedBaseline, evaluatedBaseline, budget.usage),
-            )
+            val baselineAssessment = metrics.assessEvaluation(input, evaluatedBaseline, evaluatedBaseline, budget.usage)
+            require(baselineAssessment is EvaluationAssessment.Accepted) { "Baseline must be admissible" }
+            val empty = EvaluatedConfiguration(evaluatedBaseline, baselineAssessment.metrics)
             checkpoint = SearchCheckpoint(empty, empty)
             // Save the full baseline before detecting a late return from an external operation.
             context.checkDeadline()
@@ -77,7 +77,7 @@ class AnalysisPipeline(
             val earlyStop = when {
                 input.constraints.storageBudgetBytes == 0L -> StopReason.ZERO_STORAGE_BUDGET
                 input.constraints.maxIndexes == 0 -> StopReason.ZERO_MAX_INDEXES
-                empty.metrics.profiles.all { it.baselineCost == 0.0 } -> StopReason.ZERO_BASELINE
+                !baselineAssessment.searchRequired -> StopReason.ZERO_BASELINE
                 else -> null
             }
             if (earlyStop != null) {

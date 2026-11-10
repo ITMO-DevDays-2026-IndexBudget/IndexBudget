@@ -209,11 +209,13 @@ class ObjectiveComparatorTest {
 
     @Test
     fun `null ratios are rejected instead of compared as zero`() {
-        val zeroBaseline = metrics(worstRatio = null, meanRatio = null)
+        val zeroBaseline = metrics(worstRatio = null, meanRatio = null, indexCount = 0)
         val regular = metrics(worstRatio = 0.8, meanRatio = 0.6)
+        val zeroConfiguration = config(zeroBaseline, emptyList())
+        val regularConfiguration = config(regular, listOf("idx_a"))
 
         assertThrows(IllegalArgumentException::class.java) {
-            comparator.compare(config(zeroBaseline, listOf("idx_a")), config(regular, listOf("idx_a")), Objective.ROBUST)
+            comparator.compare(zeroConfiguration, regularConfiguration, Objective.ROBUST)
         }
         assertThrows(IllegalArgumentException::class.java) {
             comparator.improvesPrimaryMetrics(zeroBaseline, regular, Objective.MEAN)
@@ -374,8 +376,18 @@ class ObjectiveComparatorTest {
         writeUnitsPerHour: Double? = null,
         indexCount: Int = 1,
     ): SetMetrics = SetMetrics(
-        profiles = emptyList(),
-        baselineMeanCost = 100.0,
+        profiles = listOf(
+            ProfileMetrics(
+                profileId = "profile",
+                normalizedWeight = 1.0,
+                baselineCost = if (meanRatio == null) 0.0 else 100.0,
+                cost = 100.0 * (meanRatio ?: 0.0),
+                gain = if (meanRatio == null) 0.0 else 100.0 * (1.0 - meanRatio),
+                ratio = meanRatio,
+                gainPercent = meanRatio?.let { 100.0 * (1.0 - it) },
+            ),
+        ),
+        baselineMeanCost = if (meanRatio == null) 0.0 else 100.0,
         meanCost = 100.0 * (meanRatio ?: 0.0),
         meanRatio = meanRatio,
         worstRatio = worstRatio,
