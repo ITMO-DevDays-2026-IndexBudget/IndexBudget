@@ -11,6 +11,7 @@ import ru.itmo.indexbudget.domain.ObjectiveComparatorImpl
 import ru.itmo.indexbudget.optimizer.GreedyOptimizer
 import ru.itmo.indexbudget.optimizer.Optimizer
 import ru.itmo.indexbudget.postgres.AnalysisSessionFactory
+import ru.itmo.indexbudget.postgres.JdbcAnalysisSessionFactory
 import ru.itmo.indexbudget.report.ReportBuilder
 import ru.itmo.indexbudget.report.ReportExporter
 import ru.itmo.indexbudget.sql.SqlAnalyzer
@@ -27,6 +28,9 @@ class AnalysisConfiguration {
     /** PoC strategy; fixed-S0 repair and its complete stop handling are added in #18. */
     @Bean
     fun optimizer(): Optimizer = GreedyOptimizer()
+
+    @Bean
+    fun analysisSessionFactory(): AnalysisSessionFactory = JdbcAnalysisSessionFactory()
 
     @Bean
     fun analysisRunner(

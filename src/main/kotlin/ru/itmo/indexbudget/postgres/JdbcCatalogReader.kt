@@ -31,7 +31,10 @@ import ru.itmo.indexbudget.domain.WarningCode
  * commit, ANALYZE, change search_path or create indexes. AnalysisSession delegates here in #13.
  * TableName values are parsed identifiers (already folded by the SQL parser if unquoted).
  */
-class JdbcCatalogReader(private val connection: Connection) {
+class JdbcCatalogReader(
+    private val connection: Connection,
+    private val beforeQuery: (RunContext) -> Unit = {},
+) {
     fun readCatalog(tables: Set<TableName>, context: RunContext): CatalogSnapshot {
         context.checkDeadline()
         try {
@@ -142,6 +145,8 @@ class JdbcCatalogReader(private val connection: Connection) {
             statement.queryTimeout = ((remaining.toMillis() + 999) / 1000)
                 .coerceIn(1, Int.MAX_VALUE.toLong()).toInt()
             if (parameter != null) statement.setObject(1, parameter)
+            context.checkDeadline()
+            beforeQuery(context)
             context.checkDeadline()
             statement.executeQuery().use { result ->
                 val values = mutableListOf<T>()
