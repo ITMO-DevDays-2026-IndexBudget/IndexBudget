@@ -2,7 +2,7 @@
 
 Подбор дополнительных индексов PostgreSQL для нескольких сценариев нагрузки под заданные бюджеты.
 
-Репозиторий содержит CLI с валидацией JSON v2 и orchestration запуска: общий RunContext, стадии, владение сессией и сохранение пригодного результата при остановке. Есть AST-валидация и разрешение имён SQL, чтение JDBC-каталога и полный ограниченный генератор кандидатов: канонизация, удаление точных реальных дублей, до 32 локальных и до 16 общих через сценарный round-robin. Реализованы общие метрики/компаратор и жадный поиск с ограниченным repair, двумя incumbents и кэшем одного запуска. Выделенная JDBC-сессия HypoPG получает каталог, размеры и полные оценки наборов. Добавлены сборка отчёта v2 и согласованный экспорт JSON/SQL с вызовом HTML-renderer. Генератор, метрики, поиск и фабрика сессии зарегистрированы в CLI; HTML-renderer (#20) ещё не подключён к рабочей команде. Orchestration, поиск и экспорт проверяются с подставными компонентами. Требования к MVP описаны в [спецификации v0.2](IndexBudget-spec-v0.2.md).
+Репозиторий содержит CLI с валидацией JSON v2 и orchestration запуска: общий RunContext, стадии, владение сессией и сохранение пригодного результата при остановке. Есть AST-валидация и разрешение имён SQL, чтение JDBC-каталога и полный ограниченный генератор кандидатов: канонизация, удаление точных реальных дублей, до 32 локальных и до 16 общих через сценарный round-robin. Реализованы общие метрики/компаратор и жадный поиск с ограниченным repair, двумя incumbents и кэшем одного запуска. Выделенная JDBC-сессия HypoPG получает каталог, размеры и полные оценки наборов. Добавлены сборка отчёта v2 и согласованный экспорт JSON/SQL с вызовом HTML-renderer. `ProfileAwareCandidateGenerator`, метрики, поиск, JDBC-сессия и HTML-renderer зарегистрированы в CLI. Покрытие проверками и оставшиеся условия собраны в [карте приёмки #21](docs/acceptance-v0.2.md); [сохранённые эксперименты](docs/experiments/2026-11-10/README.md) относятся к указанному там прежнему рабочему дереву. Требования к MVP описаны в [спецификации v0.2](IndexBudget-spec-v0.2.md).
 
 Порядок работы для агентов — в [AGENTS.md](AGENTS.md). В [ai/](ai/README.md) описаны целевая архитектура, контракты, соглашения разработки и [ревью PR без запуска тестов](ai/review.md).
 
@@ -35,7 +35,7 @@ build/install/indexbudget/bin/indexbudget analyze \
   --output-dir reports/run-001
 ```
 
-В [demo/workload-poc.json](demo/workload-poc.json) — три SQL, два профиля частот, ручной профиль записи и оба бюджета. **После успешной валидации команда пока возвращает код 1 и `NOT_IMPLEMENTED`.** Диагностика перечисляет отсутствующие компоненты в `details.missing_components`. Команда не открывает БД и не создаёт каталог или отчёты. Spring собирает `AnalysisPipeline`, когда доступны все его зависимости; до этого используется `UnavailableAnalysisRunner`. Фикстуры не используются как результат реального анализа.
+В [demo/workload-poc.json](demo/workload-poc.json) — три SQL, два профиля частот, ручной профиль записи и оба бюджета. Команда выполняет SQL resolution, генерацию кандидатов, оценку через PostgreSQL/HypoPG и greedy + repair, затем сохраняет согласованные HTML/JSON/SQL. Подключение задаётся через `INDEXBUDGET_DATABASE_URL`; подготовка одноразовой БД описана в [demo/README.md](demo/README.md). Для цели `mean` используйте соответствующий вход из [examples/](examples/). Фикстуры не используются как результат реального анализа.
 
 До подключения к БД проверяются:
 
@@ -54,7 +54,7 @@ build/install/indexbudget/bin/indexbudget analyze \
 UNSUPPORTED_SCHEMA_VERSION: {"code":"UNSUPPORTED_SCHEMA_VERSION","message":"Expected schema_version: 2. Migrate v1 frequencies from queries to profiles.calls_per_hour.","details":{"field":"schema_version"}}
 ```
 
-Коды выхода MVP: `0` — completed/help/version, `2` — невалидный или неподдержанный вход, `3` — partial с сохранённым результатом, `1` — failed. CLI переводит результат подключённого pipeline в эти коды; в текущей сборке доступны help/version, валидация и явный отказ из-за отсутствующих компонентов анализа. Ошибки полей дают `INVALID_INPUT` или `INVALID_WRITE_PROFILE` с кодом 2; переполнение суммы весов и потеря положительного числа при представлении или нормировании дают `NUMERIC_ERROR` с кодом 1. Ошибка доступа к output-dir даёт `EXPORT_FAILED` с кодом 1.
+Коды выхода MVP: `0` — completed/help/version, `2` — невалидный или неподдержанный вход, `3` — partial с сохранённым результатом, `1` — failed. CLI переводит результат подключённого pipeline в эти коды; отсутствие или ошибка подключения к PostgreSQL даёт `DB_CONNECTION_ERROR`. Ошибки полей дают `INVALID_INPUT` или `INVALID_WRITE_PROFILE` с кодом 2; переполнение суммы весов и потеря положительного числа при представлении или нормировании дают `NUMERIC_ERROR` с кодом 1. Ошибка доступа к output-dir даёт `EXPORT_FAILED` с кодом 1.
 
 ## Структура и параллельная работа
 
@@ -91,7 +91,7 @@ UNSUPPORTED_SCHEMA_VERSION: {"code":"UNSUPPORTED_SCHEMA_VERSION","message":"Expe
 ./gradlew --no-daemon test --tests 'ru.itmo.indexbudget.optimizer.*' --tests '*LimitedRepairPipelineTest'
 ```
 
-Проверка на настоящих PostgreSQL/HypoPG costs и сверка бюджетных сценариев остаются в [#45](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/issues/45) и общей приёмке PoC [#22](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/issues/22). Тестовые cost vectors не заменяют эту интеграцию. HTML-renderer ещё не подключён, сквозной `analyze` по-прежнему возвращает `NOT_IMPLEMENTED`.
+Проверки на настоящих PostgreSQL/HypoPG costs и бюджетных сценариях сопоставлены с критериями в [карте приёмки #21](docs/acceptance-v0.2.md). [Инструменты экспериментов](demo/experiments/README.md) раздельно сравнивают objective и стратегию, запускают малый полный перебор и физические измерения. Исторические результаты и их ограничения сохранены [отдельно](docs/experiments/2026-11-10/README.md); они не означают закрытие PoC [#22](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/issues/22) или командную сверку.
 
 ## Отчёт и экспорт (#19)
 
@@ -99,7 +99,7 @@ UNSUPPORTED_SCHEMA_VERSION: {"code":"UNSUPPORTED_SCHEMA_VERSION","message":"Expe
 
 `AtomicReportExporter` готовит `report.json`, `report.html` и выбранный `indexes.sql` во временном каталоге с run ID рядом с назначением, повторно проверяет назначение и публикует каталог одним атомарным переименованием. Для `failed` сохраняются JSON/HTML без SQL. При ошибке возвращается `EXPORT_FAILED` (exit 1), чужие файлы сохраняются. Файловая система должна поддерживать атомарное перемещение каталогов; права нужны также на родительский каталог. Существующая ссылка на пустой каталог сохраняется, публикация идёт в её цель.
 
-`ReportConfiguration` подключает builder; exporter регистрируется при наличии `ReportRenderer` из #20. До подключения HTML CLI остаётся `NOT_IMPLEMENTED`. Проверки экспорта используют тестовый renderer и не подтверждают готовность HTML-вёрстки либо настоящего анализа с HypoPG.
+`ReportConfiguration` связывает builder и exporter с production `HtmlReportRenderer`. Проверки экспорта с подставным renderer дополняются проверками настоящего HTML и сквозными acceptance-тестами; команды и границы подтверждённого результата — в [карте приёмки](docs/acceptance-v0.2.md).
 
 ```sh
 ./gradlew --no-daemon test --tests 'ru.itmo.indexbudget.report.*' --tests '*ReportIntegrationTest' --tests '*ReportConfigurationTest'

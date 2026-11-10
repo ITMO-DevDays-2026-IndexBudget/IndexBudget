@@ -1,0 +1,688 @@
+{
+  "schema_version" : 2,
+  "spec_version" : "0.2",
+  "run_id" : "d0839b3f-26c3-4e00-8fe6-5e709bd391ad",
+  "input_hash" : "c721253c5d3db831db74b912395d8c7cfd2b421dbf2bf5e3edda3f435cba392e",
+  "duration_millis" : 852,
+  "environment" : {
+    "application_version" : "0.1.0-SNAPSHOT",
+    "java_version" : "25.0.4.1",
+    "kotlin_version" : "2.4.21",
+    "postgres_version" : "16.15 (Debian 16.15-1.pgdg12+2)",
+    "hypopg_version" : "1.4.2"
+  },
+  "status" : "completed",
+  "selected_objective" : "robust",
+  "comparison_scope" : "evaluated_sets",
+  "incumbents_coincide" : true,
+  "price_of_robustness" : 0.0,
+  "profiles" : [ {
+    "id" : "normal",
+    "weight" : 0.9,
+    "normalized_weight" : 0.9,
+    "calls_per_hour" : {
+      "by_group" : 3000.0,
+      "by_value" : 100.0,
+      "groups_by_category" : 100.0
+    }
+  }, {
+    "id" : "campaign",
+    "weight" : 0.1,
+    "normalized_weight" : 0.1,
+    "calls_per_hour" : {
+      "by_group" : 100.0,
+      "by_value" : 3000.0,
+      "groups_by_category" : 100.0
+    }
+  } ],
+  "budgets" : {
+    "storage_budget_bytes" : 67108864,
+    "write_budget_units_per_hour" : 0.0,
+    "max_indexes" : 1
+  },
+  "table_write_rates" : {
+    "public.groups" : {
+      "inserts_per_hour" : 10.0,
+      "updates_per_hour" : 30.0,
+      "deletes_per_hour" : 1.0,
+      "source" : "manual"
+    },
+    "public.records" : {
+      "inserts_per_hour" : 1000.0,
+      "updates_per_hour" : 3000.0,
+      "deletes_per_hour" : 100.0,
+      "source" : "manual"
+    }
+  },
+  "queries" : [ {
+    "id" : "by_group",
+    "sql" : "SELECT id, value FROM public.records WHERE group_id = 42",
+    "baseline_cost" : 6713.57,
+    "selected_cost" : 6713.57,
+    "regression" : false
+  }, {
+    "id" : "by_value",
+    "sql" : "SELECT id, value FROM public.records WHERE value = 7",
+    "baseline_cost" : 6713.67,
+    "selected_cost" : 6713.67,
+    "regression" : false
+  }, {
+    "id" : "groups_by_category",
+    "sql" : "SELECT id, name FROM public.groups WHERE category = 3",
+    "baseline_cost" : 19.5,
+    "selected_cost" : 19.5,
+    "regression" : false
+  } ],
+  "baseline" : {
+    "candidate_ids" : [ ],
+    "cost_by_query_id" : {
+      "by_group" : 6713.57,
+      "by_value" : 6713.67,
+      "groups_by_category" : 19.5
+    },
+    "plans_by_query_id" : {
+      "by_group" : [ {
+        "Plan" : {
+          "Node Type" : "Gather",
+          "Parallel Aware" : false,
+          "Async Capable" : false,
+          "Startup Cost" : 1000.0,
+          "Total Cost" : 6713.57,
+          "Plan Rows" : 199,
+          "Plan Width" : 12,
+          "Workers Planned" : 2,
+          "Single Copy" : false,
+          "Plans" : [ {
+            "Node Type" : "Seq Scan",
+            "Parent Relationship" : "Outer",
+            "Parallel Aware" : true,
+            "Async Capable" : false,
+            "Relation Name" : "records",
+            "Alias" : "records",
+            "Startup Cost" : 0.0,
+            "Total Cost" : 5693.67,
+            "Plan Rows" : 83,
+            "Plan Width" : 12,
+            "Filter" : "(group_id = 42)"
+          } ]
+        }
+      } ],
+      "by_value" : [ {
+        "Plan" : {
+          "Node Type" : "Gather",
+          "Parallel Aware" : false,
+          "Async Capable" : false,
+          "Startup Cost" : 1000.0,
+          "Total Cost" : 6713.67,
+          "Plan Rows" : 200,
+          "Plan Width" : 12,
+          "Workers Planned" : 2,
+          "Single Copy" : false,
+          "Plans" : [ {
+            "Node Type" : "Seq Scan",
+            "Parent Relationship" : "Outer",
+            "Parallel Aware" : true,
+            "Async Capable" : false,
+            "Relation Name" : "records",
+            "Alias" : "records",
+            "Startup Cost" : 0.0,
+            "Total Cost" : 5693.67,
+            "Plan Rows" : 83,
+            "Plan Width" : 12,
+            "Filter" : "(value = 7)"
+          } ]
+        }
+      } ],
+      "groups_by_category" : [ {
+        "Plan" : {
+          "Node Type" : "Seq Scan",
+          "Parallel Aware" : false,
+          "Async Capable" : false,
+          "Relation Name" : "groups",
+          "Alias" : "groups",
+          "Startup Cost" : 0.0,
+          "Total Cost" : 19.5,
+          "Plan Rows" : 100,
+          "Plan Width" : 13,
+          "Filter" : "(category = 3)"
+        }
+      } ]
+    },
+    "metrics" : {
+      "profiles" : [ {
+        "profile_id" : "campaign",
+        "normalized_weight" : 0.1,
+        "baseline_cost" : 2.0814317E7,
+        "cost" : 2.0814317E7,
+        "gain" : 0.0,
+        "ratio" : 1.0,
+        "gain_percent" : 0.0
+      }, {
+        "profile_id" : "normal",
+        "normalized_weight" : 0.9,
+        "baseline_cost" : 2.0814027E7,
+        "cost" : 2.0814027E7,
+        "gain" : 0.0,
+        "ratio" : 1.0,
+        "gain_percent" : 0.0
+      } ],
+      "baseline_mean_cost" : 2.0814056E7,
+      "mean_cost" : 2.0814056E7,
+      "mean_ratio" : 1.0,
+      "worst_ratio" : 1.0,
+      "budget_usage" : {
+        "estimated_bytes" : 0,
+        "budgeted_bytes" : 0,
+        "write_units_per_hour" : 0.0,
+        "index_count" : 0,
+        "size_safety_factor" : 1.2
+      }
+    }
+  },
+  "selected" : {
+    "candidate_ids" : [ ],
+    "cost_by_query_id" : {
+      "by_group" : 6713.57,
+      "by_value" : 6713.67,
+      "groups_by_category" : 19.5
+    },
+    "plans_by_query_id" : {
+      "by_group" : [ {
+        "Plan" : {
+          "Node Type" : "Gather",
+          "Parallel Aware" : false,
+          "Async Capable" : false,
+          "Startup Cost" : 1000.0,
+          "Total Cost" : 6713.57,
+          "Plan Rows" : 199,
+          "Plan Width" : 12,
+          "Workers Planned" : 2,
+          "Single Copy" : false,
+          "Plans" : [ {
+            "Node Type" : "Seq Scan",
+            "Parent Relationship" : "Outer",
+            "Parallel Aware" : true,
+            "Async Capable" : false,
+            "Relation Name" : "records",
+            "Alias" : "records",
+            "Startup Cost" : 0.0,
+            "Total Cost" : 5693.67,
+            "Plan Rows" : 83,
+            "Plan Width" : 12,
+            "Filter" : "(group_id = 42)"
+          } ]
+        }
+      } ],
+      "by_value" : [ {
+        "Plan" : {
+          "Node Type" : "Gather",
+          "Parallel Aware" : false,
+          "Async Capable" : false,
+          "Startup Cost" : 1000.0,
+          "Total Cost" : 6713.67,
+          "Plan Rows" : 200,
+          "Plan Width" : 12,
+          "Workers Planned" : 2,
+          "Single Copy" : false,
+          "Plans" : [ {
+            "Node Type" : "Seq Scan",
+            "Parent Relationship" : "Outer",
+            "Parallel Aware" : true,
+            "Async Capable" : false,
+            "Relation Name" : "records",
+            "Alias" : "records",
+            "Startup Cost" : 0.0,
+            "Total Cost" : 5693.67,
+            "Plan Rows" : 83,
+            "Plan Width" : 12,
+            "Filter" : "(value = 7)"
+          } ]
+        }
+      } ],
+      "groups_by_category" : [ {
+        "Plan" : {
+          "Node Type" : "Seq Scan",
+          "Parallel Aware" : false,
+          "Async Capable" : false,
+          "Relation Name" : "groups",
+          "Alias" : "groups",
+          "Startup Cost" : 0.0,
+          "Total Cost" : 19.5,
+          "Plan Rows" : 100,
+          "Plan Width" : 13,
+          "Filter" : "(category = 3)"
+        }
+      } ]
+    },
+    "metrics" : {
+      "profiles" : [ {
+        "profile_id" : "campaign",
+        "normalized_weight" : 0.1,
+        "baseline_cost" : 2.0814317E7,
+        "cost" : 2.0814317E7,
+        "gain" : 0.0,
+        "ratio" : 1.0,
+        "gain_percent" : 0.0
+      }, {
+        "profile_id" : "normal",
+        "normalized_weight" : 0.9,
+        "baseline_cost" : 2.0814027E7,
+        "cost" : 2.0814027E7,
+        "gain" : 0.0,
+        "ratio" : 1.0,
+        "gain_percent" : 0.0
+      } ],
+      "baseline_mean_cost" : 2.0814056E7,
+      "mean_cost" : 2.0814056E7,
+      "mean_ratio" : 1.0,
+      "worst_ratio" : 1.0,
+      "budget_usage" : {
+        "estimated_bytes" : 0,
+        "budgeted_bytes" : 0,
+        "write_units_per_hour" : 0.0,
+        "index_count" : 0,
+        "size_safety_factor" : 1.2
+      }
+    }
+  },
+  "best_robust" : {
+    "candidate_ids" : [ ],
+    "cost_by_query_id" : {
+      "by_group" : 6713.57,
+      "by_value" : 6713.67,
+      "groups_by_category" : 19.5
+    },
+    "plans_by_query_id" : {
+      "by_group" : [ {
+        "Plan" : {
+          "Node Type" : "Gather",
+          "Parallel Aware" : false,
+          "Async Capable" : false,
+          "Startup Cost" : 1000.0,
+          "Total Cost" : 6713.57,
+          "Plan Rows" : 199,
+          "Plan Width" : 12,
+          "Workers Planned" : 2,
+          "Single Copy" : false,
+          "Plans" : [ {
+            "Node Type" : "Seq Scan",
+            "Parent Relationship" : "Outer",
+            "Parallel Aware" : true,
+            "Async Capable" : false,
+            "Relation Name" : "records",
+            "Alias" : "records",
+            "Startup Cost" : 0.0,
+            "Total Cost" : 5693.67,
+            "Plan Rows" : 83,
+            "Plan Width" : 12,
+            "Filter" : "(group_id = 42)"
+          } ]
+        }
+      } ],
+      "by_value" : [ {
+        "Plan" : {
+          "Node Type" : "Gather",
+          "Parallel Aware" : false,
+          "Async Capable" : false,
+          "Startup Cost" : 1000.0,
+          "Total Cost" : 6713.67,
+          "Plan Rows" : 200,
+          "Plan Width" : 12,
+          "Workers Planned" : 2,
+          "Single Copy" : false,
+          "Plans" : [ {
+            "Node Type" : "Seq Scan",
+            "Parent Relationship" : "Outer",
+            "Parallel Aware" : true,
+            "Async Capable" : false,
+            "Relation Name" : "records",
+            "Alias" : "records",
+            "Startup Cost" : 0.0,
+            "Total Cost" : 5693.67,
+            "Plan Rows" : 83,
+            "Plan Width" : 12,
+            "Filter" : "(value = 7)"
+          } ]
+        }
+      } ],
+      "groups_by_category" : [ {
+        "Plan" : {
+          "Node Type" : "Seq Scan",
+          "Parallel Aware" : false,
+          "Async Capable" : false,
+          "Relation Name" : "groups",
+          "Alias" : "groups",
+          "Startup Cost" : 0.0,
+          "Total Cost" : 19.5,
+          "Plan Rows" : 100,
+          "Plan Width" : 13,
+          "Filter" : "(category = 3)"
+        }
+      } ]
+    },
+    "metrics" : {
+      "profiles" : [ {
+        "profile_id" : "campaign",
+        "normalized_weight" : 0.1,
+        "baseline_cost" : 2.0814317E7,
+        "cost" : 2.0814317E7,
+        "gain" : 0.0,
+        "ratio" : 1.0,
+        "gain_percent" : 0.0
+      }, {
+        "profile_id" : "normal",
+        "normalized_weight" : 0.9,
+        "baseline_cost" : 2.0814027E7,
+        "cost" : 2.0814027E7,
+        "gain" : 0.0,
+        "ratio" : 1.0,
+        "gain_percent" : 0.0
+      } ],
+      "baseline_mean_cost" : 2.0814056E7,
+      "mean_cost" : 2.0814056E7,
+      "mean_ratio" : 1.0,
+      "worst_ratio" : 1.0,
+      "budget_usage" : {
+        "estimated_bytes" : 0,
+        "budgeted_bytes" : 0,
+        "write_units_per_hour" : 0.0,
+        "index_count" : 0,
+        "size_safety_factor" : 1.2
+      }
+    }
+  },
+  "best_mean" : {
+    "candidate_ids" : [ ],
+    "cost_by_query_id" : {
+      "by_group" : 6713.57,
+      "by_value" : 6713.67,
+      "groups_by_category" : 19.5
+    },
+    "plans_by_query_id" : {
+      "by_group" : [ {
+        "Plan" : {
+          "Node Type" : "Gather",
+          "Parallel Aware" : false,
+          "Async Capable" : false,
+          "Startup Cost" : 1000.0,
+          "Total Cost" : 6713.57,
+          "Plan Rows" : 199,
+          "Plan Width" : 12,
+          "Workers Planned" : 2,
+          "Single Copy" : false,
+          "Plans" : [ {
+            "Node Type" : "Seq Scan",
+            "Parent Relationship" : "Outer",
+            "Parallel Aware" : true,
+            "Async Capable" : false,
+            "Relation Name" : "records",
+            "Alias" : "records",
+            "Startup Cost" : 0.0,
+            "Total Cost" : 5693.67,
+            "Plan Rows" : 83,
+            "Plan Width" : 12,
+            "Filter" : "(group_id = 42)"
+          } ]
+        }
+      } ],
+      "by_value" : [ {
+        "Plan" : {
+          "Node Type" : "Gather",
+          "Parallel Aware" : false,
+          "Async Capable" : false,
+          "Startup Cost" : 1000.0,
+          "Total Cost" : 6713.67,
+          "Plan Rows" : 200,
+          "Plan Width" : 12,
+          "Workers Planned" : 2,
+          "Single Copy" : false,
+          "Plans" : [ {
+            "Node Type" : "Seq Scan",
+            "Parent Relationship" : "Outer",
+            "Parallel Aware" : true,
+            "Async Capable" : false,
+            "Relation Name" : "records",
+            "Alias" : "records",
+            "Startup Cost" : 0.0,
+            "Total Cost" : 5693.67,
+            "Plan Rows" : 83,
+            "Plan Width" : 12,
+            "Filter" : "(value = 7)"
+          } ]
+        }
+      } ],
+      "groups_by_category" : [ {
+        "Plan" : {
+          "Node Type" : "Seq Scan",
+          "Parallel Aware" : false,
+          "Async Capable" : false,
+          "Relation Name" : "groups",
+          "Alias" : "groups",
+          "Startup Cost" : 0.0,
+          "Total Cost" : 19.5,
+          "Plan Rows" : 100,
+          "Plan Width" : 13,
+          "Filter" : "(category = 3)"
+        }
+      } ]
+    },
+    "metrics" : {
+      "profiles" : [ {
+        "profile_id" : "campaign",
+        "normalized_weight" : 0.1,
+        "baseline_cost" : 2.0814317E7,
+        "cost" : 2.0814317E7,
+        "gain" : 0.0,
+        "ratio" : 1.0,
+        "gain_percent" : 0.0
+      }, {
+        "profile_id" : "normal",
+        "normalized_weight" : 0.9,
+        "baseline_cost" : 2.0814027E7,
+        "cost" : 2.0814027E7,
+        "gain" : 0.0,
+        "ratio" : 1.0,
+        "gain_percent" : 0.0
+      } ],
+      "baseline_mean_cost" : 2.0814056E7,
+      "mean_cost" : 2.0814056E7,
+      "mean_ratio" : 1.0,
+      "worst_ratio" : 1.0,
+      "budget_usage" : {
+        "estimated_bytes" : 0,
+        "budgeted_bytes" : 0,
+        "write_units_per_hour" : 0.0,
+        "index_count" : 0,
+        "size_safety_factor" : 1.2
+      }
+    }
+  },
+  "selected_indexes" : [ ],
+  "candidates" : [ {
+    "id" : "5d770c036759e8cb1b45d974e372dea64ca5606fe78c1eacaeb76fc54080d606",
+    "definition" : {
+      "table" : {
+        "schema" : "public",
+        "name" : "groups"
+      },
+      "method" : "btree",
+      "unique" : false,
+      "keys" : [ {
+        "column" : {
+          "table" : {
+            "schema" : "public",
+            "name" : "groups"
+          },
+          "name" : "category"
+        },
+        "direction" : "asc",
+        "nulls" : "last",
+        "collation" : null,
+        "operator_class" : "\"pg_catalog\".\"int4_ops\""
+      } ]
+    },
+    "source_query_ids" : [ "groups_by_category" ],
+    "generation_reasons" : [ "SINGLE_COLUMN" ],
+    "ddl" : "CREATE INDEX \"ib_5d770c036759e8cb1b45d974e372dea64ca5606fe78c1eacaeb76fc54080\" ON \"public\".\"groups\" USING btree (\"category\" \"pg_catalog\".\"int4_ops\" ASC NULLS LAST);",
+    "estimated_bytes" : 16384,
+    "budgeted_bytes" : 19661,
+    "write_units_per_hour" : 41.0
+  }, {
+    "id" : "6b42a62519609891a2964994b65f43644d345af6b165e1220092a348dbb04cfb",
+    "definition" : {
+      "table" : {
+        "schema" : "public",
+        "name" : "records"
+      },
+      "method" : "btree",
+      "unique" : false,
+      "keys" : [ {
+        "column" : {
+          "table" : {
+            "schema" : "public",
+            "name" : "records"
+          },
+          "name" : "value"
+        },
+        "direction" : "asc",
+        "nulls" : "last",
+        "collation" : null,
+        "operator_class" : "\"pg_catalog\".\"int4_ops\""
+      } ]
+    },
+    "source_query_ids" : [ "by_value" ],
+    "generation_reasons" : [ "SINGLE_COLUMN" ],
+    "ddl" : "CREATE INDEX \"ib_6b42a62519609891a2964994b65f43644d345af6b165e1220092a348dbb0\" ON \"public\".\"records\" USING btree (\"value\" \"pg_catalog\".\"int4_ops\" ASC NULLS LAST);",
+    "estimated_bytes" : 4644864,
+    "budgeted_bytes" : 5573837,
+    "write_units_per_hour" : 4100.0
+  }, {
+    "id" : "d2e9c41347f8a774adc74bf3ab4476011ac9fdab397101eb77db9c50f8d3c21e",
+    "definition" : {
+      "table" : {
+        "schema" : "public",
+        "name" : "records"
+      },
+      "method" : "btree",
+      "unique" : false,
+      "keys" : [ {
+        "column" : {
+          "table" : {
+            "schema" : "public",
+            "name" : "records"
+          },
+          "name" : "group_id"
+        },
+        "direction" : "asc",
+        "nulls" : "last",
+        "collation" : null,
+        "operator_class" : "\"pg_catalog\".\"int4_ops\""
+      } ]
+    },
+    "source_query_ids" : [ "by_group" ],
+    "generation_reasons" : [ "SINGLE_COLUMN" ],
+    "ddl" : "CREATE INDEX \"ib_d2e9c41347f8a774adc74bf3ab4476011ac9fdab397101eb77db9c50f8d3\" ON \"public\".\"records\" USING btree (\"group_id\" \"pg_catalog\".\"int4_ops\" ASC NULLS LAST);",
+    "estimated_bytes" : 4644864,
+    "budgeted_bytes" : 5573837,
+    "write_units_per_hour" : 4100.0
+  } ],
+  "candidate_diagnostics" : {
+    "column_limit_per_query_table" : 16,
+    "local_candidate_limit" : 32,
+    "global_candidate_limit" : 16,
+    "candidates_before_global_deduplication" : 3,
+    "candidates_after_global_deduplication" : 3,
+    "shortlisted_candidates" : 3,
+    "ungenerated_definitions" : null,
+    "local_scopes" : [ {
+      "query_id" : "by_group",
+      "table" : {
+        "schema" : "public",
+        "name" : "records"
+      },
+      "discovered_columns" : 1,
+      "retained_columns" : 1,
+      "enumerated_definitions" : 1,
+      "deduplicated_definitions" : 1,
+      "retained_definitions" : 1,
+      "excluded_columns" : [ ]
+    }, {
+      "query_id" : "by_value",
+      "table" : {
+        "schema" : "public",
+        "name" : "records"
+      },
+      "discovered_columns" : 1,
+      "retained_columns" : 1,
+      "enumerated_definitions" : 1,
+      "deduplicated_definitions" : 1,
+      "retained_definitions" : 1,
+      "excluded_columns" : [ ]
+    }, {
+      "query_id" : "groups_by_category",
+      "table" : {
+        "schema" : "public",
+        "name" : "groups"
+      },
+      "discovered_columns" : 1,
+      "retained_columns" : 1,
+      "enumerated_definitions" : 1,
+      "deduplicated_definitions" : 1,
+      "retained_definitions" : 1,
+      "excluded_columns" : [ ]
+    } ],
+    "decisions" : [ ],
+    "warnings" : [ ]
+  },
+  "diagnostics" : {
+    "completed_phases" : [ "introspection", "baseline", "candidates", "greedy" ],
+    "stop_reasons" : [ "NO_CANDIDATES" ],
+    "statistics" : {
+      "explain_attempts" : 3,
+      "evaluation_attempts" : 1,
+      "completed_evaluations" : 1,
+      "cache_hits" : 0,
+      "repair_attempts" : 0
+    },
+    "limits" : {
+      "command_timeout_millis" : 90000,
+      "search_timeout_millis" : 60000,
+      "explain_timeout_millis" : 2000,
+      "connect_timeout_millis" : 5000,
+      "max_explain_attempts" : 2000,
+      "max_repair_attempts" : 28
+    },
+    "warnings" : [ ],
+    "errors" : [ ],
+    "candidate_decisions" : [ {
+      "reason" : "WRITE_BUDGET",
+      "candidate_id" : "5d770c036759e8cb1b45d974e372dea64ca5606fe78c1eacaeb76fc54080d606",
+      "query_id" : null,
+      "table" : null,
+      "phase" : "greedy",
+      "details" : {
+        "candidate_ids" : "5d770c036759e8cb1b45d974e372dea64ca5606fe78c1eacaeb76fc54080d606"
+      }
+    }, {
+      "reason" : "WRITE_BUDGET",
+      "candidate_id" : "6b42a62519609891a2964994b65f43644d345af6b165e1220092a348dbb04cfb",
+      "query_id" : null,
+      "table" : null,
+      "phase" : "greedy",
+      "details" : {
+        "candidate_ids" : "6b42a62519609891a2964994b65f43644d345af6b165e1220092a348dbb04cfb"
+      }
+    }, {
+      "reason" : "WRITE_BUDGET",
+      "candidate_id" : "d2e9c41347f8a774adc74bf3ab4476011ac9fdab397101eb77db9c50f8d3c21e",
+      "query_id" : null,
+      "table" : null,
+      "phase" : "greedy",
+      "details" : {
+        "candidate_ids" : "d2e9c41347f8a774adc74bf3ab4476011ac9fdab397101eb77db9c50f8d3c21e"
+      }
+    } ],
+    "unexamined_configurations" : null
+  },
+  "error" : null
+}

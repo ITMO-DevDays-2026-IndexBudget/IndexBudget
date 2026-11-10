@@ -1,0 +1,367 @@
+{
+  "base_commit": "362de391a7c41f35ae66857c8339e86faa0ad9ef",
+  "branch": "codex/issue-21-acceptance",
+  "command": "./gradlew --no-daemon build installDist",
+  "database": "Separate disposable PostgreSQL 16.15 + HypoPG 1.4.2; removed after verification",
+  "environment_variables": [
+    "INDEXBUDGET_HYPOPG_TEST_URL",
+    "INDEXBUDGET_HYPOPG_TEST_USER",
+    "INDEXBUDGET_HYPOPG_TEST_PASSWORD",
+    "INDEXBUDGET_CATALOG_TEST_URL",
+    "INDEXBUDGET_CATALOG_TEST_USER",
+    "INDEXBUDGET_CATALOG_TEST_PASSWORD"
+  ],
+  "counts": {
+    "tests": 756,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 1
+  },
+  "suites": [
+    {
+      "suite": "ru.itmo.indexbudget.acceptance.ExhaustiveOracleTest",
+      "tests": 18,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "suite": "ru.itmo.indexbudget.acceptance.MvpAcceptanceIntegrationTest",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "suite": "ru.itmo.indexbudget.acceptance.ProductionWiringTest",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "suite": "ru.itmo.indexbudget.application.AnalysisPipelineTest",
+      "tests": 40,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "suite": "ru.itmo.indexbudget.application.CandidateShortlistPipelineTest",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "suite": "ru.itmo.indexbudget.application.LimitedRepairPipelineTest",
+      "tests": 4,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "suite": "ru.itmo.indexbudget.application.ReportConfigurationTest",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "suite": "ru.itmo.indexbudget.application.ReportIntegrationTest",
+      "tests": 5,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "suite": "ru.itmo.indexbudget.application.ResolvedWorkloadValidatorTest",
+      "tests": 8,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "suite": "ru.itmo.indexbudget.application.WorkloadReaderTest",
+      "tests": 61,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "suite": "ru.itmo.indexbudget.candidates.BtreeCandidateCanonicalizerTest",
+      "tests": 34,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "suite": "ru.itmo.indexbudget.candidates.BtreeCandidateEnumeratorTest",
+      "tests": 30,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "suite": "ru.itmo.indexbudget.candidates.NormalizedFrequenciesTest",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "suite": "ru.itmo.indexbudget.candidates.PostgresDdlRendererTest",
+      "tests": 18,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "suite": "ru.itmo.indexbudget.candidates.ProfileAwareCandidateGeneratorTest",
+      "tests": 25,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "suite": "ru.itmo.indexbudget.cli.IndexBudgetCliTest",
+      "tests": 23,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "suite": "ru.itmo.indexbudget.domain.BudgetAssessmentTest",
+      "tests": 33,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "suite": "ru.itmo.indexbudget.domain.EvaluationAssessmentTest",
+      "tests": 11,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "suite": "ru.itmo.indexbudget.domain.EvaluationContractTest",
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "suite": "ru.itmo.indexbudget.domain.MetricsCalculatorImplTest",
+      "tests": 29,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "suite": "ru.itmo.indexbudget.domain.ObjectiveComparatorTest",
+      "tests": 27,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "suite": "ru.itmo.indexbudget.domain.PriceOfRobustnessTest",
+      "tests": 12,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "suite": "ru.itmo.indexbudget.domain.ProfileWeightsTest",
+      "tests": 20,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "suite": "ru.itmo.indexbudget.domain.RealCostsIntegrationTest",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 1
+    },
+    {
+      "suite": "ru.itmo.indexbudget.domain.RunContextTest",
+      "tests": 9,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "suite": "ru.itmo.indexbudget.domain.SearchResultContractTest",
+      "tests": 7,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "suite": "ru.itmo.indexbudget.fixtures.SearchScenariosTest",
+      "tests": 13,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "suite": "ru.itmo.indexbudget.optimizer.GreedyOptimizerLimitsTest",
+      "tests": 8,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "suite": "ru.itmo.indexbudget.optimizer.GreedyOptimizerTest",
+      "tests": 18,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "suite": "ru.itmo.indexbudget.optimizer.LimitedRepairOptimizerTest",
+      "tests": 21,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "suite": "ru.itmo.indexbudget.optimizer.RepairNeighborhoodTest",
+      "tests": 5,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "suite": "ru.itmo.indexbudget.postgres.JdbcAnalysisSessionFactoryTest",
+      "tests": 10,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "suite": "ru.itmo.indexbudget.postgres.JdbcAnalysisSessionIntegrationTest",
+      "tests": 12,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "suite": "ru.itmo.indexbudget.postgres.JdbcAnalysisSessionTest",
+      "tests": 20,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "suite": "ru.itmo.indexbudget.postgres.JdbcCatalogReaderIntegrationTest",
+      "tests": 14,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "suite": "ru.itmo.indexbudget.postgres.JdbcCatalogReaderTest",
+      "tests": 8,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "suite": "ru.itmo.indexbudget.report.AtomicReportExporterTest",
+      "tests": 16,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "suite": "ru.itmo.indexbudget.report.DefaultReportBuilderTest",
+      "tests": 7,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "suite": "ru.itmo.indexbudget.report.HtmlReportRendererTest",
+      "tests": 14,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "suite": "ru.itmo.indexbudget.report.JsonReportWriterTest",
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "suite": "ru.itmo.indexbudget.sql.JSqlParserNameResolverTest",
+      "tests": 44,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "suite": "ru.itmo.indexbudget.sql.JSqlParserSqlAnalyzerTest",
+      "tests": 57,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "suite": "ru.itmo.indexbudget.sql.PostgresLiteralTypesTest",
+      "tests": 19,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "suite": "ru.itmo.indexbudget.sql.PostgresOperatorResolverTest",
+      "tests": 8,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "suite": "ru.itmo.indexbudget.sql.SqlResolutionIntegrationTest",
+      "tests": 26,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  ],
+  "python_tests": {
+    "tests": 5,
+    "failures": 0
+  },
+  "packaged_cli": {
+    "help_exit": 0,
+    "version_exit": 0
+  },
+  "source_sha256": {
+    "build.gradle.kts": "a6f581e92180e410c37afda9fe8ccca5f984fd48133a1fa9a2cb5352a7e9e5d5",
+    "demo/check-hypopg.sh": "21fb273f02d18267745decff0434105ad960a30ab69a835087cf3c5af0c2ce98",
+    "src/main/kotlin/ru/itmo/indexbudget/application/AnalysisPipeline.kt": "ad0056d05251d815020d85c3c9698034ba5ab1637f49517c4f1e519cfb3e7c09",
+    "src/main/kotlin/ru/itmo/indexbudget/postgres/JdbcAnalysisSession.kt": "3c930fcf2a3285a38f0bb20692423adc5bf88926c495e79d2c7c44c7ab1da7b9",
+    "src/main/kotlin/ru/itmo/indexbudget/cli/IndexBudgetCli.kt": "c7729ade7b8547a1557756209fb778553fb061b461f7aea26598bad0f35334c7",
+    "src/test/kotlin/ru/itmo/indexbudget/acceptance/ExhaustiveOracle.kt": "fb88fbe5b7b524d962ab91dd8cab771177007e164c61a4d3dbdb6faaff8f1578",
+    "src/test/kotlin/ru/itmo/indexbudget/acceptance/ExhaustiveOracleMain.kt": "4d70ccf6277f123d5de3c429ebd611d18dc449af19cc91fb1f19b4500390f172",
+    "src/test/kotlin/ru/itmo/indexbudget/acceptance/ExhaustiveOracleTest.kt": "38f56d12f6bdae6512efc8b8080bcafc040363b4482384fd28cb63fdaaed26f5",
+    "src/test/kotlin/ru/itmo/indexbudget/acceptance/MvpAcceptanceIntegrationTest.kt": "a800605747f65d251c47ab77c2ed4506904779912a53a014bc440417da0fce3a",
+    "src/test/kotlin/ru/itmo/indexbudget/acceptance/ProductionWiringTest.kt": "29e081b7ec9bfc591d872fefa55c0719750724bd1b08b5bf056deaee8b1ec959",
+    "src/test/kotlin/ru/itmo/indexbudget/experiments/PlannerExperiments.kt": "7ad322ed7a27a874ecba8c304f35d2cdde78e7f27a06f1b7ad19b68922f37850",
+    "demo/experiments/compose.yaml": "8bb7a55a9bcb29b7d2b1a175ae317f9111451c6120d6617b78b101832511fe47",
+    "demo/experiments/marker.sql": "7fd6872b36873ce0cf1b2b5ece47d35426aecc7cc789e01fd0a5ae3deaa9936a",
+    "demo/experiments/physical.py": "f56f84c6a9806969c92280596891e5b10d8467cb11f41e7699452d7932e357e7",
+    "demo/experiments/sensitivity.json": "52efbcd87f6f5d4906e9751246ea8ebe52167c4756af6a412598d378a9c90b31",
+    "demo/experiments/test_physical.py": "88f1b80280edfa9a1ca3eaefba3d46a7e76b9703faeea0d82ea0ad653970cb0b",
+    "demo/experiments/workload.json": "199f94c2b34af1b5e9fa0315425a9cc68f6fdf110f90a5954b3f55158c1fde4f"
+  },
+  "post_verification_changes": [
+    "Removed a trailing blank line from demo/experiments/compose.yaml; no semantic change."
+  ]
+}

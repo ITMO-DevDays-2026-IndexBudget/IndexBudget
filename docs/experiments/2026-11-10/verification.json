@@ -1,0 +1,49 @@
+{
+  "jvm_tests": {
+    "tests": 726,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 1
+  },
+  "python_tests": {
+    "tests": 5,
+    "failures": 0
+  },
+  "packaged_cli": {
+    "robust": {
+      "exit_code": 0,
+      "run_id": "4fa6b6d3-04fd-45e0-b6dd-9f0bace3d3ea",
+      "status": "completed",
+      "selected_objective": "robust",
+      "selected_ids": [
+        "d2e9c41347f8a774adc74bf3ab4476011ac9fdab397101eb77db9c50f8d3c21e"
+      ],
+      "environment": {
+        "application_version": "0.1.0-SNAPSHOT",
+        "java_version": "25.0.4.1",
+        "kotlin_version": "2.4.21",
+        "postgres_version": "16.15 (Debian 16.15-1.pgdg12+2)",
+        "hypopg_version": "1.4.2"
+      }
+    },
+    "mean": {
+      "exit_code": 0,
+      "run_id": "0cb6d13a-0702-47b5-b414-87c53370011a",
+      "status": "completed",
+      "selected_objective": "mean",
+      "selected_ids": [
+        "d2e9c41347f8a774adc74bf3ab4476011ac9fdab397101eb77db9c50f8d3c21e"
+      ],
+      "environment": {
+        "application_version": "0.1.0-SNAPSHOT",
+        "java_version": "25.0.4.1",
+        "kotlin_version": "2.4.21",
+        "postgres_version": "16.15 (Debian 16.15-1.pgdg12+2)",
+        "hypopg_version": "1.4.2"
+      }
+    }
+  },
+  "oracle_same_candidate_space": true,
+  "oracle_same_robust_selection": true,
+  "oracle_same_mean_selection": true
+}

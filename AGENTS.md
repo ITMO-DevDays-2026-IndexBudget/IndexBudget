@@ -18,7 +18,7 @@
 
 ## Состояние репозитория и структура
 
-В репозитории есть CLI с валидацией JSON v2, orchestration `AnalysisPipeline`, общий RunContext, AST-валидация, JDBC-каталог, ограниченный перечислитель кандидатов, тесты и синтетические фикстуры. Команда `analyze` пока возвращает `NOT_IMPLEMENTED` с отсутствующими зависимостями: разрешение SQL, сессия HypoPG, полный shortlist, расчёты, поиск и экспорт ещё не подключены целиком. Команды сборки и запуска смотри в [README](README.md), существующие стыки — в [docs/contracts.md](docs/contracts.md). Перед изменениями осмотри актуальное дерево и build-файлы; не создавай повторный каркас.
+В репозитории подключены CLI/JSON v2, `AnalysisPipeline`, общий RunContext, SQL resolution, JDBC-каталог/HypoPG, `ProfileAwareCandidateGenerator`, общие метрики, greedy + repair и экспорт HTML/JSON/SQL. Команды сборки и запуска смотри в [README](README.md), существующие стыки — в [docs/contracts.md](docs/contracts.md), покрытие проверками и оставшиеся условия — в [карте приёмки #21](docs/acceptance-v0.2.md). [Сохранённые эксперименты](docs/experiments/2026-11-10/README.md) относятся к указанному там прежнему рабочему дереву и не заменяют проверку итогового коммита. Перед изменениями осмотри актуальное дерево и build-файлы; не создавай повторный каркас.
 
 Целевой стек: Kotlin/JVM, JDK 25 LTS, Gradle Kotlin DSL, Spring Boot с `WebApplicationType.NONE`, Jackson, PostgreSQL JDBC, PostgreSQL 16 + HypoPG. Предусмотрены CLI и автономный HTML; HTTP API в MVP отсутствует.
 

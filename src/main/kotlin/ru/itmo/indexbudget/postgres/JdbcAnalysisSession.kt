@@ -16,6 +16,7 @@ import ru.itmo.indexbudget.candidates.quoteIdentifier
 import ru.itmo.indexbudget.domain.AnalysisError
 import ru.itmo.indexbudget.domain.AnalysisException
 import ru.itmo.indexbudget.domain.CatalogSnapshot
+import ru.itmo.indexbudget.domain.DatabaseVersions
 import ru.itmo.indexbudget.domain.ErrorCode
 import ru.itmo.indexbudget.domain.EvaluationResult
 import ru.itmo.indexbudget.domain.ExplainPlan
@@ -33,6 +34,8 @@ class JdbcAnalysisSession(
     private val connection: Connection,
     private val ddlRenderer: DdlRenderer = PostgresDdlRenderer(),
 ) : AnalysisSession {
+    override var databaseVersions: DatabaseVersions = DatabaseVersions()
+        private set
     private val closed = AtomicBoolean()
     private val operationLock = Any()
     private var activeOperation: Operation? = null
@@ -54,6 +57,13 @@ class JdbcAnalysisSession(
     override fun readCatalog(tables: Set<TableName>, context: RunContext): CatalogSnapshot {
         enter(context)
         try {
+            databaseVersions = query("""
+                SELECT pg_catalog.current_setting('server_version'),
+                       (SELECT extversion FROM pg_catalog.pg_extension WHERE extname OPERATOR(pg_catalog.=) 'hypopg')
+            """.trimIndent(), context, ErrorCode.CATALOG_ERROR) { rows ->
+                if (!rows.next()) fail(ErrorCode.CATALOG_ERROR, "Database versions are unavailable")
+                DatabaseVersions(rows.getString(1), rows.getString(2))
+            }
             return JdbcCatalogReader(connection,
                 beforeQuery = { run ->
                     configureTimeout(run, run.remainingTime())

@@ -13,7 +13,7 @@
 
 Состояние проекта меняется: сначала прочитайте актуальные README, build scripts, wrapper и конфигурацию CI. Планируемый стек — Kotlin/JVM, JDK 25 LTS, Gradle Kotlin DSL, Spring Boot CLI (`WebApplicationType.NONE`), Jackson, PostgreSQL JDBC, JSqlParser и PostgreSQL 16 + HypoPG. Это не утверждение, что все зависимости и команды уже настроены.
 
-Контракт команды — `indexbudget analyze --workload <path> --output-dir <path>`, подключение — через `INDEXBUDGET_DATABASE_URL`. Не придумывайте готовые Gradle tasks, путь к исполняемому файлу или имя Compose-сервиса. Используйте команды сборки и запуска из [README](../README.md) и существующие стыки из [docs/contracts.md](../docs/contracts.md). Orchestration `AnalysisPipeline` уже есть; `analyze` пока возвращает `NOT_IMPLEMENTED` со списком отсутствующих зависимостей. Не выдавайте проверку orchestration с подставными компонентами за готовый сквозной анализ с БД.
+Контракт команды — `indexbudget analyze --workload <path> --output-dir <path>`, подключение — через `INDEXBUDGET_DATABASE_URL`. Не придумывайте готовые Gradle tasks, путь к исполняемому файлу или имя Compose-сервиса. Используйте команды сборки и запуска из [README](../README.md) и существующие стыки из [docs/contracts.md](../docs/contracts.md). Production-порты `AnalysisPipeline` подключены. Сверяйте выполненные проверки и оставшиеся условия с [картой приёмки #21](../docs/acceptance-v0.2.md) и происхождением [сохранённых экспериментов](../docs/experiments/2026-11-10/README.md); не выдавайте проверки с подставными компонентами или результаты другого рабочего дерева за сквозную проверку итогового коммита с БД.
 
 ## Kotlin и границы классов
 

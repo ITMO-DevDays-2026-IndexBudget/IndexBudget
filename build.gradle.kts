@@ -58,3 +58,22 @@ tasks.register<JavaExec>("reportPreview") {
     args(layout.projectDirectory.file("index.html").asFile.absolutePath,
         layout.buildDirectory.dir("report-previews").get().asFile.absolutePath)
 }
+
+// Separate acceptance tools: never included in the installed production CLI.
+tasks.register<JavaExec>("exhaustiveOracle") {
+    group = "verification"
+    description = "Enumerate a fixed space of at most eight candidates with an explicit deadline"
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass.set("ru.itmo.indexbudget.acceptance.ExhaustiveOracleMainKt")
+    javaLauncher.set(javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(25)) })
+}
+
+tasks.register<JavaExec>("plannerExperiments") {
+    group = "verification"
+    description = "Compare objectives and search strategies on the same fixed PostgreSQL candidate pool"
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass.set("ru.itmo.indexbudget.experiments.PlannerExperimentsKt")
+    javaLauncher.set(javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(25)) })
+}

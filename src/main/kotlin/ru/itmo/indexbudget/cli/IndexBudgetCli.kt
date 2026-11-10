@@ -135,8 +135,8 @@ class IndexBudgetCli(
 
             Validates JSON v2, shared queries, frequency profiles and budgets.
             Use a new or empty output directory for each run.
-            Runs the analysis pipeline when all production components are connected.
-            Missing components produce NOT_IMPLEMENTED (exit 1), without reports or a database connection.
+            Runs SQL resolution, bounded shortlist, HypoPG, greedy + repair and HTML/JSON/SQL export.
+            Requires a prepared PostgreSQL database with HypoPG; analysis creates no physical indexes.
             Progress on stderr contains stages and actual EXPLAIN/set/cache counters.
 
             Exit codes: 0 completed/help; 1 failed; 2 invalid input; 3 partial.

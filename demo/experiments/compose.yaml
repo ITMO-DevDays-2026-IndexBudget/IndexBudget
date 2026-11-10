@@ -1,0 +1,23 @@
+name: indexbudget-experiments
+
+services:
+  postgres:
+    image: indexbudget-experiments-db
+    build: ../postgres
+    environment:
+      POSTGRES_DB: indexbudget
+      POSTGRES_USER: demo_admin
+      POSTGRES_PASSWORD: ${INDEXBUDGET_ADMIN_PASSWORD:?Run sh demo/init-env.sh first}
+      INDEXBUDGET_READER_PASSWORD: ${INDEXBUDGET_READER_PASSWORD:?Run sh demo/init-env.sh first}
+    ports:
+      - "127.0.0.1:${INDEXBUDGET_EXPERIMENT_PORT:-55434}:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    volumes:
+      - ../postgres/init/001-seed.sql:/docker-entrypoint-initdb.d/001-seed.sql:ro
+      - ./marker.sql:/docker-entrypoint-initdb.d/002-experiment-marker.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U demo_admin -d indexbudget && psql -U demo_admin -d indexbudget -Atqc 'SELECT disposable FROM demo_meta.experiment_guard' | grep -qx t"]
+      interval: 3s
+      timeout: 5s
+      retries: 60

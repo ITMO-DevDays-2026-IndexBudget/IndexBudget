@@ -1,0 +1,18 @@
+{
+  "schema_version": 2,
+  "objective": "robust",
+  "queries": [
+    {"id": "by_group", "sql": "SELECT id, value FROM public.records WHERE group_id = 42"},
+    {"id": "by_value", "sql": "SELECT id, value FROM public.records WHERE value = 7"},
+    {"id": "groups_by_category", "sql": "SELECT id, name FROM public.groups WHERE category = 3"}
+  ],
+  "profiles": [
+    {"id": "balanced_holdout", "weight": 1, "calls_per_hour": {"by_group": 1000, "by_value": 1000, "groups_by_category": 1000}},
+    {"id": "rare_table_holdout", "weight": 1, "calls_per_hour": {"by_group": 10, "by_value": 10, "groups_by_category": 5000}}
+  ],
+  "constraints": {"storage_budget_bytes": 67108864, "write_budget_units_per_hour": 40000, "max_indexes": 1},
+  "table_write_rates": {
+    "public.records": {"inserts_per_hour": 1000, "updates_per_hour": 3000, "deletes_per_hour": 100, "source": "manual"},
+    "public.groups": {"inserts_per_hour": 10, "updates_per_hour": 30, "deletes_per_hour": 1, "source": "manual"}
+  }
+}
