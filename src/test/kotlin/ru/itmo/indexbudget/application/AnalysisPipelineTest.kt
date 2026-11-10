@@ -10,6 +10,7 @@ import ru.itmo.indexbudget.cli.IndexBudgetCli
 import ru.itmo.indexbudget.domain.*
 import ru.itmo.indexbudget.fixtures.ContractFixtures
 import ru.itmo.indexbudget.optimizer.ConfigurationEvaluator
+import ru.itmo.indexbudget.optimizer.GreedyOptimizer
 import ru.itmo.indexbudget.optimizer.Optimizer
 import ru.itmo.indexbudget.optimizer.SearchCheckpoint
 import ru.itmo.indexbudget.postgres.AnalysisSession
@@ -26,6 +27,52 @@ import java.nio.file.Path
 import java.time.Duration
 
 class AnalysisPipelineTest {
+    @ParameterizedTest
+    @EnumSource(Objective::class)
+    fun `production greedy and metrics supply both incumbents to the closed-session report`(objective: Objective) {
+        val input = ContractFixtures.workload(objective).let {
+            it.copy(constraints = it.constraints.copy(maxIndexes = 1))
+        }
+        val run = Harness(input, suppliedMetrics = MetricsCalculatorImpl(),
+            suppliedComparator = ObjectiveComparatorImpl(), suppliedOptimizer = GreedyOptimizer())
+
+        val result = run.execute()
+
+        assertEquals(RunStatus.COMPLETED, result.status)
+        assertEquals(objective, result.selectedObjective)
+        assertEquals(listOf("records_created_at"), result.bestRobust?.evaluation?.candidateIds)
+        assertEquals(listOf("records_group_created_at"), result.bestMean?.evaluation?.candidateIds)
+        assertEquals(ComparisonScope.EVALUATED_SETS, result.comparisonScope)
+        assertEquals(RunStatistics(6, 3, 3), result.diagnostics.statistics)
+        assertEquals(3, run.evaluatedSets.size)
+        assertTrue(AnalysisPhase.GREEDY in result.diagnostics.completedPhases)
+        assertFalse(AnalysisPhase.REPAIR in result.diagnostics.completedPhases)
+        assertEquals(1, run.closeCalls)
+        assertSame(result, run.report?.result)
+        assertTrue(run.events.indexOf("close") < run.events.indexOf("report"))
+    }
+
+    @Test
+    fun `pipeline exports production greedy checkpoint when the next evaluation loses its connection`() {
+        val run = Harness(suppliedMetrics = MetricsCalculatorImpl(),
+            suppliedComparator = ObjectiveComparatorImpl(), suppliedOptimizer = GreedyOptimizer())
+        run.beforeEvaluation = { ids ->
+            if (ids == listOf("records_group_created_at")) problem(ErrorCode.DB_CONNECTION_ERROR)
+        }
+
+        val result = run.execute()
+
+        assertEquals(RunStatus.PARTIAL, result.status)
+        assertEquals(listOf("records_created_at"), result.bestRobust?.evaluation?.candidateIds)
+        assertEquals(result.bestRobust, result.bestMean)
+        assertEquals(listOf(StopReason.CONNECTION_LOST), result.diagnostics.stopReasons)
+        assertEquals(RunStatistics(4, 3, 2), result.diagnostics.statistics)
+        assertEquals(ContractFixtures.robustEvaluation().plansByQueryId, result.selected?.evaluation?.plansByQueryId)
+        assertEquals(3, run.evaluatedSets.size)
+        assertEquals(1, run.closeCalls)
+        assertSame(result, run.report?.result)
+    }
+
     @Test
     fun `real budget calculator supplies the same expenses to search and report`() {
         val run = Harness(suppliedMetrics = MetricsCalculatorImpl())
@@ -595,6 +642,8 @@ class AnalysisPipelineTest {
         suppliedContext: RunContext? = null,
         private val outputDirectory: Path = Path.of("reports/test-run"),
         private val suppliedMetrics: MetricsCalculator? = null,
+        private val suppliedComparator: ObjectiveComparator? = null,
+        private val suppliedOptimizer: Optimizer? = null,
     ) {
         private var now = 0L
         val progress = mutableListOf<RunProgress>()
@@ -616,6 +665,7 @@ class AnalysisPipelineTest {
         var returnedSearchFailure: ErrorCode? = null
         var catalogWarnings = emptyList<AnalysisWarning>()
         var baselineAction: (() -> EvaluationResult)? = null
+        var beforeEvaluation: (List<String>) -> Unit = {}
         var onParse: () -> Unit = {}
         var onGenerate: () -> Unit = {}
         var afterBaseline: () -> Unit = {}
@@ -670,6 +720,7 @@ class AnalysisPipelineTest {
                 val configurationIds = candidates.map { it.id }.sorted()
                 evaluatedSets += configurationIds
                 context.reserveEvaluationAttempt()
+                beforeEvaluation(configurationIds)
                 input.queries.forEach { context.reserveExplainAttempt() }
                 val scriptedEvaluation = scriptedEvaluations.getValue(configurationIds)
                 val evaluation = if (candidates.isEmpty()) {
@@ -713,14 +764,14 @@ class AnalysisPipelineTest {
             }
         }
 
-        private val comparator = object : ObjectiveComparator {
+        private val comparator = suppliedComparator ?: object : ObjectiveComparator {
             override fun compare(left: EvaluatedConfiguration, right: EvaluatedConfiguration, objective: Objective): Int =
                 error("Orchestration must not compare configurations")
             override fun improvesPrimaryMetrics(proposed: SetMetrics, current: SetMetrics, objective: Objective): Boolean =
                 error("Orchestration must not calculate search movement")
         }
 
-        private val optimizer = object : Optimizer {
+        private val optimizer = suppliedOptimizer ?: object : Optimizer {
             override fun optimize(workload: ResolvedWorkload, candidates: CandidateBatch, baseline: EvaluationResult,
                                   evaluator: ConfigurationEvaluator, metrics: MetricsCalculator,
                                   comparator: ObjectiveComparator, context: RunContext,
