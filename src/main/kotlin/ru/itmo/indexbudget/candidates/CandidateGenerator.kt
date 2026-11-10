@@ -11,7 +11,7 @@ interface CandidateGenerator {
     fun generate(workload: ResolvedWorkload, catalog: CatalogSnapshot, context: RunContext): CandidateBatch
 }
 
-/** One implementation is shared by HypoPG creation and final SQL export; this never executes SQL. */
+/** Shared by HypoPG and SQL export. Input must have resolved catalog defaults; never executes SQL. */
 interface DdlRenderer {
     fun render(definition: IndexDefinition): String
 }

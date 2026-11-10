@@ -110,8 +110,8 @@ object CandidateGenerationFixtures {
         return CandidateGenerationScenario(
             "join resolves both sides without cross-table pairs",
             CatalogSnapshot(listOf(
-                CatalogTable(table, listOf(CatalogColumn("group_id", "int4"), CatalogColumn("a", "int4"))),
-                CatalogTable(otherTable, listOf(CatalogColumn("id", "int4"))),
+                CatalogTable(table, listOf(CatalogColumn("group_id", "int4", defaultOperatorClass = "pg_catalog.int4_ops"), CatalogColumn("a", "int4", defaultOperatorClass = "pg_catalog.int4_ops"))),
+                CatalogTable(otherTable, listOf(CatalogColumn("id", "int4", defaultOperatorClass = "pg_catalog.int4_ops"))),
             )), workload(listOf(query)),
             listOf(
                 ExpectedCandidateScope("q", otherTable, listOf(right), enumeratedDefinitions = 1, variants = setOf(otherSingle)),
@@ -243,7 +243,7 @@ object CandidateGenerationFixtures {
         retained: List<String>,
         variants: Set<CandidateVariant>,
     ) = CandidateGenerationScenario(
-        name, CatalogSnapshot(listOf(CatalogTable(table, listOf("a", "b", "unused").map { CatalogColumn(it, "int4") }))),
+        name, CatalogSnapshot(listOf(CatalogTable(table, listOf("a", "b", "unused").map { CatalogColumn(it, "int4", defaultOperatorClass = "pg_catalog.int4_ops") }))),
         workload(listOf(query)),
         listOf(ExpectedCandidateScope("q", table, retained.map(::column), enumeratedDefinitions = variants.size, variants = variants)),
     )

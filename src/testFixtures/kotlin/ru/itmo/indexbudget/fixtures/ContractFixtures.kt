@@ -46,10 +46,10 @@ object ContractFixtures {
             CatalogTable(
                 ref = recordsTable,
                 columns = listOf(
-                    CatalogColumn("id", "int8", nullable = false),
-                    CatalogColumn("value", "int4", nullable = false),
-                    CatalogColumn("group_id", "int4", nullable = false),
-                    CatalogColumn("created_at", "timestamp", nullable = false),
+                    CatalogColumn("id", "int8", nullable = false, defaultOperatorClass = "pg_catalog.int8_ops"),
+                    CatalogColumn("value", "int4", nullable = false, defaultOperatorClass = "pg_catalog.int4_ops"),
+                    CatalogColumn("group_id", "int4", nullable = false, defaultOperatorClass = "pg_catalog.int4_ops"),
+                    CatalogColumn("created_at", "timestamp", nullable = false, defaultOperatorClass = "pg_catalog.timestamp_ops"),
                 ),
                 estimatedRows = 10_000.0,
                 statisticsAvailable = true,
@@ -58,7 +58,7 @@ object ContractFixtures {
                         name = "records_pkey",
                         table = recordsTable,
                         method = "btree",
-                        keys = listOf(IndexKey(ColumnRef(recordsTable, "id"))),
+                        keys = listOf(IndexKey(ColumnRef(recordsTable, "id"), operatorClass = "pg_catalog.int8_ops")),
                         unique = true,
                     ),
                 ),
@@ -71,7 +71,7 @@ object ContractFixtures {
         tables = listOf(
             CatalogTable(
                 ref = wideTable,
-                columns = (1..100).map { CatalogColumn("c$it", "int4") },
+                columns = (1..100).map { CatalogColumn("c$it", "int4", defaultOperatorClass = "pg_catalog.int4_ops") },
                 estimatedRows = 10_000.0,
                 statisticsAvailable = true,
             ),
