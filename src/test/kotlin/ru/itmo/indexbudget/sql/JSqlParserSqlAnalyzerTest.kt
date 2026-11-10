@@ -93,6 +93,7 @@ class JSqlParserSqlAnalyzerTest {
             "SELECT id FROM records WHERE value = 1 OR group_id = 2",
             "SELECT id FROM records WHERE EXISTS (SELECT 1 FROM groups)",
             "SELECT id FROM (SELECT id FROM records) nested",
+            "SELECT g.id FROM (SELECT id FROM records) r INNER JOIN groups g ON r.id = g.id",
             "SELECT group_id, count(*) FROM records GROUP BY group_id",
             "SELECT id, row_number() OVER () FROM records",
             "SELECT * EXCEPT (value) FROM records",

@@ -106,6 +106,9 @@ class JSqlParserSqlAnalyzer : SqlAnalyzer {
         context.checkDeadline()
         rejectUnsupportedSelectClauses(select, queryId)
 
+        if (select.fromItem !is Table) {
+            fail(ErrorCode.UNSUPPORTED_SQL, queryId, "SELECT FROM supports only an ordinary table.")
+        }
         val tables = collectTables(select)
         if (tables.isEmpty() || tables.size > MAX_TABLES) {
             fail(ErrorCode.UNSUPPORTED_SQL, queryId, "SELECT must reference between one and three ordinary tables.")
