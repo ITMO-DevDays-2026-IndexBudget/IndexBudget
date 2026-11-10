@@ -20,6 +20,7 @@ class CandidateShortlistPipelineTest {
     fun `production generator is registered without enabling incomplete pipeline`() {
         ApplicationContextRunner().withUserConfiguration(AnalysisConfiguration::class.java).run { context ->
             assertInstanceOf(ProfileAwareCandidateGenerator::class.java, context.getBean(CandidateGenerator::class.java))
+            assertInstanceOf(JdbcAnalysisSessionFactory::class.java, context.getBean(AnalysisSessionFactory::class.java))
             assertInstanceOf(UnavailableAnalysisRunner::class.java, context.getBean(AnalysisRunner::class.java))
         }
     }

@@ -142,20 +142,11 @@ class BtreeCandidateEnumerator : CandidateEnumerator {
         features: Map<String, Map<ColumnRef, Features>>,
         context: RunContext,
     ): Map<ColumnRef, Double> {
-        require(profile.callsPerHour.keys == features.keys) { "Profile must cover exactly the resolved queries" }
-        val frequencies = features.keys.map { profile.callsPerHour.getValue(it) }
-        require(frequencies.all { it.isFinite() && it >= 0.0 } && frequencies.any { it > 0.0 }) {
-            "Expected finite nonnegative frequencies with a positive total"
-        }
-        val total = frequencies.sum()
-        if (!total.isFinite()) numericError(profile.id, "Frequency sum is not finite")
+        val frequencies = normalizedFrequencies(profile, features.keys, context)
         val support = mutableMapOf<ColumnRef, Double>()
-        for ((queryId, columns) in features) {
+        for ((queryId, normalized) in frequencies) {
             context.checkDeadline()
-            val frequency = profile.callsPerHour.getValue(queryId)
-            val normalized = frequency / total
-            if (frequency > 0.0 && normalized == 0.0) numericError(profile.id, "Normalized frequency underflow")
-            for (column in columns.keys) {
+            for (column in features.getValue(queryId).keys) {
                 val sum = (support[column] ?: 0.0) + normalized
                 if (!sum.isFinite()) numericError(profile.id, "Column support is not finite")
                 support[column] = sum

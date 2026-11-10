@@ -9,6 +9,7 @@ import ru.itmo.indexbudget.domain.MetricsCalculator
 import ru.itmo.indexbudget.domain.ObjectiveComparator
 import ru.itmo.indexbudget.optimizer.Optimizer
 import ru.itmo.indexbudget.postgres.AnalysisSessionFactory
+import ru.itmo.indexbudget.postgres.JdbcAnalysisSessionFactory
 import ru.itmo.indexbudget.report.ReportBuilder
 import ru.itmo.indexbudget.report.ReportExporter
 import ru.itmo.indexbudget.sql.SqlAnalyzer
@@ -18,6 +19,9 @@ import ru.itmo.indexbudget.sql.SqlAnalyzer
 class AnalysisConfiguration {
     @Bean
     fun candidateGenerator(): CandidateGenerator = ProfileAwareCandidateGenerator()
+
+    @Bean
+    fun analysisSessionFactory(): AnalysisSessionFactory = JdbcAnalysisSessionFactory()
 
     @Bean
     fun analysisRunner(

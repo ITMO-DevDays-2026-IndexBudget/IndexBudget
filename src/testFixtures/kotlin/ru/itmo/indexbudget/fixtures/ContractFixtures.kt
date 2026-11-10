@@ -296,11 +296,7 @@ object ContractFixtures {
                     shortlistedCandidates = reportCandidates.size,
                 ),
             ),
-            priceOfRobustness = when {
-                status == RunStatus.FAILED -> null
-                status == RunStatus.PARTIAL || sameIncumbents -> 0.0
-                else -> 88_900.0
-            },
+            priceOfRobustness = PriceOfRobustness.calculate(result),
         )
     }
 

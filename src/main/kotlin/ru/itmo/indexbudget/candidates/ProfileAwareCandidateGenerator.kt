@@ -79,7 +79,7 @@ class ProfileAwareCandidateGenerator(
     }
 
     private fun select(pool: List<IndexCandidate>, workload: ResolvedWorkload, context: RunContext): List<IndexCandidate> {
-        val queryIds = workload.queries.map { it.id }.sorted()
+        val queryIds = workload.queries.map { it.id }.toSet()
         val profiles = workload.input.profiles.sortedBy { it.id }
         require(profiles.size in 1..3 && profiles.map { it.id }.distinct().size == profiles.size) {
             "Expected 1–3 validated profiles with unique IDs"
@@ -140,26 +140,6 @@ class ProfileAwareCandidateGenerator(
             val candidate = if (preferSingles) take(singles) ?: take(pairs) else take(pairs) ?: take(singles)
             if (candidate != null) preferSingles = !preferSingles
             return candidate
-        }
-    }
-
-    private fun normalizedFrequencies(profile: Profile, queryIds: List<String>, context: RunContext): Map<String, Double> {
-        require(profile.callsPerHour.keys == queryIds.toSet()) { "Profile must cover exactly the resolved queries" }
-        var total = 0.0
-        for (id in queryIds) {
-            context.checkDeadline()
-            val frequency = profile.callsPerHour.getValue(id)
-            require(frequency.isFinite() && frequency >= 0.0) { "Expected validated finite nonnegative frequencies" }
-            total += frequency
-        }
-        if (!total.isFinite()) numericError(profile.id, "Frequency sum is not finite")
-        require(total > 0.0) { "Expected a positive frequency total" }
-        return queryIds.associateWith { id ->
-            context.checkDeadline()
-            val frequency = profile.callsPerHour.getValue(id)
-            val normalized = frequency / total
-            if (frequency > 0.0 && normalized == 0.0) numericError(profile.id, "Normalized frequency underflow")
-            normalized
         }
     }
 
