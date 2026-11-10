@@ -1,6 +1,7 @@
 package ru.itmo.indexbudget.sql
 
 import net.sf.jsqlparser.expression.operators.relational.EqualsTo
+import net.sf.jsqlparser.parser.CCJSqlParserUtil
 import net.sf.jsqlparser.schema.Column
 import net.sf.jsqlparser.schema.Table
 import net.sf.jsqlparser.statement.select.AllTableColumns
@@ -207,16 +208,20 @@ class JSqlParserSqlAnalyzerTest {
         assertEquals("query", error.queryId)
     }
 
-    @Test
-    fun `deadline is checked after the external parser returns`() {
+    @ParameterizedTest
+    @ValueSource(strings = ["SELECT id FROM records; SELECT id FROM records", "UPDATE records SET id = 1"])
+    fun `deadline is checked after the external parser returns`(sql: String) {
         var now = 0L
         val context = RunContext(
             limits = RunLimits(commandTimeout = Duration.ofNanos(5), searchTimeout = Duration.ofSeconds(60)),
-            clock = NanoClock { now++ },
+            clock = NanoClock { now },
         )
+        val timedAnalyzer = JSqlParserSqlAnalyzer { source, configure ->
+            CCJSqlParserUtil.parseStatements(source, configure).also { now = 5L }
+        }
 
         val error = assertThrows(AnalysisException::class.java) {
-            analyzer.parse(workload("SELECT id FROM records"), context)
+            timedAnalyzer.parse(workload(sql), context)
         }.error
 
         assertEquals(ErrorCode.DEADLINE_EXCEEDED, error.code)

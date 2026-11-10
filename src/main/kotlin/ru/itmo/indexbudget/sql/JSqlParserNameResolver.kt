@@ -83,7 +83,7 @@ internal class JSqlParserNameResolver(private val catalog: CatalogSnapshot, priv
                 if (!table.alias?.aliasColumns.isNullOrEmpty()) {
                     fail(ErrorCode.UNSUPPORTED_SQL, "Table column alias lists are not supported.")
                 }
-                val name = TableName(identifier(table.name), table.schemaName?.let(::identifier))
+                val name = TableName(identifier(table.postgresName), table.schemaName?.let(::identifier))
                 val physical = resolveTable(name)
                 if (physical.kind != TableKind.ORDINARY) {
                     fail(ErrorCode.UNSUPPORTED_SQL, "Only ordinary PostgreSQL tables are supported.")
@@ -194,7 +194,7 @@ internal class JSqlParserNameResolver(private val catalog: CatalogSnapshot, priv
             if (table.databaseName != null || table.catalogName != null) {
                 fail(ErrorCode.UNSUPPORTED_SQL, "Cross-database column references are not supported.")
             }
-            val name = identifier(table.name)
+            val name = identifier(table.postgresName)
             val schema = table.schemaName?.let(::identifier)
             val matches = visible.filter {
                 if (schema == null) it.visibleName == name

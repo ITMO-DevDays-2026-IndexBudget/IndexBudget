@@ -20,6 +20,7 @@ import net.sf.jsqlparser.expression.operators.relational.GreaterThanEquals
 import net.sf.jsqlparser.expression.operators.relational.MinorThan
 import net.sf.jsqlparser.expression.operators.relational.MinorThanEquals
 import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList
+import net.sf.jsqlparser.expression.operators.relational.SupportsOldOracleJoinSyntax
 import net.sf.jsqlparser.parser.Node
 import net.sf.jsqlparser.schema.Column
 import net.sf.jsqlparser.schema.Table
@@ -33,7 +34,11 @@ import ru.itmo.indexbudget.domain.AnalysisException
 import ru.itmo.indexbudget.domain.ErrorCode
 import ru.itmo.indexbudget.domain.RunContext
 
-internal class JSqlParserAstValidator(private val queryId: String, private val context: RunContext) {
+internal class JSqlParserAstValidator(
+    private val queryId: String,
+    private val context: RunContext,
+    private val restoreIdentifier: (String) -> String,
+) {
     fun validate(select: PlainSelect): List<Table> {
         validateStructureClauses(select)
         validateRowSelectionClauses(select)
@@ -66,6 +71,7 @@ internal class JSqlParserAstValidator(private val queryId: String, private val c
         if (selectItems.isEmpty()) fail(ErrorCode.UNSUPPORTED_SQL, "SELECT list must not be empty.")
         selectItems.forEach { item ->
             context.checkDeadline()
+            item.alias?.let { it.name = restoreIdentifier(it.name) }
             when (val expression = item.expression) {
                 is Column -> validateColumn(expression)
                 is AllColumns -> validateAllColumns(expression)
@@ -129,7 +135,7 @@ internal class JSqlParserAstValidator(private val queryId: String, private val c
         if (expression is AllTableColumns) {
             val table = expression.table
             restoreTableName(table)
-            if (table.name.isNullOrBlank() || table.catalogName != null || table.databaseName != null) {
+            if (table.nameParts.firstOrNull().isNullOrBlank() || table.catalogName != null || table.databaseName != null) {
                 fail(ErrorCode.UNSUPPORTED_SQL, "Qualified * must use a table name or alias.")
             }
         }
@@ -169,6 +175,12 @@ internal class JSqlParserAstValidator(private val queryId: String, private val c
                 validateCondition(expression.rightExpression, joinCondition)
             is EqualsTo, is MinorThan, is MinorThanEquals, is GreaterThan, is GreaterThanEquals -> {
                 val comparison = expression
+                val oracle = comparison as SupportsOldOracleJoinSyntax
+                if (oracle.oldOracleJoinSyntax != SupportsOldOracleJoinSyntax.NO_ORACLE_JOIN ||
+                    oracle.oraclePriorPosition != SupportsOldOracleJoinSyntax.NO_ORACLE_PRIOR
+                ) {
+                    fail(ErrorCode.UNSUPPORTED_SQL, "Oracle comparison modifiers are not supported.")
+                }
                 if (joinCondition && comparison !is EqualsTo) {
                     fail(ErrorCode.UNSUPPORTED_SQL, "JOIN conditions support only column equality.")
                 }
@@ -213,21 +225,28 @@ internal class JSqlParserAstValidator(private val queryId: String, private val c
             is BooleanValue, is DateTimeLiteralExpression, is DateValue, is DoubleValue, is HexValue,
             is LongValue, is NullValue, is StringValue, is TimestampValue, is TimeValue,
             -> true
-            is SignedExpression -> expression.expression is LongValue || expression.expression is DoubleValue
+            is SignedExpression -> expression.sign in setOf('+', '-') &&
+                (expression.expression is LongValue || expression.expression is DoubleValue)
             is CastExpression -> isSupportedCast(expression)
             else -> false
         }
     }
 
-    private fun isSupportedCast(expression: CastExpression): Boolean =
-        (expression.keyword == null || expression.keyword.equals("CAST", ignoreCase = true)) &&
+    private fun isSupportedCast(expression: CastExpression): Boolean {
+        expression.colDataType?.let { it.dataType = restoreIdentifier(it.dataType) }
+        return (expression.keyword == null || expression.keyword.equals("CAST", ignoreCase = true)) &&
             expression.format == null && expression.columnDefinitions.isNullOrEmpty() &&
             isSupportedLiteral(expression.leftExpression)
+    }
 
     private fun validateColumn(column: Column) {
         context.checkDeadline()
         if (column.arrayConstructor != null) fail(ErrorCode.UNSUPPORTED_SQL, "Array expressions are not supported.")
+        if (column.oldOracleJoinSyntax != SupportsOldOracleJoinSyntax.NO_ORACLE_JOIN || column.tableDelimiter != ".") {
+            fail(ErrorCode.UNSUPPORTED_SQL, "Column modifiers and non-dot qualification are not supported.")
+        }
         val parts = identifierParts(column.astNode)
+        if (parts.size > 3) fail(ErrorCode.UNSUPPORTED_SQL, "Cross-database column references are not supported.")
         if (parts.isNotEmpty()) {
             column.setName(parts.last(), false)
             column.table = if (parts.size == 1) null else Table().apply {
@@ -240,7 +259,8 @@ internal class JSqlParserAstValidator(private val queryId: String, private val c
         context.checkDeadline()
         if (fromItem !is Table) fail(ErrorCode.UNSUPPORTED_SQL, "FROM and JOIN support only ordinary tables.")
         restoreTableName(fromItem)
-        if (fromItem.name.isNullOrBlank() || fromItem.catalogName != null || fromItem.databaseName != null ||
+        fromItem.alias?.let { it.name = restoreIdentifier(it.name) }
+        if (fromItem.nameParts.firstOrNull().isNullOrBlank() || fromItem.catalogName != null || fromItem.databaseName != null ||
             fromItem.isTableVariable || fromItem.pivot != null || fromItem.unPivot != null || fromItem.indexHint != null ||
             fromItem.sqlServerHints != null || fromItem.sampleClause != null || fromItem.timeTravel != null ||
             fromItem.timeTravelStrAfterAlias != null
@@ -255,17 +275,31 @@ internal class JSqlParserAstValidator(private val queryId: String, private val c
         if (parts.isNotEmpty()) table.nameParts = parts.asReversed()
     }
 
-    // JSqlParser 5.4 splits dots even inside quoted names. Restore the exact identifier tokens
-    // in our AST instead of rewriting SQL or changing the JVM-wide SPLIT_NAMES_ON_DELIMITER property.
     private fun identifierParts(node: Node?): List<String> {
         var token = node?.jjtGetFirstToken() ?: return emptyList()
         val parts = mutableListOf(token.image)
-        while (token !== node.jjtGetLastToken() && token.next?.image == ".") {
+        while (token !== node.jjtGetLastToken()) {
             context.checkDeadline()
-            val nextPart = token.next?.next ?: break
+            val separator = token.next ?: break
+            // Any non-dot separator (.., ..., :, @ or an unknown token) is rejected before
+            // this list is ever used to rewrite name parts in the AST.
+            // Known non-dot RelObjectNames separators are rejected before this list is used to
+            // rewrite name parts; any other non-dot token (e.g. AS after an aliased expression)
+            // simply ends the identifier, so the loop stops without truncating a supported name.
+            if (separator.image in setOf("..", "...", ":", "@")) {
+                fail(ErrorCode.UNSUPPORTED_SQL, "Only dot-separated PostgreSQL identifiers are supported.")
+            }
+            if (separator.image != ".") break
+            val nextPart = separator.next ?: break
             if (nextPart.image == "*") break
+            if (nextPart.image in setOf(".", "..", "...", ":", "@")) {
+                fail(ErrorCode.UNSUPPORTED_SQL, "Empty identifier parts are not supported.")
+            }
             parts += nextPart.image
             token = nextPart
+        }
+        if (parts.any { !it.startsWith('"') && '@' in it }) {
+            fail(ErrorCode.UNSUPPORTED_SQL, "Database links are not supported.")
         }
         return parts
     }
