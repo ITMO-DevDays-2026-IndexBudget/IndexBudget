@@ -2,14 +2,21 @@ package ru.itmo.indexbudget.domain
 
 data class TableRef(val schema: String, val name: String)
 
-/** The schema may be absent until PostgreSQL name resolution has been applied. */
+/** Physical identifier values: SQL quotes decoded, unquoted ASCII folded by the parser.
+ * Schema may be absent until PostgreSQL search_path resolution has been applied. */
 data class TableName(val name: String, val schema: String? = null)
 
 data class ColumnRef(val table: TableRef, val name: String)
 
 enum class TableKind { ORDINARY, VIEW, PARTITIONED, FOREIGN, OTHER }
 
-data class CatalogSnapshot(val tables: List<CatalogTable>)
+data class CatalogSnapshot(
+    val tables: List<CatalogTable>,
+    /** Effective PostgreSQL path, including implicit pg_catalog/temporary schemas. */
+    val searchPath: List<String> = emptyList(),
+    val unresolvedTables: List<TableName> = emptyList(),
+    val warnings: List<AnalysisWarning> = emptyList(),
+)
 
 /** All relevant columns remain available even when candidate generation later shortlists them. */
 data class CatalogTable(
@@ -27,6 +34,7 @@ data class CatalogColumn(
     val nullable: Boolean = true,
     val collation: String? = null,
     val defaultOperatorClass: String? = null,
+    val isBuiltinType: Boolean = true,
 )
 
 enum class SortDirection { ASC, DESC }

@@ -89,3 +89,80 @@ JSON использует `snake_case` и значения `robust`/`mean`. Kotl
 Все costs, планы, run ID, hash и версии окружения в этих фикстурах синтетические. Это заготовки для разработки и тестирования контрактов, не результаты HypoPG и не доказательство качества оптимизатора. Фикстуры отчёта ограничены одним выбранным индексом, чтобы сравнивать два одиночных набора; это не ограничение рабочего CLI. Числовые метрики заданы готовыми значениями: формулы и компаратор по-прежнему реализуются только в задаче #16.
 
 Тесты проверяют невозможность скрыть отсутствующий SQL, нечисловые costs и неверный baseline; сохранение результатов при partial; выбор incumbent по objective; отсутствие вымышленных write units; границы времени и точность счётчиков. Проверки алгоритма, генерации и реальной БД добавляются вместе с соответствующими реализациями.
+
+## JDBC-каталог (#7)
+
+`postgres.JdbcCatalogReader(connection).readCatalog(tables, context)` — реализация
+чтения каталога для делегирования из `AnalysisSession.readCatalog` в #13.
+Reader не открывает и не закрывает connection, не делает commit/rollback,
+не запускает ANALYZE/EXPLAIN и не меняет search_path. До #13 его можно вызывать
+с переданным JDBC connection. В CLI пока не подключён.
+
+`TableName` содержит идентификаторы после обработки SQL-парсером: unquoted имена
+уже приведены к нижнему регистру (ASCII A–Z), quoted имена декодированы: внешние
+кавычки сняты, удвоенные кавычки заменены одной. Это выполняет
+`JSqlParserSqlAnalyzer.parse` при создании TableName; AST сохраняет исходные
+токены. SQL resolver должен применять ту же `decodePostgresIdentifier` к токенам
+AST перед сравнением с именами доменной модели. Повторно декодировать TableName нельзя. Reader
+экранирует каждый компонент отдельно и передаёт имя параметром в `to_regclass`.
+`CatalogSnapshot.searchPath` — эффективный `current_schemas(true)` этой сессии
+(включая неявные схемы). Таблицы разрешаются PostgreSQL по этому пути; разные
+ссылки на одну таблицу дают одну запись. Не найденные имена сохраняются в
+`unresolvedTables`; SQL resolver добавляет query ID к ошибке UNKNOWN_TABLE.
+Relation без USAGE на схему или без SELECT хотя бы на одну колонку даёт
+CATALOG_ERROR. SELECT на всю таблицу не требуется; чтение метаданных всех
+колонок не означает право читать их значения. Доступ к конкретным колонкам
+используемого SQL проверяется PostgreSQL при планировании (EXPLAIN). Views/partitioned/foreign/other
+сохраняют kind: отклоняет их SQL resolver, а не повторный JDBC-запрос.
+
+Колонки идут в физическом порядке attnum, без dropped/system attributes и без
+лимита ширины. `isBuiltinType` означает принадлежность типа к pg_catalog;
+проверка конкретного поддержанного типа/оператора остаётся в SQL-модуле.
+`typeName` сохраняет PostgreSQL format_type, включая typmod. Неизвестная оценка
+числа строк (`reltuples < 0`) — null, а не ноль. Статистика считается доступной,
+если видна хотя бы одна запись pg_stats для relation; это не обещает наличие
+статистики каждой колонки или её актуальность. `warnings` содержит
+MISSING_STATISTICS для каждой relation без видимой статистики; pipeline должен
+перенести эти warnings в общий отчёт.
+
+Collation/opclass возвращаются как schema-qualified SQL identifiers с quoting.
+Default B-tree opclass выбирается сначала по точному типу (в том числе oidvector),
+затем среди binary-compatible implicit casts из pg_cast и стандартных
+полиморфных совместимостей. При нескольких совместимых типах выбирается
+единственный preferred type той же категории; без него — единственный
+совместимый вариант. Это сохраняет, например, cidr → inet_ops и varchar →
+text_ops. Неоднозначность/отсутствие default даёт null. Для неподдержанных
+domain-типов default не подбирается. Алгоритм сверяется с PostgreSQL 16
+[GetDefaultOpClass](https://github.com/postgres/postgres/blob/REL_16_STABLE/src/backend/commands/indexcmds.c)
+и [IsBinaryCoercible](https://github.com/postgres/postgres/blob/REL_16_STABLE/src/backend/parser/parse_coerce.c).
+
+Индексы сохраняются независимо от метода, predicate, expressions, INCLUDE и
+валидности. Физические ключи упорядочены; expression-позиции записываются в
+`expressions`, но не превращаются в выдуманные ColumnRef. Такой индекс никогда
+не считается точным дублем обычного кандидата. Направления/NULLS имеют смысл
+для B-tree. `accessible` консервативно false для indislive=false/indcheckxmin=true;
+допустимость дубля также требует valid и ready. Индексы не изменяются.
+
+Общий RunContext проверяется до/после подготовки statement, непосредственно
+перед executeQuery, на каждой строке и после чтения. Нулевой остаток не
+превращается в положительный timeout. Каталожные функции, включая unnest,
+квалифицированы pg_catalog и не зависят от функций в workload search_path.
+JDBC queryTimeout ограничен остатком бюджета, округлённым вверх до секунды
+(гранулярность JDBC); это не жёсткая миллисекундная гарантия завершения сетевого
+вызова. Механизм отмены/сетевых таймаутов сессии относится к #15. SQLException
+преобразуется в CATALOG_ERROR без исходного message/cause, с безопасным SQLSTATE.
+
+Проверки `JdbcCatalogReaderIntegrationTest` запускаются только при заданном
+`INDEXBUDGET_CATALOG_TEST_URL`, на **одноразовой PostgreSQL 16 БД**. Они создают
+и удаляют собственную схему/роль, выполняют seed/ANALYZE и намеренно неудачную
+CREATE UNIQUE INDEX CONCURRENTLY. Не направлять тесты на общий стенд.
+CI job `postgres-catalog-integration` создаёт отдельную БД без секретов стенда.
+Обычный `./gradlew test` без этой переменной пропускает integration-класс;
+это не подтверждение работы с реальной PostgreSQL.
+
+Локальная проверка с Docker: `bash demo/check-catalog.sh`. Скрипт создаёт свой
+временный контейнер PostgreSQL 16 на случайном loopback-порту, ждёт готовности,
+запускает unit/integration-тесты каталога через Gradle и удаляет только этот
+контейнер. Собственные настройки подключения он задаёт сам; `.env` и пароли
+общей/demo-БД не читает. Требуются Docker и JDK 25; зависимости/образ должны
+быть доступны для скачивания или уже находиться в кэше.
