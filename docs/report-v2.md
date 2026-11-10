@@ -113,6 +113,12 @@ DDL формирует общий `PostgresDdlRenderer` из разрешённ�
 `max_explain_attempts`, `max_repair_attempts`.
 
 Решение о кандидате имеет `reason`, `candidate_id`, `query_id`, `table`, `phase`, `details`.
+Отказ всему набору может иметь `candidate_id: null` и список отсортированных IDs через запятую
+в `details.candidate_ids`. `MAX_INDEXES` означает нарушение числа индексов, `EVALUATION_FAILED` —
+ошибку полной оценки этого набора. `NO_MARGINAL_IMPROVEMENT` относится к конкретному greedy-шагу;
+`NOT_SELECTED` и `NOT_EVALUATED_DUE_TO_LIMIT` различают проверенные и не проверенные из-за лимитов
+варианты. `unexamined_configurations` при остановке на repair cap считает допустимых ещё
+не проверенных соседей fixed S0; при исчерпании соседства равно 0, при прерывании до подсчёта — `null`.
 Предупреждение/ошибка имеют `code`, `message`, `query_id`, `profile_id`, `details`.
 Неизвестные optional ID/таблица/фаза — `null`, пустые details — `{}`. Содержимое диагностики уже
 обезличено у источника: контракты запрещают DSN, пароли и сырые тексты исключений драйвера.

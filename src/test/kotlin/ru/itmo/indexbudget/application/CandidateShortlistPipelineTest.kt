@@ -23,7 +23,7 @@ class CandidateShortlistPipelineTest {
             assertInstanceOf(JdbcAnalysisSessionFactory::class.java, context.getBean(AnalysisSessionFactory::class.java))
             assertInstanceOf(MetricsCalculatorImpl::class.java, context.getBean(MetricsCalculator::class.java))
             assertInstanceOf(ObjectiveComparatorImpl::class.java, context.getBean(ObjectiveComparator::class.java))
-            assertInstanceOf(GreedyOptimizer::class.java, context.getBean(Optimizer::class.java))
+            assertInstanceOf(LimitedRepairOptimizer::class.java, context.getBean(Optimizer::class.java))
             assertInstanceOf(UnavailableAnalysisRunner::class.java, context.getBean(AnalysisRunner::class.java))
         }
     }
