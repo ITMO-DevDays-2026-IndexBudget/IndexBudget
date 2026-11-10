@@ -2,25 +2,31 @@ name: Demo DB
 
 on:
   pull_request:
-    paths:
-      - 'compose.yaml'
-      - 'demo/**'
-      - 'deploy/db/**'
-      - '.github/workflows/demo-db.yml'
+    branches: [main]
   push:
     branches: [main]
-    paths:
-      - 'compose.yaml'
-      - 'demo/**'
-      - 'deploy/db/**'
-      - '.github/workflows/demo-db.yml'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      database: ${{ steps.detect.outputs.database }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - id: detect
+        name: Detect database changes
+        run: python3 deploy/db/ci_checks.py changes
+
   demo-db:
+    needs: changes
+    if: needs.changes.outputs.database == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -66,3 +72,16 @@ jobs:
             docker rm -f "$container"
           done
           docker volume rm indexbudget-stand-pg16-data || true
+
+  database-checks:
+    name: database-checks
+    if: always()
+    needs: [changes, demo-db, stand-persistence]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Require all applicable database checks to succeed
+        env:
+          CHECK_RESULTS: ${{ toJSON(needs) }}
+        run: python3 deploy/db/ci_checks.py gate
