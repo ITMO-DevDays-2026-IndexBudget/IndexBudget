@@ -17,6 +17,26 @@ class ProfileWeightsTest {
         assertEquals(listOf(9.0, 1.0), profiles.map { it.weight })
     }
 
+    @Test
+    fun `three relative weights normalize to probabilities that sum to one`() {
+        val normalized = ProfileWeights.normalize(listOf(profile("a", 1.0), profile("b", 2.0), profile("c", 3.0)))
+
+        assertEquals(mapOf("a" to 1.0 / 6.0, "b" to 1.0 / 3.0, "c" to 0.5), normalized)
+        assertEquals(1.0, normalized.values.sum(), 1e-15)
+    }
+
+    @Test
+    fun `empty profile list violates the input contract`() {
+        assertThrows(IllegalArgumentException::class.java) { ProfileWeights.normalize(emptyList()) }
+    }
+
+    @Test
+    fun `duplicate profile IDs violate the input contract`() {
+        assertThrows(IllegalArgumentException::class.java) {
+            ProfileWeights.normalize(listOf(profile("same", 1.0), profile("same", 2.0)))
+        }
+    }
+
     @ParameterizedTest(name = "profile order [{0}, {1}, {2}]")
     @CsvSource("0,1,2", "0,2,1", "1,0,2", "1,2,0", "2,0,1", "2,1,0")
     fun `normalization is independent of input order for nonassociative sums`(first: Int, second: Int, third: Int) {

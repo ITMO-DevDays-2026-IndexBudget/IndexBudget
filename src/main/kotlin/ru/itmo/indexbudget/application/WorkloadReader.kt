@@ -9,6 +9,7 @@ import ru.itmo.indexbudget.domain.Objective
 import ru.itmo.indexbudget.domain.Profile
 import ru.itmo.indexbudget.domain.ProfileWeights
 import ru.itmo.indexbudget.domain.QueryInput
+import ru.itmo.indexbudget.domain.RunContext
 import ru.itmo.indexbudget.domain.TableWriteRates
 import ru.itmo.indexbudget.domain.WorkloadInput
 import tools.jackson.core.JacksonException
@@ -21,6 +22,8 @@ import java.nio.charset.CharacterCodingException
 import java.nio.charset.CodingErrorAction
 import java.nio.file.Files
 import java.nio.file.Path
+import java.security.MessageDigest
+import java.util.HexFormat
 
 /** Проверяет вход до SQL-парсера и БД. Полнота таблиц write profile проверяется после resolution. */
 @Component
@@ -32,8 +35,9 @@ class WorkloadReader {
         .enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS)
         .build()
 
-    fun read(path: Path): WorkloadInput {
-        val root = readJsonObject(path)
+    fun read(path: Path, context: RunContext? = null): WorkloadInput {
+        context?.checkDeadline()
+        val root = readJsonObject(path, context)
         val version = root.get("schema_version")
         if (version == null || !version.isIntegralNumber || !version.canConvertToInt() || version.intValue() != 2) {
             invalid(Location("schema_version"),
@@ -52,19 +56,63 @@ class WorkloadReader {
             }
         }
         val constraints = constraints(root.get("constraints"))
+        context?.checkDeadline()
         val queries = queries(root.get("queries"))
+        context?.checkDeadline()
         val profiles = profiles(root.get("profiles"), queries)
+        context?.checkDeadline()
         ProfileWeights.normalize(profiles)
+        context?.checkDeadline()
         val writeRates = writeRates(root.get("table_write_rates"))
         if (constraints.writeBudgetUnitsPerHour != null && writeRates == null) {
             invalid(Location("table_write_rates"), "An enabled write budget requires a complete write profile.",
                 ErrorCode.INVALID_WRITE_PROFILE)
         }
+        context?.checkDeadline()
+        if (context != null) {
+            val canonical = StringBuilder()
+            appendCanonical(root, canonical, context)
+            context.checkDeadline()
+            val digest = MessageDigest.getInstance("SHA-256").digest(canonical.toString().toByteArray(Charsets.UTF_8))
+            context.checkDeadline()
+            context.recordInputHash(HexFormat.of().formatHex(digest))
+        }
         return WorkloadInput(queries, profiles, constraints, objective = objective, tableWriteRates = writeRates)
     }
 
-    private fun readJsonObject(path: Path): JsonNode {
+    /** Sort JSON objects only: array order, string values and absent fields retain their meaning. */
+    private fun appendCanonical(node: JsonNode, target: StringBuilder, context: RunContext) {
+        context.checkDeadline()
+        when {
+            node.isObject -> {
+                val properties = node.properties().sortedBy { it.key }
+                context.checkDeadline()
+                target.append('{')
+                for ((index, entry) in properties.withIndex()) {
+                    context.checkDeadline()
+                    if (index > 0) target.append(',')
+                    target.append(mapper.writeValueAsString(entry.key)).append(':')
+                    appendCanonical(entry.value, target, context)
+                }
+                target.append('}')
+            }
+            node.isArray -> {
+                target.append('[')
+                for ((index, value) in node.withIndex()) {
+                    context.checkDeadline()
+                    if (index > 0) target.append(',')
+                    appendCanonical(value, target, context)
+                }
+                target.append(']')
+            }
+            else -> target.append(mapper.writeValueAsString(node))
+        }
+        context.checkDeadline()
+    }
+
+    private fun readJsonObject(path: Path, context: RunContext?): JsonNode {
         val bytes = Files.newInputStream(path).use { it.readNBytes(MAX_INPUT_BYTES + 1) }
+        context?.checkDeadline()
         if (bytes.size > MAX_INPUT_BYTES) {
             invalid(Location("workload"), "Workload JSON must not exceed 1 MiB UTF-8.", ErrorCode.INPUT_LIMIT_EXCEEDED)
         }
@@ -76,12 +124,14 @@ class WorkloadReader {
         } catch (_: CharacterCodingException) {
             invalid(Location("workload"), "Workload JSON must be valid UTF-8.")
         }
+        context?.checkDeadline()
         val tree = try {
             mapper.readTree(json)
         } catch (_: JacksonException) {
             // Сообщения парсера могут содержать SQL, пароли или другие фрагменты входа.
             invalid(Location("workload"), "Invalid JSON, duplicate object keys or trailing content.")
         }
+        context?.checkDeadline()
         if (tree == null || !tree.isObject) invalid(Location("workload"), "Expected an object.")
         return tree
     }

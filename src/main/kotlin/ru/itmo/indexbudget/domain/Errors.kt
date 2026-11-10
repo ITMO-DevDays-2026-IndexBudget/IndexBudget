@@ -18,6 +18,7 @@ enum class ErrorCode(val defaultExitCode: Int = 1) {
     HYPOTHETICAL_INDEX_ERROR,
     EXPLAIN_FAILED,
     DEADLINE_EXCEEDED,
+    CANCELLED,
     EXPLAIN_LIMIT,
     REPAIR_LIMIT,
     EXPORT_FAILED,

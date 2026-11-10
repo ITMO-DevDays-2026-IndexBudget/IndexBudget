@@ -11,6 +11,9 @@ import org.junit.jupiter.api.condition.OS
 import org.junit.jupiter.api.io.TempDir
 import org.opentest4j.TestAbortedException
 import ru.itmo.indexbudget.application.WorkloadReader
+import ru.itmo.indexbudget.application.AnalysisRunner
+import ru.itmo.indexbudget.domain.*
+import ru.itmo.indexbudget.fixtures.ContractFixtures
 import tools.jackson.databind.json.JsonMapper
 import java.io.IOException
 import java.io.PrintWriter
@@ -30,7 +33,7 @@ class IndexBudgetCliTest {
         val result = invoke("--help")
         assertEquals(0, result.code)
         assertTrue(result.stdout.contains("indexbudget analyze"))
-        assertEquals("", result.stderr)
+        assertEquals("", result.diagnosticStderr)
     }
 
     @Test
@@ -38,7 +41,7 @@ class IndexBudgetCliTest {
         val output = directory.resolve("report")
         val result = analyze(output)
         assertEquals(1, result.code)
-        assertTrue(result.stderr.startsWith("NOT_IMPLEMENTED:"))
+        assertTrue(result.diagnosticStderr.startsWith("NOT_IMPLEMENTED:"))
         assertFalse(Files.exists(output))
         assertEquals("", result.stdout)
     }
@@ -54,9 +57,9 @@ class IndexBudgetCliTest {
         """.trimIndent())
         val result = analyze(directory.resolve("report"), input)
         assertEquals(2, result.code)
-        assertTrue(result.stderr.startsWith("INVALID_INPUT:"))
-        assertFalse(result.stderr.contains("private-sql-and-password"))
-        val diagnostic = JsonMapper.builder().build().readTree(result.stderr.substringAfter(": "))
+        assertTrue(result.diagnosticStderr.startsWith("INVALID_INPUT:"))
+        assertFalse(result.diagnosticStderr.contains("private-sql-and-password"))
+        val diagnostic = JsonMapper.builder().build().readTree(result.diagnosticStderr.substringAfter(": "))
         assertEquals("INVALID_INPUT", diagnostic.get("code").stringValue())
         assertEquals("queries", diagnostic.get("details").get("field").stringValue())
     }
@@ -67,9 +70,9 @@ class IndexBudgetCliTest {
         Files.writeString(input, """{"schema_version":1}""")
         val result = analyze(directory.resolve("report"), input)
         assertEquals(2, result.code)
-        assertTrue(result.stderr.startsWith("UNSUPPORTED_SCHEMA_VERSION:"))
-        assertTrue(result.stderr.contains("queries"))
-        assertTrue(result.stderr.contains("profiles"))
+        assertTrue(result.diagnosticStderr.startsWith("UNSUPPORTED_SCHEMA_VERSION:"))
+        assertTrue(result.diagnosticStderr.contains("queries"))
+        assertTrue(result.diagnosticStderr.contains("profiles"))
     }
 
     @Test
@@ -80,8 +83,8 @@ class IndexBudgetCliTest {
         val result = analyze(output)
 
         assertEquals(2, result.code)
-        assertTrue(result.stderr.startsWith("OUTPUT_DIRECTORY_NOT_EMPTY:"))
-        assertTrue(result.stderr.contains("output_dir"))
+        assertTrue(result.diagnosticStderr.startsWith("OUTPUT_DIRECTORY_NOT_EMPTY:"))
+        assertTrue(result.diagnosticStderr.contains("output_dir"))
         assertEquals("previous SQL", Files.readString(artifact))
         Files.list(output).use { assertEquals(listOf(artifact), it.toList()) }
     }
@@ -94,7 +97,7 @@ class IndexBudgetCliTest {
         for (output in listOf(empty, nested)) {
             val result = analyze(output)
             assertEquals(1, result.code)
-            assertTrue(result.stderr.startsWith("NOT_IMPLEMENTED:"))
+            assertTrue(result.diagnosticStderr.startsWith("NOT_IMPLEMENTED:"))
         }
         Files.list(empty).use { assertEquals(0L, it.count()) }
         assertFalse(Files.exists(nested.parent))
@@ -107,8 +110,8 @@ class IndexBudgetCliTest {
         for (output in listOf(file, file.resolve("run"))) {
             val result = analyze(output)
             assertEquals(2, result.code)
-            assertTrue(result.stderr.startsWith("INVALID_INPUT:"))
-            assertTrue(result.stderr.contains("output_dir"))
+            assertTrue(result.diagnosticStderr.startsWith("INVALID_INPUT:"))
+            assertTrue(result.diagnosticStderr.contains("output_dir"))
         }
         assertEquals("retain me", Files.readString(file))
     }
@@ -121,7 +124,7 @@ class IndexBudgetCliTest {
         val result = analyze(link)
 
         assertEquals(2, result.code)
-        assertTrue(result.stderr.startsWith("INVALID_INPUT:"))
+        assertTrue(result.diagnosticStderr.startsWith("INVALID_INPUT:"))
         assertTrue(Files.isSymbolicLink(link))
         assertFalse(Files.exists(target))
     }
@@ -136,7 +139,7 @@ class IndexBudgetCliTest {
         val result = analyze(output)
 
         assertEquals(2, result.code)
-        assertTrue(result.stderr.startsWith("INVALID_INPUT:"))
+        assertTrue(result.diagnosticStderr.startsWith("INVALID_INPUT:"))
         assertFalse(Files.exists(missing))
         assertEquals("previous report", Files.readString(artifact))
     }
@@ -154,7 +157,7 @@ class IndexBudgetCliTest {
         val result = analyze(link.resolve("../occupied"))
 
         assertEquals(2, result.code)
-        assertTrue(result.stderr.startsWith("OUTPUT_DIRECTORY_NOT_EMPTY:"))
+        assertTrue(result.diagnosticStderr.startsWith("OUTPUT_DIRECTORY_NOT_EMPTY:"))
         assertEquals("previous report", Files.readString(artifact))
     }
 
@@ -166,8 +169,8 @@ class IndexBudgetCliTest {
             val result = analyze(output)
 
             assertEquals(1, result.code)
-            assertTrue(result.stderr.startsWith("EXPORT_FAILED:"))
-            val diagnostic = JsonMapper.builder().build().readTree(result.stderr.substringAfter(": "))
+            assertTrue(result.diagnosticStderr.startsWith("EXPORT_FAILED:"))
+            val diagnostic = JsonMapper.builder().build().readTree(result.diagnosticStderr.substringAfter(": "))
             assertEquals("EXPORT_FAILED", diagnostic.get("code").stringValue())
             assertEquals("output_dir", diagnostic.get("details").get("field").stringValue())
             Files.list(output).use { assertEquals(0L, it.count()) }
@@ -183,8 +186,8 @@ class IndexBudgetCliTest {
             val result = analyze(output)
 
             assertEquals(1, result.code)
-            assertTrue(result.stderr.startsWith("EXPORT_FAILED:"))
-            val diagnostic = JsonMapper.builder().build().readTree(result.stderr.substringAfter(": "))
+            assertTrue(result.diagnosticStderr.startsWith("EXPORT_FAILED:"))
+            val diagnostic = JsonMapper.builder().build().readTree(result.diagnosticStderr.substringAfter(": "))
             assertEquals("EXPORT_FAILED", diagnostic.get("code").stringValue())
             assertEquals("output_dir", diagnostic.get("details").get("field").stringValue())
             assertFalse(Files.exists(output))
@@ -205,11 +208,11 @@ class IndexBudgetCliTest {
         val result = analyze(directory.resolve("run"), input)
 
         assertEquals(2, result.code)
-        assertTrue(result.stderr.startsWith("INVALID_INPUT:"))
-        assertEquals(1, result.stderr.lineSequence().count { it.isNotEmpty() })
-        assertFalse(result.stderr.contains('\u001b'))
-        assertFalse(result.stderr.contains("secret_literal"))
-        val diagnostic = JsonMapper.builder().build().readTree(result.stderr.substringAfter(": "))
+        assertTrue(result.diagnosticStderr.startsWith("INVALID_INPUT:"))
+        assertEquals(1, result.diagnosticStderr.lineSequence().count { it.isNotEmpty() })
+        assertFalse(result.diagnosticStderr.contains('\u001b'))
+        assertFalse(result.diagnosticStderr.contains("secret_literal"))
+        val diagnostic = JsonMapper.builder().build().readTree(result.diagnosticStderr.substringAfter(": "))
         assertEquals("INVALID_INPUT", diagnostic.get("code").stringValue())
         assertEquals("q\n\u001b[31m", diagnostic.get("query_id").stringValue())
         assertEquals("night\nmode", diagnostic.get("profile_id").stringValue())
@@ -230,12 +233,12 @@ class IndexBudgetCliTest {
         val result = analyze(directory.resolve("run"), input)
 
         assertEquals(2, result.code)
-        assertTrue(result.stderr.startsWith("INVALID_INPUT:"))
-        assertEquals(1, result.stderr.lineSequence().count { it.isNotEmpty() })
-        assertFalse(result.stderr.contains('\u001b'))
-        assertFalse(result.stderr.contains("private-frequency-and-password"))
-        assertFalse(result.stderr.contains("private-sql-literal"))
-        val diagnostic = JsonMapper.builder().build().readTree(result.stderr.substringAfter(": "))
+        assertTrue(result.diagnosticStderr.startsWith("INVALID_INPUT:"))
+        assertEquals(1, result.diagnosticStderr.lineSequence().count { it.isNotEmpty() })
+        assertFalse(result.diagnosticStderr.contains('\u001b'))
+        assertFalse(result.diagnosticStderr.contains("private-frequency-and-password"))
+        assertFalse(result.diagnosticStderr.contains("private-sql-literal"))
+        val diagnostic = JsonMapper.builder().build().readTree(result.diagnosticStderr.substringAfter(": "))
         assertEquals("INVALID_INPUT", diagnostic.get("code").stringValue())
         assertEquals("unknown\n\"quoted\"\u001b[31m", diagnostic.get("query_id").stringValue())
         assertEquals("night", diagnostic.get("profile_id").stringValue())
@@ -250,7 +253,7 @@ class IndexBudgetCliTest {
 
         for (result in listOf(invalidArguments, invalidPath)) {
             assertEquals(2, result.code)
-            assertFalse(result.stderr.contains("private-password"))
+            assertFalse(result.diagnosticStderr.contains("private-password"))
         }
     }
 
@@ -258,18 +261,146 @@ class IndexBudgetCliTest {
     fun `missing arguments are usage errors`() {
         val result = invoke("analyze", "--workload", "examples/workload-v2.json")
         assertEquals(2, result.code)
-        assertTrue(result.stderr.startsWith("INVALID_INPUT:"))
+        assertTrue(result.diagnosticStderr.startsWith("INVALID_INPUT:"))
     }
 
     @Test
     fun `blank paths are usage errors`() {
         val result = invoke("analyze", "--workload", "examples/workload-v2.json", "--output-dir", "")
         assertEquals(2, result.code)
-        assertTrue(result.stderr.startsWith("INVALID_INPUT:"))
+        assertTrue(result.diagnosticStderr.startsWith("INVALID_INPUT:"))
     }
 
-    private fun analyze(output: Path, workload: Path = Path.of("examples/workload-v2.json")): Result =
-        invoke("analyze", "--workload", workload.toString(), "--output-dir", output.toString())
+    @Test
+    fun `runner receives validated input and shared context with real progress counters`() {
+        val runner = AnalysisRunner { input, output, context ->
+            assertEquals(2, input.schemaVersion)
+            assertEquals(directory.resolve("run"), output)
+            assertEquals(listOf(AnalysisPhase.VALIDATION), context.completedPhases())
+            context.enterPhase(AnalysisPhase.BASELINE)
+            context.reserveEvaluationAttempt()
+            context.reserveExplainAttempt()
+            context.reserveExplainAttempt()
+            context.recordCompletedEvaluation()
+            context.recordCacheHit()
+            ContractFixtures.completedResult()
+        }
+        val result = analyze(directory.resolve("run"), cli = IndexBudgetCli(WorkloadReader(), analysisRunner = runner))
+        assertEquals(0, result.code)
+        assertEquals("", result.diagnosticStderr)
+        assertTrue(result.progress.first().startsWith("stage=validation "))
+        assertEquals("stage=baseline explain_attempts=2 completed_sets=1 cache_hits=1", result.progress.last())
+        assertFalse(result.progress.any { '%' in it })
+    }
+
+    @Test
+    fun `saved partial returns 3 and typed failures retain their exit codes`() {
+        val results = listOf(
+            ContractFixtures.partialResult() to 3,
+            SearchResult.Failed(Objective.ROBUST, AnalysisError(ErrorCode.INVALID_WRITE_PROFILE, "Invalid profile.")) to 2,
+            SearchResult.Failed(Objective.ROBUST, AnalysisError(ErrorCode.NUMERIC_ERROR, "Invalid metrics.")) to 1,
+        )
+        for ((searchResult, expectedCode) in results) {
+            val runner = AnalysisRunner { _, _, _ -> searchResult }
+            val result = analyze(directory.resolve("run"), cli = IndexBudgetCli(WorkloadReader(), analysisRunner = runner))
+            assertEquals(expectedCode, result.code)
+            if (searchResult is SearchResult.Failed) {
+                assertEquals(1, result.diagnosticStderr.lineSequence().count { it.isNotEmpty() })
+                assertTrue(result.diagnosticStderr.startsWith("${searchResult.error.code.name}: "))
+            }
+        }
+    }
+
+    @Test
+    fun `partial prints every saved diagnostic with escaped fields and keeps exit code 3`() {
+        val queryId = "q\n\u001b[31m"
+        val profileId = "night\t\"mode\""
+        val message = "EXPLAIN failed.\nSaved result remains available."
+        val detail = "cancelled\nretry\tlater\u0000"
+        val errors = listOf(
+            AnalysisError(
+                ErrorCode.EXPLAIN_FAILED,
+                message,
+                queryId = queryId,
+                profileId = profileId,
+                details = mapOf("phase" to "repair", "reason" to detail),
+            ),
+            AnalysisError(ErrorCode.DB_CONNECTION_ERROR, "Analysis session cleanup failed."),
+        )
+        val partial = ContractFixtures.partialResult().let { it.copy(diagnostics = it.diagnostics.copy(errors = errors)) }
+        val runner = AnalysisRunner { _, _, _ -> partial }
+
+        val result = analyze(directory.resolve("run"), cli = IndexBudgetCli(WorkloadReader(), analysisRunner = runner))
+
+        assertEquals(3, result.code)
+        assertEquals("", result.stdout)
+        val lines = result.diagnosticStderr.lineSequence().filter { it.isNotEmpty() }.toList()
+        assertEquals(2, lines.size)
+        assertFalse(result.diagnosticStderr.any { it < ' ' && it != '\n' })
+        assertTrue(lines[0].startsWith("EXPLAIN_FAILED: "))
+        assertTrue(lines[1].startsWith("DB_CONNECTION_ERROR: "))
+        val mapper = JsonMapper.builder().build()
+        val explain = mapper.readTree(lines[0].substringAfter(": "))
+        assertEquals("EXPLAIN_FAILED", explain.get("code").stringValue())
+        assertEquals(message, explain.get("message").stringValue())
+        assertEquals(queryId, explain.get("query_id").stringValue())
+        assertEquals(profileId, explain.get("profile_id").stringValue())
+        assertEquals("repair", explain.get("details").get("phase").stringValue())
+        assertEquals(detail, explain.get("details").get("reason").stringValue())
+        val cleanup = mapper.readTree(lines[1].substringAfter(": "))
+        assertEquals("DB_CONNECTION_ERROR", cleanup.get("code").stringValue())
+        assertEquals("Analysis session cleanup failed.", cleanup.get("message").stringValue())
+        assertFalse(cleanup.has("query_id"))
+        assertFalse(cleanup.has("profile_id"))
+        assertFalse(cleanup.has("details"))
+    }
+
+    @Test
+    fun `partial without saved errors keeps exit code 3 without inventing a diagnostic`() {
+        val partial = ContractFixtures.partialResult().let {
+            it.copy(diagnostics = it.diagnostics.copy(errors = emptyList()))
+        }
+        val runner = AnalysisRunner { _, _, _ -> partial }
+
+        val result = analyze(directory.resolve("run"), cli = IndexBudgetCli(WorkloadReader(), analysisRunner = runner))
+
+        assertEquals(3, result.code)
+        assertEquals("", result.diagnosticStderr)
+    }
+
+    @Test
+    fun `export and unexpected failures cannot return partial or expose secrets`() {
+        for (failure in listOf(
+            AnalysisException(AnalysisError(ErrorCode.EXPORT_FAILED, "Cannot publish analysis artifacts.")),
+            IllegalStateException("postgresql://user:private-password@localhost/db"),
+        )) {
+            val runner = AnalysisRunner { _, _, _ -> throw failure }
+            val result = analyze(directory.resolve("run"), cli = IndexBudgetCli(WorkloadReader(), analysisRunner = runner))
+            assertEquals(1, result.code)
+            assertFalse(result.diagnosticStderr.contains("private-password"))
+        }
+    }
+
+    @Test
+    fun `command budget is not restarted after startup or validation`() {
+        var nanos = 0L
+        val context = RunContext(clock = NanoClock { nanos })
+        nanos = java.time.Duration.ofSeconds(90).toNanos()
+        val runner = AnalysisRunner { _, _, _ -> error("Expired command must not run") }
+        val stderr = StringWriter()
+        val code = IndexBudgetCli(WorkloadReader(), analysisRunner = runner).execute(
+            arrayOf("analyze", "--workload", "examples/workload-v2.json", "--output-dir", directory.resolve("run").toString()),
+            err = PrintWriter(stderr, true), context = context,
+        )
+        assertEquals(1, code)
+        assertTrue(stderr.toString().contains("DEADLINE_EXCEEDED:"))
+    }
+
+    private fun analyze(
+        output: Path,
+        workload: Path = Path.of("examples/workload-v2.json"),
+        cli: IndexBudgetCli = this.cli,
+    ): Result = invokeWith(cli, "analyze", "--workload", workload.toString(), "--output-dir", output.toString())
 
     private fun createSymbolicLinkOrSkip(link: Path, target: Path): Path = try {
         Files.createSymbolicLink(link, target)
@@ -298,12 +429,26 @@ class IndexBudgetCliTest {
         }
     }
 
-    private fun invoke(vararg args: String): Result {
+    private fun invoke(vararg args: String): Result = invokeWith(cli, *args)
+
+    private fun invokeWith(cli: IndexBudgetCli, vararg args: String): Result {
         val stdout = StringWriter()
         val stderr = StringWriter()
         val code = cli.execute(arrayOf(*args), PrintWriter(stdout, true), PrintWriter(stderr, true))
-        return Result(code, stdout.toString(), stderr.toString())
+        val lines = stderr.toString().lineSequence().filter { it.isNotEmpty() }.toList()
+        val (progress, diagnostics) = lines.partition { it.startsWith("stage=") }
+        return Result(
+            code = code,
+            stdout = stdout.toString(),
+            diagnosticStderr = diagnostics.joinToString("\n", postfix = if (diagnostics.isEmpty()) "" else "\n"),
+            progress = progress,
+        )
     }
 
-    private data class Result(val code: Int, val stdout: String, val stderr: String)
+    private data class Result(
+        val code: Int,
+        val stdout: String,
+        val diagnosticStderr: String,
+        val progress: List<String>,
+    )
 }
