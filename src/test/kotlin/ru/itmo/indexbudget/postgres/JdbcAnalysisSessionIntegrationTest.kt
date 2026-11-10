@@ -1,0 +1,349 @@
+package ru.itmo.indexbudget.postgres
+
+import java.lang.reflect.InvocationTargetException
+import java.lang.reflect.Proxy
+import java.sql.Connection
+import java.sql.DriverManager
+import java.sql.PreparedStatement
+import java.sql.Statement
+import java.time.Duration
+import java.util.UUID
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.TimeUnit
+import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.Assertions.*
+import org.junit.jupiter.api.BeforeEach
+import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable
+import ru.itmo.indexbudget.candidates.BtreeCandidateCanonicalizer
+import ru.itmo.indexbudget.candidates.CandidateScope
+import ru.itmo.indexbudget.candidates.CandidateVariant
+import ru.itmo.indexbudget.domain.*
+import ru.itmo.indexbudget.sql.JSqlParserSqlAnalyzer
+import tools.jackson.databind.json.JsonMapper
+
+/** Explicit opt-in to a disposable PostgreSQL 16 + HypoPG database, never the shared stand. */
+@EnabledIfEnvironmentVariable(named = "INDEXBUDGET_HYPOPG_TEST_URL", matches = ".+")
+class JdbcAnalysisSessionIntegrationTest {
+    private lateinit var admin: Connection
+    private lateinit var connection: Connection
+    private lateinit var session: JdbcAnalysisSession
+    private lateinit var schema: String
+    private lateinit var role: String
+    private lateinit var workload: ResolvedWorkload
+    private lateinit var candidates: List<IndexCandidate>
+    private val mapper = JsonMapper.builder().build()
+
+    @BeforeEach
+    fun setup() {
+        admin = connect()
+        sql(admin, "CREATE EXTENSION IF NOT EXISTS hypopg WITH SCHEMA public")
+        schema = "hypopg_" + UUID.randomUUID().toString().replace("-", "")
+        role = schema + "_reader"
+        sql(admin, "CREATE SCHEMA $schema")
+        sql(admin, "CREATE ROLE $role")
+        sql(admin, "CREATE TABLE $schema.records (id integer PRIMARY KEY, a integer, b integer, payload text)")
+        sql(admin, "INSERT INTO $schema.records SELECT i, i, 50001 - i, repeat('x', 80) FROM generate_series(1, 50000) i")
+        sql(admin, "ANALYZE $schema.records") // Explicit physical fixture preparation, outside the adapter.
+        sql(admin, "GRANT USAGE ON SCHEMA $schema TO $role")
+        sql(admin, "GRANT SELECT ON ALL TABLES IN SCHEMA $schema TO $role")
+        connection = connect()
+        sql(connection, "SET search_path TO $schema, pg_catalog") // HypoPG's schema is deliberately absent.
+        sql(connection, "SET ROLE $role")
+        session = JdbcAnalysisSession(connection)
+        val input = input()
+        val context = RunContext()
+        val analyzer = JSqlParserSqlAnalyzer()
+        val parsed = analyzer.parse(input, context)
+        val catalog = session.readCatalog(parsed.referencedTables, context)
+        workload = analyzer.resolve(parsed, catalog, context)
+        candidates = listOf("a", "b").map { column ->
+            val table = TableRef(schema, "records")
+            val definition = IndexDefinition(table, listOf(IndexKey(ColumnRef(table, column))))
+            BtreeCandidateCanonicalizer(catalog, context).canonicalize(CandidateScope(
+                "q_a", table, 1, listOf(ColumnRef(table, column)), emptyList(),
+                listOf(CandidateVariant(definition, setOf("q_a"), setOf(GenerationReason.SINGLE_COLUMN))),
+                emptyList(), emptyList(),
+            )).candidates.single()
+        }
+    }
+
+    @AfterEach
+    fun cleanup() {
+        if (::session.isInitialized) session.close()
+        if (::connection.isInitialized && !connection.isClosed) connection.close()
+        if (::admin.isInitialized) admin.use {
+            if (::schema.isInitialized) sql(it, "DROP SCHEMA IF EXISTS $schema CASCADE")
+            if (::role.isInitialized) sql(it, "DROP ROLE IF EXISTS $role")
+        }
+    }
+
+    @Test
+    fun `exact sets shared query vector real baseline indexes and settings use one backend`() {
+        val pid = scalar(connection, "SELECT pg_backend_pid()")
+        val settings = settings()
+        val observed = mutableListOf<ExplainObservation>()
+        session = JdbcAnalysisSession(observingConnection(observed))
+        val context = RunContext().apply { startSearch() }
+        // A stale hypothesis must not enter the baseline or any later exact set.
+        createHypothesis(connection, "CREATE INDEX ON $schema.records (b)")
+        val baseline = session.evaluate(emptyList(), workload, context)
+        val a = session.evaluate(listOf(candidates[0]), workload, context)
+        val both = session.evaluate(candidates.reversed(), workload, context)
+        val repeated = session.evaluate(emptyList(), workload, context)
+
+        assertEquals(baseline.costByQueryId, repeated.costByQueryId)
+        assertTrue(baseline.plansByQueryId.getValue("q_id").json.contains("records_pkey"))
+        assertTrue(a.costByQueryId.getValue("q_a") < baseline.costByQueryId.getValue("q_a"))
+        assertEquals(candidates.map { it.id }.sorted(), both.candidateIds)
+        assertEquals(List(4) { listOf("q_a", "q_b", "q_id") }.flatten(), observed.map { event ->
+            workload.queries.single { event.sql.endsWith(it.sql) }.id
+        })
+        assertEquals(List(3) { emptyList<String>() } + List(3) { listOf("2") } +
+            List(3) { listOf("2", "3") } + List(3) { emptyList<String>() }, observed.map { it.keys })
+        assertEquals(setOf(pid), observed.map { it.pid }.toSet())
+        for (evaluation in listOf(baseline, a, both, repeated)) {
+            assertEquals(setOf("q_a", "q_b", "q_id"), evaluation.costByQueryId.keys)
+            assertEquals(evaluation.costByQueryId.keys, evaluation.plansByQueryId.keys)
+            for ((queryId, plan) in evaluation.plansByQueryId) {
+                val rootCost = mapper.readTree(plan.json)[0]["Plan"]["Total Cost"].doubleValue()
+                assertEquals(rootCost, evaluation.costByQueryId.getValue(queryId))
+                assertFalse(plan.json.contains("Actual Total Time"))
+            }
+        }
+        assertEquals(12, context.statistics().explainAttempts)
+        assertEquals(4, context.statistics().completedEvaluations)
+        assertEquals(0, hypothesisCount(connection))
+        assertEquals(settings, settings())
+        assertEquals(1, scalar(connection,
+            "SELECT count(*) FROM pg_catalog.pg_indexes WHERE schemaname = '$schema'"))
+        assertEquals(pid, scalar(connection, "SELECT pg_backend_pid()"))
+        val catalog = session.readCatalog(setOf(TableName("records")), context)
+        assertEquals(TableRef(schema, "records"), catalog.tables.single().ref)
+        assertEquals(pid, scalar(connection, "SELECT pg_backend_pid()"))
+        session.close()
+        session.close()
+        assertTrue(connection.isClosed)
+    }
+
+    @Test
+    fun `changing only profiles does not multiply EXPLAIN and saved plans need no connection`() {
+        val context = RunContext()
+        val baseline = session.evaluate(emptyList(), workload, context)
+        val result = session.evaluate(candidates, workload, context)
+        val metrics = MetricsCalculatorImpl()
+        val usage = BudgetUsage(0, 0, null, 2)
+        val original = metrics.calculate(workload.input, baseline, result, usage)
+        val changedInput = workload.input.copy(profiles = listOf(
+            Profile("changed", 1.0, mapOf("q_a" to 10.0, "q_b" to 1.0, "q_id" to 1.0)),
+            Profile("another", 2.0, mapOf("q_a" to 1.0, "q_b" to 10.0, "q_id" to 2.0)),
+            Profile("third", 3.0, mapOf("q_a" to 2.0, "q_b" to 3.0, "q_id" to 4.0)),
+        ))
+        val second = session.evaluate(candidates, workload.copy(input = changedInput), context)
+        assertEquals(result.costByQueryId, second.costByQueryId)
+        assertEquals(9, context.statistics().explainAttempts)
+        session.close()
+        val changed = metrics.calculate(changedInput, baseline, result, usage)
+        assertEquals(2, original.profiles.size)
+        assertEquals(3, changed.profiles.size)
+        assertEquals(9, context.statistics().explainAttempts)
+        assertTrue(result.plansByQueryId.values.all { mapper.readTree(it.json)[0]["Plan"].isObject })
+    }
+
+    @Test
+    fun `size is raw HypoPG estimate and estimation cleans hypotheses without EXPLAIN`() {
+        val candidate = candidates.first()
+        val oid = createHypothesis(connection, requireNotNull(candidate.ddl))
+        val expected = longScalar(connection, "SELECT public.hypopg_relation_size($oid::oid)")
+        val context = RunContext()
+        val estimated = session.estimateSize(candidate, context)
+        assertEquals(expected, estimated)
+        assertTrue(estimated > 0)
+        assertEquals(0, hypothesisCount(connection))
+        assertEquals(RunStatistics(), context.statistics())
+        assertEquals(estimated, session.estimateSize(candidate, context))
+        assertEquals(0, hypothesisCount(connection))
+    }
+
+    @Test
+    fun `another backend hypotheses survive evaluation cleanup and close`() {
+        connect().use { other ->
+            val oid = createHypothesis(other, requireNotNull(candidates.first().ddl))
+            assertEquals(1, hypothesisCount(other))
+            assertEquals(0, hypothesisCount(connection))
+            session.evaluate(candidates, workload, RunContext())
+            session.estimateSize(candidates.last(), RunContext())
+            assertEquals(0, hypothesisCount(connection))
+            assertEquals(1, hypothesisCount(other))
+            session.close()
+            assertTrue(connection.isClosed)
+            assertEquals(1, hypothesisCount(other))
+            assertTrue(longScalar(other, "SELECT public.hypopg_relation_size($oid::oid)") > 0)
+        }
+        connect().use { fresh -> assertEquals(0, hypothesisCount(fresh)) }
+    }
+
+    @Test
+    fun `failed EXPLAIN rolls back aborted transaction cleans exact set and allows retry`() {
+        connection.autoCommit = false
+        val context = RunContext()
+        // Resolve first; a subsequent privilege change fails at the second query in ID order.
+        sql(admin, "REVOKE SELECT ON $schema.records FROM $role")
+        sql(admin, "GRANT SELECT (id, a, payload) ON $schema.records TO $role")
+        val failure = assertThrows(AnalysisException::class.java) {
+            session.evaluate(candidates, workload, context)
+        }
+        assertEquals(ErrorCode.EXPLAIN_FAILED, failure.error.code)
+        assertEquals("q_b", failure.error.queryId)
+        assertNull(failure.cause)
+        assertEquals(2, context.statistics().explainAttempts)
+        assertEquals(0, context.statistics().completedEvaluations)
+        assertEquals(0, hypothesisCount(connection)) // Fails with 25P02 without rollback.
+        assertFalse(connection.isClosed)
+        sql(admin, "GRANT SELECT ON $schema.records TO $role")
+        val result = session.evaluate(candidates, workload, context)
+        assertEquals(3, result.costByQueryId.size)
+        assertEquals(5, context.statistics().explainAttempts)
+        assertEquals(2, context.statistics().evaluationAttempts)
+        assertEquals(1, context.statistics().completedEvaluations)
+        assertEquals(0, hypothesisCount(connection))
+    }
+
+    @Test
+    fun `failed hypothesis creation cleans earlier indexes and preserves usable session`() {
+        val ordered = candidates.sortedBy { it.id }
+        val bad = ordered.last().let { candidate ->
+            candidate.copy(definition = candidate.definition.copy(keys = listOf(
+                candidate.definition.keys.single().copy(column = ColumnRef(TableRef(schema, "records"), "missing")),
+            )))
+        }
+        connection.autoCommit = false
+        val context = RunContext()
+        val failure = assertThrows(AnalysisException::class.java) {
+            session.evaluate(listOf(ordered.first(), bad), workload, context)
+        }
+        assertEquals(ErrorCode.HYPOTHETICAL_INDEX_ERROR, failure.error.code)
+        assertEquals(0, context.statistics().explainAttempts)
+        assertEquals(0, hypothesisCount(connection))
+        assertNull(failure.cause)
+        assertEquals(3, session.evaluate(emptyList(), workload, context).costByQueryId.size)
+    }
+
+    @Test
+    fun `EXPLAIN lock timeout rejects whole result and clears hypotheses`() {
+        connect().use { blocker ->
+            blocker.autoCommit = false
+            sql(blocker, "LOCK TABLE $schema.records IN ACCESS EXCLUSIVE MODE")
+            try {
+                val context = RunContext(limits = RunLimits(explainTimeout = Duration.ofMillis(150)))
+                val failure = assertThrows(AnalysisException::class.java) {
+                    session.evaluate(emptyList(), workload, context)
+                }
+                assertEquals(ErrorCode.EXPLAIN_FAILED, failure.error.code)
+                assertEquals(1, context.statistics().explainAttempts)
+                assertEquals(0, context.statistics().completedEvaluations)
+                assertEquals(0, hypothesisCount(connection))
+            } finally {
+                blocker.rollback()
+            }
+        }
+        assertEquals(3, session.evaluate(emptyList(), workload, RunContext()).costByQueryId.size)
+    }
+
+    @Test
+    fun `cancellation from another thread releases a blocked physical connection`() {
+        val pid = scalar(connection, "SELECT pg_backend_pid()")
+        connect().use { blocker ->
+            blocker.autoCommit = false
+            sql(blocker, "LOCK TABLE $schema.records IN ACCESS EXCLUSIVE MODE")
+            val context = RunContext(limits = RunLimits(explainTimeout = Duration.ofSeconds(5)))
+            val result = CompletableFuture.supplyAsync {
+                assertThrows(AnalysisException::class.java) { session.evaluate(emptyList(), workload, context) }
+            }
+            try {
+                val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
+                while (scalar(admin, "SELECT count(*) FROM pg_catalog.pg_stat_activity WHERE pid = $pid AND wait_event_type = 'Lock'") == 0) {
+                    check(System.nanoTime() < deadline) { "EXPLAIN did not reach the lock wait" }
+                    Thread.sleep(10)
+                }
+                context.cancel()
+                session.cancel()
+                val failure = result.get(5, TimeUnit.SECONDS)
+                assertEquals(ErrorCode.CANCELLED, failure.error.code)
+                assertTrue(connection.isClosed)
+                assertEquals(0, context.statistics().completedEvaluations)
+                session.cancel()
+                session.close()
+            } finally {
+                blocker.rollback()
+                session.cancel()
+            }
+        }
+    }
+
+    private fun input(): WorkloadInput {
+        val queries = listOf(
+            QueryInput("q_id", "SELECT payload FROM records WHERE id = 314"),
+            QueryInput("q_b", "SELECT payload FROM records WHERE b = 314"),
+            QueryInput("q_a", "SELECT payload FROM records WHERE a = 314 ORDER BY id LIMIT 10"),
+        )
+        return WorkloadInput(queries, listOf(
+            Profile("day", 1.0, mapOf("q_a" to 10.0, "q_b" to 1.0, "q_id" to 2.0)),
+            Profile("night", 2.0, mapOf("q_a" to 1.0, "q_b" to 10.0, "q_id" to 2.0)),
+        ), Constraints(1_000_000_000, null))
+    }
+
+    private fun connect(): Connection = DriverManager.getConnection(
+        System.getenv("INDEXBUDGET_HYPOPG_TEST_URL"), System.getenv("INDEXBUDGET_HYPOPG_TEST_USER"),
+        System.getenv("INDEXBUDGET_HYPOPG_TEST_PASSWORD"),
+    )
+
+    private fun sql(target: Connection, text: String) = target.createStatement().use { it.execute(text) }
+    private fun scalar(target: Connection, text: String) = longScalar(target, text).toInt()
+    private fun longScalar(target: Connection, text: String): Long = target.createStatement().use { statement ->
+        statement.executeQuery(text).use { rows -> check(rows.next()); rows.getLong(1) }
+    }
+    private fun hypothesisCount(target: Connection) = scalar(target, "SELECT count(*) FROM public.hypopg()")
+    private fun createHypothesis(target: Connection, ddl: String): Long =
+        target.prepareStatement("SELECT indexrelid FROM public.hypopg_create_index(?)").use { statement ->
+            statement.setString(1, ddl)
+            statement.executeQuery().use { rows -> check(rows.next()); rows.getLong(1) }
+        }
+
+    private fun settings(): List<String> = connection.createStatement().use { statement ->
+        statement.executeQuery("SELECT name || '=' || setting FROM pg_catalog.pg_settings " +
+            "WHERE name IN ('search_path', 'enable_seqscan', 'enable_indexscan', 'enable_bitmapscan', 'random_page_cost') ORDER BY name").use { rows ->
+            buildList { while (rows.next()) add(rows.getString(1)) }
+        }
+    }
+
+    private data class ExplainObservation(val sql: String, val keys: List<String>, val pid: Int)
+
+    /** Delegates to real JDBC; observes HypoPG on that same backend immediately before EXPLAIN. */
+    private fun observingConnection(observed: MutableList<ExplainObservation>): Connection =
+        Proxy.newProxyInstance(javaClass.classLoader, arrayOf(Connection::class.java)) { _, method, args ->
+            val value = invoke(connection, method, args)
+            if (value is Statement && method.name in setOf("createStatement", "prepareStatement")) {
+                val preparedSql = args?.firstOrNull() as? String
+                val type = if (value is PreparedStatement) PreparedStatement::class.java else Statement::class.java
+                Proxy.newProxyInstance(javaClass.classLoader, arrayOf(type)) { _, statementMethod, statementArgs ->
+                    val sql = statementArgs?.firstOrNull() as? String ?: preparedSql
+                    if (statementMethod.name in setOf("execute", "executeQuery") && sql?.startsWith("EXPLAIN ") == true) {
+                        val keys = connection.createStatement().use { query ->
+                            query.executeQuery("SELECT indkey::text FROM public.hypopg() ORDER BY indkey::text").use { rows ->
+                                buildList { while (rows.next()) add(rows.getString(1)) }
+                            }
+                        }
+                        observed += ExplainObservation(sql, keys, scalar(connection, "SELECT pg_backend_pid()"))
+                    }
+                    invoke(value, statementMethod, statementArgs)
+                }
+            } else value
+        } as Connection
+
+    private fun invoke(target: Any, method: java.lang.reflect.Method, args: Array<out Any?>?): Any? = try {
+        method.invoke(target, *(args ?: emptyArray()))
+    } catch (failure: InvocationTargetException) {
+        throw failure.targetException
+    }
+}

@@ -5,6 +5,8 @@
             <pattern>%level %logger{36} - %msg%n</pattern>
         </encoder>
     </appender>
+    <!-- pgJDBC may log a complete malformed JDBC URL; the adapter emits safe typed diagnostics. -->
+    <logger name="org.postgresql" level="OFF" />
     <root level="WARN">
         <appender-ref ref="STDERR" />
     </root>
