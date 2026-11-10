@@ -249,6 +249,7 @@ class JdbcAnalysisSession(
                 statement.bind()
                 context.checkDeadline()
                 if (explain) context.reserveExplainAttempt()
+                context.checkDeadline()
                 statement.executeQuery().use { rows ->
                     val result = read(rows)
                     context.checkDeadline()

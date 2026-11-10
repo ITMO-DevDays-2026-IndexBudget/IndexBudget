@@ -189,6 +189,36 @@ class JdbcAnalysisSessionTest {
     }
 
     @Test
+    fun `deadline during explain progress prevents SQL and closes connection without cleanup`() {
+        var now = 0L
+        var eventsAtDeadline = 0
+        val jdbc = FakeJdbc(listOf(plan(10)))
+        val context = RunContext(
+            limits = RunLimits(commandTimeout = Duration.ofMillis(10)),
+            clock = NanoClock { now },
+            onProgress = { progress ->
+                if (progress.statistics.explainAttempts == 1) {
+                    eventsAtDeadline = jdbc.events.size
+                    now = Duration.ofMillis(11).toNanos()
+                }
+            },
+        )
+        JdbcAnalysisSession(jdbc.connection).use { session ->
+            val error = assertThrows(AnalysisException::class.java) {
+                session.evaluate(emptyList(), workload(), context)
+            }
+            assertEquals(ErrorCode.DEADLINE_EXCEEDED, error.error.code)
+            assertTrue(jdbc.explains().isEmpty())
+            assertEquals(1, context.statistics().explainAttempts)
+            assertEquals(0, context.statistics().completedEvaluations)
+            assertEquals(1, jdbc.resetAttempts)
+            assertTrue(jdbc.closed)
+            assertEquals(listOf("CLOSE"), jdbc.events.drop(eventsAtDeadline))
+            jdbc.assertResourcesReleased()
+        }
+    }
+
+    @Test
     fun `deadline during explain closes connection without new cleanup SQL`() {
         var now = 0L
         val context = RunContext(
