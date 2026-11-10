@@ -1,0 +1,281 @@
+package ru.itmo.indexbudget.sql
+
+import net.sf.jsqlparser.expression.CastExpression
+import net.sf.jsqlparser.expression.Expression
+import net.sf.jsqlparser.expression.operators.conditional.AndExpression
+import net.sf.jsqlparser.expression.operators.relational.EqualsTo
+import net.sf.jsqlparser.expression.operators.relational.GreaterThan
+import net.sf.jsqlparser.expression.operators.relational.GreaterThanEquals
+import net.sf.jsqlparser.expression.operators.relational.MinorThan
+import net.sf.jsqlparser.expression.operators.relational.MinorThanEquals
+import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList
+import net.sf.jsqlparser.schema.Column
+import net.sf.jsqlparser.schema.Table
+import net.sf.jsqlparser.statement.select.AllColumns
+import net.sf.jsqlparser.statement.select.AllTableColumns
+import net.sf.jsqlparser.statement.select.PlainSelect
+import ru.itmo.indexbudget.domain.*
+
+/** A fresh resolver per workload; no JDBC, candidate caps or parser objects in the result. */
+internal class JSqlParserNameResolver(private val catalog: CatalogSnapshot, private val context: RunContext) {
+    fun resolve(parsed: JSqlParserParsedWorkload): ResolvedWorkload {
+        val queries = parsed.input.queries.map { query ->
+            try {
+                context.checkDeadline()
+                val select = parsed.queriesById[query.id]
+                    ?: fail(ErrorCode.INVALID_INPUT, "Parsed workload does not cover every input query.")
+                QueryScope(query, select).resolve()
+            } catch (error: AnalysisException) {
+                if (error.error.queryId != null) throw error
+                throw AnalysisException(error.error.copy(queryId = query.id), error)
+            }
+        }
+        context.checkDeadline()
+        return ResolvedWorkload(parsed.input, queries)
+    }
+
+    private inner class QueryScope(private val query: QueryInput, private val select: PlainSelect) {
+        private val bindings = mutableListOf<Binding>()
+        private val referenced = linkedSetOf<ColumnRef>()
+        private val projected = linkedSetOf<ColumnRef>()
+        private val outputNames = linkedMapOf<String, MutableList<BoundColumn>>()
+        private var selectsAll = false
+
+        fun resolve(): ResolvedQuery {
+            bindTables()
+            resolveProjection()
+            val predicates = buildList {
+                select.where?.let { resolveCondition(it, PredicateSource.WHERE, bindings, this) }
+                select.joins.orEmpty().forEachIndexed { index, join ->
+                    // An ON clause cannot see tables introduced by a later JOIN.
+                    join.onExpressions.orEmpty().forEach {
+                        resolveCondition(it, PredicateSource.JOIN, bindings.take(index + 2), this)
+                    }
+                }
+            }
+            val order = select.orderByElements.orEmpty().map { element ->
+                context.checkDeadline()
+                val column = element.expression as Column
+                val bound = if (column.table == null) {
+                    val outputs = outputNames[decodePostgresIdentifier(column.columnName)].orEmpty().distinct()
+                    if (outputs.size > 1) fail(ErrorCode.AMBIGUOUS_COLUMN, "ORDER BY output name is ambiguous.")
+                    outputs.singleOrNull() ?: resolveColumn(column)
+                } else {
+                    resolveColumn(column)
+                }
+                referenced += bound.ref
+                OrderByColumn(bound.ref, if (element.isAsc) SortDirection.ASC else SortDirection.DESC)
+            }
+            context.checkDeadline()
+            return ResolvedQuery(query.id, query.sql, bindings.mapTo(linkedSetOf()) { it.table.ref },
+                referenced, predicates, order, projected, selectsAll)
+        }
+
+        private fun bindTables() {
+            val tables = listOf(select.fromItem as Table) + select.joins.orEmpty().map { it.fromItem as Table }
+            for (table in tables) {
+                context.checkDeadline()
+                if (!table.alias?.aliasColumns.isNullOrEmpty()) {
+                    fail(ErrorCode.UNSUPPORTED_SQL, "Table column alias lists are not supported.")
+                }
+                val name = TableName(decodePostgresIdentifier(table.name), table.schemaName?.let(::decodePostgresIdentifier))
+                val physical = resolveTable(name)
+                if (physical.kind != TableKind.ORDINARY) {
+                    fail(ErrorCode.UNSUPPORTED_SQL, "Only ordinary PostgreSQL tables are supported.")
+                }
+                val alias = table.alias?.name?.let(::decodePostgresIdentifier)
+                val binding = Binding(bindings.size, physical, alias)
+                if (bindings.any { it.visibleName == binding.visibleName &&
+                        (it.alias != null || alias != null || it.table.ref == physical.ref) }) {
+                    fail(ErrorCode.UNSUPPORTED_SQL, "A table name or alias is specified more than once.")
+                }
+                bindings += binding
+            }
+        }
+
+        private fun resolveProjection() {
+            for (item in select.selectItems) {
+                context.checkDeadline()
+                val alias = item.alias?.name?.let(::decodePostgresIdentifier)
+                val columns = when (val expression = item.expression) {
+                    is Column -> listOf(resolveColumn(expression))
+                    is AllTableColumns -> {
+                        if (alias != null) fail(ErrorCode.UNSUPPORTED_SQL, "A wildcard cannot have an output alias.")
+                        selectsAll = true
+                        expand(listOf(resolveQualifier(expression.table, bindings)))
+                    }
+                    is AllColumns -> {
+                        if (alias != null) fail(ErrorCode.UNSUPPORTED_SQL, "A wildcard cannot have an output alias.")
+                        selectsAll = true
+                        expand(bindings)
+                    }
+                    else -> fail(ErrorCode.UNSUPPORTED_SQL, "Unsupported projection expression.")
+                }
+                for (column in columns) {
+                    projected += column.ref
+                    referenced += column.ref
+                    outputNames.getOrPut(alias ?: column.column.name) { mutableListOf() } += column
+                }
+            }
+        }
+
+        private fun expand(sources: List<Binding>): List<BoundColumn> = sources.flatMap { binding ->
+            binding.table.columns.map { column -> checkedColumn(binding, column) }
+        }
+
+        private fun resolveCondition(
+            expression: Expression,
+            source: PredicateSource,
+            visible: List<Binding>,
+            result: MutableList<ResolvedPredicate>,
+        ) {
+            context.checkDeadline()
+            when (expression) {
+                is AndExpression -> {
+                    resolveCondition(expression.leftExpression, source, visible, result)
+                    resolveCondition(expression.rightExpression, source, visible, result)
+                }
+                is ParenthesedExpressionList<*> -> resolveCondition(expression.single(), source, visible, result)
+                is EqualsTo, is MinorThan, is MinorThanEquals, is GreaterThan, is GreaterThanEquals -> {
+                    val left = expression.leftExpression
+                    val right = expression.rightExpression
+                    val operator = when (expression) {
+                        is EqualsTo -> ComparisonOperator.EQUAL
+                        is MinorThan -> ComparisonOperator.LESS_THAN
+                        is MinorThanEquals -> ComparisonOperator.LESS_THAN_OR_EQUAL
+                        is GreaterThan -> ComparisonOperator.GREATER_THAN
+                        else -> ComparisonOperator.GREATER_THAN_OR_EQUAL
+                    }
+                    val leftColumn = resolveOperand(left, visible)
+                    val rightColumn = resolveOperand(right, visible)
+                    if (leftColumn == null && rightColumn == null) {
+                        fail(ErrorCode.UNSUPPORTED_SQL, "A comparison must reference a column.")
+                    }
+                    if (leftColumn != null) {
+                        result += ResolvedPredicate(leftColumn.ref, operator, source, rightColumn?.ref)
+                    } else {
+                        result += ResolvedPredicate(requireNotNull(rightColumn).ref, reverse(operator), source)
+                    }
+                }
+                else -> fail(ErrorCode.UNSUPPORTED_SQL, "Unsupported condition expression.")
+            }
+        }
+
+        private fun resolveOperand(expression: Expression, visible: List<Binding>): BoundColumn? {
+            context.checkDeadline()
+            if (expression is Column) {
+                return resolveColumn(expression, visible).also { referenced += it.ref }
+            }
+            validateLiteralCasts(expression)
+            return null
+        }
+
+        private fun resolveColumn(column: Column, visible: List<Binding> = bindings): BoundColumn {
+            context.checkDeadline()
+            val name = decodePostgresIdentifier(column.columnName)
+            val sources = column.table?.let { listOf(resolveQualifier(it, visible)) } ?: visible
+            val matches = sources.flatMap { binding ->
+                binding.table.columns.filter { it.name == name }.map { checkedColumn(binding, it) }
+            }
+            if (matches.isEmpty()) fail(ErrorCode.UNKNOWN_COLUMN, "Column does not exist in the visible query tables.")
+            if (matches.size > 1) fail(ErrorCode.AMBIGUOUS_COLUMN, "Column reference is ambiguous.")
+            return matches.single()
+        }
+
+        private fun resolveQualifier(table: Table, visible: List<Binding>): Binding {
+            context.checkDeadline()
+            if (table.databaseName != null || table.catalogName != null) {
+                fail(ErrorCode.UNSUPPORTED_SQL, "Cross-database column references are not supported.")
+            }
+            val name = decodePostgresIdentifier(table.name)
+            val schema = table.schemaName?.let(::decodePostgresIdentifier)
+            val matches = visible.filter {
+                if (schema == null) it.visibleName == name
+                else it.alias == null && it.table.ref == TableRef(schema, name)
+            }
+            if (matches.isEmpty()) fail(ErrorCode.UNKNOWN_TABLE, "Table or alias is not visible in this expression.")
+            if (matches.size > 1) fail(ErrorCode.AMBIGUOUS_COLUMN, "Table qualifier is ambiguous; use a distinct alias.")
+            return matches.single()
+        }
+    }
+
+    private fun resolveTable(name: TableName): CatalogTable {
+        context.checkDeadline()
+        if (name in catalog.unresolvedTables) fail(ErrorCode.UNKNOWN_TABLE, "Workload table was not found in PostgreSQL.")
+        val schema = name.schema ?: run {
+            if (catalog.searchPath.isEmpty()) fail(ErrorCode.CATALOG_ERROR, "Catalog is missing the effective PostgreSQL search_path.")
+            catalog.searchPath.firstOrNull { schema -> catalog.tables.any { it.ref == TableRef(schema, name.name) } }
+                ?: fail(ErrorCode.UNKNOWN_TABLE, "Workload table was not found on the effective search_path.")
+        }
+        val matches = catalog.tables.filter { it.ref == TableRef(schema, name.name) }
+        if (matches.size > 1) fail(ErrorCode.CATALOG_ERROR, "Catalog contains duplicate physical table identities.")
+        return matches.singleOrNull() ?: fail(ErrorCode.UNKNOWN_TABLE, "Workload table was not found in the catalog.")
+    }
+
+    private fun checkedColumn(binding: Binding, column: CatalogColumn): BoundColumn {
+        context.checkDeadline()
+        if (!column.isBuiltinType) fail(ErrorCode.UNSUPPORTED_SQL, "User-defined column types are not supported.")
+        return BoundColumn(binding, column)
+    }
+
+    private fun validateLiteralCasts(expression: Expression) {
+        context.checkDeadline()
+        if (expression !is CastExpression) return
+        val type = expression.colDataType
+        var name = type.dataType.let {
+            when {
+                it.startsWith("pg_catalog.", ignoreCase = true) -> it.substring("pg_catalog.".length)
+                it.startsWith("\"pg_catalog\".") -> it.substring("\"pg_catalog\".".length)
+                else -> it
+            }
+        }
+        // JSqlParser 5.4 keeps typmods inside dataType for e.g. varchar (20).
+        val opening = name.indexOf('(')
+        if (opening >= 0 && '"' !in name) {
+            val closing = name.indexOf(')', opening)
+            if (closing < 0) fail(ErrorCode.UNSUPPORTED_SQL, "Invalid literal cast type modifier.")
+            if (name.substring(opening + 1, closing).split(',').any { it.trim().toIntOrNull() == null }) {
+                fail(ErrorCode.UNSUPPORTED_SQL, "Literal cast type modifiers must be integer constants.")
+            }
+            name = (name.substring(0, opening).trimEnd() + name.substring(closing + 1)).trim()
+        }
+        if (decodePostgresIdentifier(name) !in BUILTIN_CAST_TYPES || !type.arrayData.isNullOrEmpty() ||
+            type.characterSet != null || type.signedness != null || type.isZerofill ||
+            !type.typeModifiers.isNullOrEmpty() || type.isNational || type.xmlTypeModifier != null
+        ) {
+            fail(ErrorCode.UNSUPPORTED_SQL, "Only PostgreSQL built-in scalar literal casts are supported.")
+        }
+        validateLiteralCasts(expression.leftExpression)
+    }
+
+    private fun reverse(operator: ComparisonOperator): ComparisonOperator = when (operator) {
+        ComparisonOperator.EQUAL -> operator
+        ComparisonOperator.LESS_THAN -> ComparisonOperator.GREATER_THAN
+        ComparisonOperator.LESS_THAN_OR_EQUAL -> ComparisonOperator.GREATER_THAN_OR_EQUAL
+        ComparisonOperator.GREATER_THAN -> ComparisonOperator.LESS_THAN
+        ComparisonOperator.GREATER_THAN_OR_EQUAL -> ComparisonOperator.LESS_THAN_OR_EQUAL
+    }
+
+    private data class Binding(val position: Int, val table: CatalogTable, val alias: String?) {
+        val visibleName: String get() = alias ?: table.ref.name
+    }
+
+    private data class BoundColumn(val binding: Binding, val column: CatalogColumn) {
+        val ref: ColumnRef get() = ColumnRef(binding.table.ref, column.name)
+    }
+
+    private fun fail(code: ErrorCode, message: String): Nothing =
+        throw AnalysisException(AnalysisError(code, message))
+
+    private companion object {
+        val BUILTIN_CAST_TYPES = setOf(
+            "smallint", "int2", "integer", "int", "int4", "bigint", "int8", "numeric", "decimal",
+            "real", "float4", "double precision", "float8", "float", "boolean", "bool",
+            "text", "varchar", "character varying", "character", "char", "bpchar", "name", "bytea",
+            "date", "time", "time without time zone", "time with time zone", "timetz",
+            "timestamp", "timestamp without time zone", "timestamp with time zone", "timestamptz", "interval",
+            "uuid", "inet", "cidr", "macaddr", "macaddr8", "bit", "varbit", "bit varying", "money", "oid",
+            "json", "jsonb", "xml", "pg_lsn", "int4range", "int8range", "numrange", "tsrange", "tstzrange", "daterange",
+        )
+    }
+}

@@ -65,7 +65,7 @@ UNSUPPORTED_SCHEMA_VERSION: {"code":"UNSUPPORTED_SCHEMA_VERSION","message":"Expe
 | `cli` | Аргументы, сообщения и коды выхода |
 | `application` | Входной JSON и будущая сборка pipeline |
 | `domain` | Модели v2, результаты, лимиты и ошибки без Spring/JDBC/AST |
-| `sql` | Интерфейс разбора и разрешения SQL |
+| `sql` | AST-валидация и разрешение имён через CatalogSnapshot; полный ResolvedWorkload для генератора |
 | `candidates` | Интерфейсы генерации кандидатов и DDL |
 | `optimizer` | Интерфейсы метрик, бюджетов, сравнения и поиска |
 | `postgres` | Интерфейсы выделенной сессии и evaluator |
