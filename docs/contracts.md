@@ -190,6 +190,14 @@ when (val assessment = metrics.assessEvaluation(workload.input, baseline, evalua
 
 Wire-схема `report.json` реализована явным отображением в `JsonReportWriter` и описана в [контракте отчёта v2](report-v2.md); sealed `SearchResult` напрямую не сериализуется. `DefaultReportBuilder` добавляет baseline-метрики через общий calculator, нормированные веса, сравнение costs каждого SQL, совпадение наборов и цену устойчивости через `PriceOfRobustness` (тот же доменный helper, что в #44 / PR #52). Сохранённые метрики incumbents не пересчитываются. При failed исходные costs/plans сохраняются, baseline-метрики могут отсутствовать: экспорт не повторяет уже неудавшийся численный расчёт.
 
+### Цена устойчивости (#44)
+
+`domain.PriceOfRobustness.calculate(result: SearchResult): Double?` — единый чистый расчёт по готовым метрикам: `bestRobust.metrics.meanCost - bestMean.metrics.meanCost`. Для `Completed` и `Partial` оба incumbent должны быть полностью оценены и допустимы, принадлежать одному запуску и одному исследованному пулу с общими workload, baseline и весами профилей. Эти предусловия обеспечивает Optimizer; калькулятор не управляет пулом, не запускает поиск или EXPLAIN и не пересчитывает профильные метрики.
+
+Совпавшие incumbents, включая baseline-only, дают `0.0`. `Failed` возвращает `null`, в том числе при сохранённом baseline: отсутствие сравнения не подменяется нулём. Используется разность абсолютных `C_mean`, без округления, `abs` или `max(0)`, а не разность `M`/`R` или процентов. Отрицательная конечная разность также сохраняется: калькулятор не исправляет предоставленные метрики или выбор incumbents. Неконечный или отрицательный входной `meanCost` даёт `AnalysisException(NUMERIC_ERROR)`, а не неизвестное значение или нулевую цену.
+
+Стык #19/#20: `ReportBuilder` передаёт результат `PriceOfRobustness.calculate(result)` в существующее поле `AnalysisReport.priceOfRobustness` вместе с тем же `SearchResult`; JSON и HTML используют это готовое значение без повторения формулы. `comparison_scope = "evaluated_sets"`, `selected_objective` и метрики обоих incumbents описывают тот же пул и критерий его исследования. HTML показывает совпадение наборов явно; цена не означает разницу глобальных оптимумов. Реализация сборки и экспорта отчёта остаётся в #19, отображения — в #20.
+
 ## CLI, диагностика и каталог вывода
 
 `indexbudget analyze --workload <path> --output-dir <path>` сначала валидирует вход и назначение вывода. `AnalysisConfiguration` регистрирует production-реализации метрик, компаратора, greedy и фабрику JDBC-сессии. Spring создаёт `AnalysisPipeline` только при наличии всех его зависимостей. Иначе `UnavailableAnalysisRunner` завершает валидный вход с `NOT_IMPLEMENTED` (exit 1), а `details.missing_components` перечисляет отсутствующие компоненты. Этот путь не подключается к БД, не создаёт каталогов и отчётов. Настройки соединения берутся из `INDEXBUDGET_DATABASE_URL`; текущее чтение JSON не зависит от наличия этой переменной.

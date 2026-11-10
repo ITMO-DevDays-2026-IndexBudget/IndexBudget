@@ -123,6 +123,7 @@ data class AnalysisReport(
     val result: SearchResult,
     val input: WorkloadInput? = null,
     val candidates: CandidateBatch = CandidateBatch(emptyList()),
+    /** Готовый результат [PriceOfRobustness.calculate] для [result]; null при отсутствии сравнения. */
     val priceOfRobustness: Double? = null,
     val schemaVersion: Int = 2,
     val specVersion: String = "0.2",

@@ -5,7 +5,7 @@
 ## Область
 Модуль `MetricsCalculator` + `ObjectiveComparator` в `domain/`. Чистые расчёты, без БД. Единственная реализация формул в проекте.
 
-Общий `ProfileWeights` принят в [PR #32](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/pull/32) и используется в CLI и расчётах. Отдельный PR #35 закрыт без merge. [PR #37](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/pull/37) реализует `calculate(...)` для #40; в #41 реализован `assessBudget(...)`, в [PR #47](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/pull/47) — `ObjectiveComparatorImpl`. В этой ветке реализован `assessEvaluation(...)` для #43; цена устойчивости остаётся отдельной задачей.
+Общий `ProfileWeights` принят в [PR #32](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/pull/32) и используется в CLI и расчётах. Отдельный PR #35 закрыт без merge. [PR #37](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/pull/37) реализует `calculate(...)` для #40; в #41 реализован `assessBudget(...)`, в [PR #47](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/pull/47) — `ObjectiveComparatorImpl`. В #43 реализован `assessEvaluation(...)`; в #44 — чистый расчёт цены устойчивости, стык с рабочими отчётами остаётся в #19/#20.
 
 ## Формулы
 ```text
@@ -46,7 +46,7 @@ Pipeline сохраняет исходный estimated size и рассчита�
 ## Зафиксированные решения
 - Plateau-фикстура — через округление до 9 знаков HALF_EVEN.
 - Zero-baseline регрессия проверяется после полного EXPLAIN через `assessEvaluation`: `assessBudget` не получает baseline/costs. Контракт T6 (#43) и стык поиска описаны в [контрактах](contracts.md#допустимость-после-оценки-43).
-- `priceOfRobustness` = `C_mean(best_robust) − C_mean(best_mean)` из одного пула (helper над двумя `EvaluatedConfiguration`).
+- `PriceOfRobustness.calculate(result: SearchResult)` = `C_mean(best_robust) − C_mean(best_mean)` из одного пула; `Failed` → `null`. Helper использует готовые метрики `Completed`/`Partial`, без округления или подмены отрицательной разности нулём; предусловия и передача в `AnalysisReport.priceOfRobustness` описаны в [контрактах](contracts.md#цена-устойчивости-44).
 
 ## Инварианты (проверки §10)
 - `sum(p*C)/sum(p*B) ≠ sum(p*C/B)`; `B_mean=0` при `B_s>0` → ошибка; положительный вес, потерянный из-за underflow, ≠ нулевой вероятности (проверяет общий `ProfileWeights`).
