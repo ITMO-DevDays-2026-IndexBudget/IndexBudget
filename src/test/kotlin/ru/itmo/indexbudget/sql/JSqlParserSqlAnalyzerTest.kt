@@ -1,9 +1,18 @@
 package ru.itmo.indexbudget.sql
 
+import net.sf.jsqlparser.expression.operators.relational.EqualsTo
+import net.sf.jsqlparser.schema.Column
+import net.sf.jsqlparser.schema.Table
+import net.sf.jsqlparser.statement.select.AllTableColumns
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.Arguments
+import org.junit.jupiter.params.provider.MethodSource
+import org.junit.jupiter.params.provider.ValueSource
 import ru.itmo.indexbudget.domain.AnalysisError
 import ru.itmo.indexbudget.domain.AnalysisException
 import ru.itmo.indexbudget.domain.Constraints
@@ -72,55 +81,68 @@ class JSqlParserSqlAnalyzerTest {
         assertEquals(3, parsed.input.profiles.size)
     }
 
-    @Test
-    fun `exactly one plain select is required`() {
-        val invalid = listOf(
-            "SELECT id FROM records; SELECT value FROM records",
-            "UPDATE records SET value = 1",
-            "SELECT id FROM records UNION SELECT id FROM archived_records",
-            "WITH recent AS (SELECT id FROM records) SELECT id FROM recent",
-        )
+    @ParameterizedTest(name = "{index}: {0}")
+    @MethodSource("unsupportedSql")
+    fun `unsupported SQL is rejected`(sql: String) {
+        assertFailure(sql, ErrorCode.UNSUPPORTED_SQL)
+    }
 
-        invalid.forEach { sql ->
-            assertFailure(sql, ErrorCode.UNSUPPORTED_SQL)
-        }
+    @ParameterizedTest
+    @ValueSource(strings = ["CAST('1' AS integer)", "'1'::integer", "CAST('1'::integer AS bigint)"])
+    fun `PostgreSQL literal casts are supported`(literal: String) {
+        val sql = "SELECT id FROM records WHERE id = $literal"
+        assertEquals(sql, analyzer.parse(workload(sql), RunContext()).input.queries.single().sql)
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = ["0", "9223372036854775807"])
+    fun `limit accepts the non-negative bigint boundaries`(limit: String) {
+        val sql = "SELECT id FROM records LIMIT $limit"
+        assertEquals(sql, analyzer.parse(workload(sql), RunContext()).input.queries.single().sql)
+    }
+
+    @ParameterizedTest
+    @MethodSource("quotedTableNames")
+    fun `quoted dots and escaped quotes retain PostgreSQL table identity`(sql: String, expected: TableName) {
+        val parsed = analyzer.parse(workload(sql), RunContext()) as JSqlParserParsedWorkload
+
+        assertEquals(setOf(expected), parsed.referencedTables)
+        assertEquals(sql, parsed.input.queries.single().sql)
+        val table = parsed.queriesById.getValue("query").fromItem as Table
+        assertEquals(expected.name, table.name)
+        assertEquals(expected.schema, table.schemaName)
     }
 
     @Test
-    fun `unsupported clauses and nested expressions are rejected`() {
-        val invalid = listOf(
-            "SELECT lower(id) FROM records",
-            "SELECT id FROM records WHERE value = 1 OR group_id = 2",
-            "SELECT id FROM records WHERE EXISTS (SELECT 1 FROM groups)",
-            "SELECT id FROM (SELECT id FROM records) nested",
-            "SELECT g.id FROM (SELECT id FROM records) r INNER JOIN groups g ON r.id = g.id",
-            "SELECT group_id, count(*) FROM records GROUP BY group_id",
-            "SELECT id, row_number() OVER () FROM records",
-            "SELECT * EXCEPT (value) FROM records",
-            "SELECT id FROM records ORDER BY lower(id)",
-            "SELECT id FROM records ORDER BY id NULLS FIRST",
-            "SELECT id FROM records LIMIT 10 OFFSET 1",
-            "SELECT id FROM records LIMIT ?",
+    fun `quoted names are retained in projection conditions ordering and join ASTs`() {
+        val sql = """
+            SELECT "a.b"."c.d", "g.h".*
+            FROM "a.b"
+            INNER JOIN "other.table" AS "g.h" ON "a.b"."c.d" = "g.h"."x.y"
+            WHERE "a.b"."c.d" = 1
+            ORDER BY "a.b"."c.d"
+        """.trimIndent()
+        val parsed = analyzer.parse(workload(sql), RunContext()) as JSqlParserParsedWorkload
+        val select = parsed.queriesById.getValue("query")
+
+        assertEquals(setOf(TableName("\"a.b\""), TableName("\"other.table\"")), parsed.referencedTables)
+        val columns = listOf(
+            select.selectItems[0].expression as Column,
+            (select.where as EqualsTo).leftExpression as Column,
+            select.orderByElements.single().expression as Column,
+            select.joins.single().onExpressions.single().let { (it as EqualsTo).leftExpression as Column },
         )
-
-        invalid.forEach { sql ->
-            assertFailure(sql, ErrorCode.UNSUPPORTED_SQL)
+        columns.forEach { column ->
+            assertEquals("\"c.d\"", column.columnName)
+            assertEquals("\"a.b\"", column.table.name)
+            assertNull(column.table.schemaName)
         }
-    }
-
-    @Test
-    fun `only inner joins with column equality are accepted`() {
-        val invalid = listOf(
-            "SELECT r.id FROM records r LEFT JOIN groups g ON r.group_id = g.id",
-            "SELECT r.id FROM records r CROSS JOIN groups g",
-            "SELECT r.id FROM records r INNER JOIN groups g ON r.group_id > g.id",
-            "SELECT r.id FROM records r INNER JOIN groups g ON r.group_id = 1",
-            "SELECT r.id FROM records r INNER JOIN groups g USING (group_id)",
-        )
-
-        invalid.forEach { sql ->
-            assertFailure(sql, ErrorCode.UNSUPPORTED_SQL)
-        }
+        val star = select.selectItems[1].expression as AllTableColumns
+        assertEquals("\"g.h\"", star.table.name)
+        assertNull(star.table.schemaName)
+        val right = (select.joins.single().onExpressions.single() as EqualsTo).rightExpression as Column
+        assertEquals("\"x.y\"", right.columnName)
+        assertEquals("\"g.h\"", right.table.name)
     }
 
     @Test
@@ -146,6 +168,15 @@ class JSqlParserSqlAnalyzerTest {
     }
 
     @Test
+    fun `comparison limit combines WHERE and JOIN conditions`() {
+        fun sql(whereCount: Int) = "SELECT r.id FROM records r INNER JOIN groups g ON r.group_id = g.id WHERE " +
+            (1..whereCount).joinToString(" AND ") { "r.c$it = $it" }
+
+        analyzer.parse(workload(sql(255)), RunContext())
+        assertFailure(sql(256), ErrorCode.INPUT_LIMIT_EXCEEDED)
+    }
+
+    @Test
     fun `wide condition list is validated without truncating the sql`() {
         val sql = comparisons(100)
         val parsed = analyzer.parse(workload(sql), RunContext())
@@ -153,13 +184,18 @@ class JSqlParserSqlAnalyzerTest {
         assertEquals(sql, parsed.input.queries.single().sql)
     }
 
-    @Test
-    fun `sql byte limit is checked before parsing`() {
-        val prefix = "SELECT id FROM records"
-        val exactLimit = prefix + " ".repeat(64 * 1024 - prefix.toByteArray(StandardCharsets.UTF_8).size)
+    @ParameterizedTest
+    @ValueSource(strings = ["x", "я", "😀"])
+    fun `sql byte limit is checked before parsing`(character: String) {
+        val prefix = "SELECT id FROM records -- "
+        val remainingBytes = 64 * 1024 - prefix.toByteArray(StandardCharsets.UTF_8).size
+        val characterBytes = character.toByteArray(StandardCharsets.UTF_8).size
+        val exactLimit = prefix + character.repeat(remainingBytes / characterBytes) +
+            " ".repeat(remainingBytes % characterBytes)
+        assertEquals(64 * 1024, exactLimit.toByteArray(StandardCharsets.UTF_8).size)
         analyzer.parse(workload(exactLimit), RunContext())
 
-        val error = assertFailure("$exactLimit ", ErrorCode.INPUT_LIMIT_EXCEEDED)
+        val error = assertFailure(exactLimit + character, ErrorCode.INPUT_LIMIT_EXCEEDED)
         assertEquals("query", error.queryId)
     }
 
@@ -186,7 +222,7 @@ class JSqlParserSqlAnalyzerTest {
 
         assertTrue(error.message.isNotBlank())
         assertTrue(secret !in error.message)
-        assertTrue(secret !in error.details.values)
+        assertTrue(error.details.values.none { secret in it })
     }
 
     private fun assertFailure(sql: String, expectedCode: ErrorCode): AnalysisError {
@@ -209,4 +245,52 @@ class JSqlParserSqlAnalyzerTest {
             writeBudgetUnitsPerHour = null,
         ),
     )
+
+    private companion object {
+        @JvmStatic
+        fun unsupportedSql(): List<String> = listOf(
+            "SELECT id FROM records; SELECT value FROM records",
+            "UPDATE records SET value = 1",
+            "SELECT id FROM records UNION SELECT id FROM archived_records",
+            "WITH recent AS (SELECT id FROM records) SELECT id FROM recent",
+            "SELECT lower(id) FROM records",
+            "SELECT id FROM records WHERE value = 1 OR group_id = 2",
+            "SELECT id FROM records WHERE EXISTS (SELECT 1 FROM groups)",
+            "SELECT id FROM (SELECT id FROM records) nested",
+            "SELECT g.id FROM (SELECT id FROM records) r INNER JOIN groups g ON r.id = g.id",
+            "SELECT group_id, count(*) FROM records GROUP BY group_id",
+            "SELECT id, row_number() OVER () FROM records",
+            "SELECT * EXCEPT (value) FROM records",
+            "SELECT id FROM records ORDER BY lower(id)",
+            "SELECT id FROM records ORDER BY id NULLS FIRST",
+            "SELECT id FROM records LIMIT 10 OFFSET 1",
+            "SELECT id FROM records LIMIT ?",
+            "SELECT r.id FROM records r LEFT JOIN groups g ON r.group_id = g.id",
+            "SELECT r.id FROM records r CROSS JOIN groups g",
+            "SELECT r.id FROM records r INNER JOIN groups g ON r.group_id > g.id",
+            "SELECT r.id FROM records r INNER JOIN groups g ON r.group_id = 1",
+            "SELECT r.id FROM records r INNER JOIN groups g USING (group_id)",
+            "SELECT id FROM records WHERE id = TRY_CAST('1' AS integer)",
+            "SELECT id FROM records WHERE id = SAFE_CAST('1' AS integer)",
+            "SELECT id FROM records WHERE id = CAST(TRY_CAST('1' AS integer) AS bigint)",
+            "SELECT id FROM records WHERE id = CAST(value AS integer)",
+            "SELECT vals[abs(1)] FROM records",
+            "SELECT id FROM records WHERE vals[abs(1)] = 1",
+            "SELECT id FROM records ORDER BY vals[abs(1)]",
+            "SELECT r.id FROM records r INNER JOIN groups g ON r.vals[abs(1)] = g.id",
+            "SELECT (make_record()).* FROM records",
+            "SELECT r.id FROM records r INNER JOIN (SELECT id FROM groups) g ON r.id = g.id",
+            "SELECT id FROM records LIMIT 9223372036854775808",
+            "SELECT id FROM records LIMIT -1",
+            "SELECT id FROM records LIMIT 1.5",
+        )
+
+        @JvmStatic
+        fun quotedTableNames(): List<Arguments> = listOf(
+            Arguments.of("SELECT id FROM \"a.b\"", TableName("\"a.b\"")),
+            Arguments.of("SELECT id FROM \"a.b.c.d\"", TableName("\"a.b.c.d\"")),
+            Arguments.of("SELECT id FROM \"s.c\".\"a.b\"", TableName("\"a.b\"", "\"s.c\"")),
+            Arguments.of("SELECT id FROM \"a\"\"b.c\"", TableName("\"a\"\"b.c\"")),
+        )
+    }
 }
