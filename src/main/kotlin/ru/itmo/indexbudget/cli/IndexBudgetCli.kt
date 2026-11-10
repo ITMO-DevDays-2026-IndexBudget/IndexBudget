@@ -93,6 +93,9 @@ class IndexBudgetCli(
             if (result is SearchResult.Failed) {
                 fail(err, result.error)
             } else {
+                if (result is SearchResult.Partial) {
+                    result.diagnostics.errors.forEach { printDiagnostic(err, it) }
+                }
                 result.status.exitCode
             }
         } catch (failure: AnalysisException) {
@@ -107,13 +110,17 @@ class IndexBudgetCli(
     }
 
     private fun fail(err: PrintWriter, error: AnalysisError): Int {
+        printDiagnostic(err, error)
+        return error.code.defaultExitCode
+    }
+
+    private fun printDiagnostic(err: PrintWriter, error: AnalysisError) {
         val diagnostic = linkedMapOf<String, Any>("code" to error.code.name, "message" to error.message)
         error.queryId?.let { diagnostic["query_id"] = it }
         error.profileId?.let { diagnostic["profile_id"] = it }
         if (error.details.isNotEmpty()) diagnostic["details"] = error.details
         // JSON экранирует переводы строк и управляющие символы в пользовательских IDs.
         err.println("${error.code.name}: ${diagnosticMapper.writeValueAsString(diagnostic)}")
-        return error.code.defaultExitCode
     }
 
     companion object {

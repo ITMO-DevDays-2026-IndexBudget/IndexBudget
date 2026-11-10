@@ -304,7 +304,68 @@ class IndexBudgetCliTest {
             val runner = AnalysisRunner { _, _, _ -> searchResult }
             val result = analyze(directory.resolve("run"), cli = IndexBudgetCli(WorkloadReader(), analysisRunner = runner))
             assertEquals(expectedCode, result.code)
+            if (searchResult is SearchResult.Failed) {
+                assertEquals(1, result.diagnosticStderr.lineSequence().count { it.isNotEmpty() })
+                assertTrue(result.diagnosticStderr.startsWith("${searchResult.error.code.name}: "))
+            }
         }
+    }
+
+    @Test
+    fun `partial prints every saved diagnostic with escaped fields and keeps exit code 3`() {
+        val queryId = "q\n\u001b[31m"
+        val profileId = "night\t\"mode\""
+        val message = "EXPLAIN failed.\nSaved result remains available."
+        val detail = "cancelled\nretry\tlater\u0000"
+        val errors = listOf(
+            AnalysisError(
+                ErrorCode.EXPLAIN_FAILED,
+                message,
+                queryId = queryId,
+                profileId = profileId,
+                details = mapOf("phase" to "repair", "reason" to detail),
+            ),
+            AnalysisError(ErrorCode.DB_CONNECTION_ERROR, "Analysis session cleanup failed."),
+        )
+        val partial = ContractFixtures.partialResult().let { it.copy(diagnostics = it.diagnostics.copy(errors = errors)) }
+        val runner = AnalysisRunner { _, _, _ -> partial }
+
+        val result = analyze(directory.resolve("run"), cli = IndexBudgetCli(WorkloadReader(), analysisRunner = runner))
+
+        assertEquals(3, result.code)
+        assertEquals("", result.stdout)
+        val lines = result.diagnosticStderr.lineSequence().filter { it.isNotEmpty() }.toList()
+        assertEquals(2, lines.size)
+        assertFalse(result.diagnosticStderr.any { it < ' ' && it != '\n' })
+        assertTrue(lines[0].startsWith("EXPLAIN_FAILED: "))
+        assertTrue(lines[1].startsWith("DB_CONNECTION_ERROR: "))
+        val mapper = JsonMapper.builder().build()
+        val explain = mapper.readTree(lines[0].substringAfter(": "))
+        assertEquals("EXPLAIN_FAILED", explain.get("code").stringValue())
+        assertEquals(message, explain.get("message").stringValue())
+        assertEquals(queryId, explain.get("query_id").stringValue())
+        assertEquals(profileId, explain.get("profile_id").stringValue())
+        assertEquals("repair", explain.get("details").get("phase").stringValue())
+        assertEquals(detail, explain.get("details").get("reason").stringValue())
+        val cleanup = mapper.readTree(lines[1].substringAfter(": "))
+        assertEquals("DB_CONNECTION_ERROR", cleanup.get("code").stringValue())
+        assertEquals("Analysis session cleanup failed.", cleanup.get("message").stringValue())
+        assertFalse(cleanup.has("query_id"))
+        assertFalse(cleanup.has("profile_id"))
+        assertFalse(cleanup.has("details"))
+    }
+
+    @Test
+    fun `partial without saved errors keeps exit code 3 without inventing a diagnostic`() {
+        val partial = ContractFixtures.partialResult().let {
+            it.copy(diagnostics = it.diagnostics.copy(errors = emptyList()))
+        }
+        val runner = AnalysisRunner { _, _, _ -> partial }
+
+        val result = analyze(directory.resolve("run"), cli = IndexBudgetCli(WorkloadReader(), analysisRunner = runner))
+
+        assertEquals(3, result.code)
+        assertEquals("", result.diagnosticStderr)
     }
 
     @Test

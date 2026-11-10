@@ -2,7 +2,9 @@ package ru.itmo.indexbudget.application
 
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
 import ru.itmo.indexbudget.candidates.CandidateGenerator
+import ru.itmo.indexbudget.cli.IndexBudgetCli
 import ru.itmo.indexbudget.domain.*
 import ru.itmo.indexbudget.fixtures.ContractFixtures
 import ru.itmo.indexbudget.optimizer.ConfigurationEvaluator
@@ -15,6 +17,9 @@ import ru.itmo.indexbudget.report.ReportExporter
 import ru.itmo.indexbudget.sql.ParsedWorkload
 import ru.itmo.indexbudget.sql.SqlAnalyzer
 import java.io.IOException
+import java.io.PrintWriter
+import java.io.StringWriter
+import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Duration
 
@@ -168,8 +173,12 @@ class AnalysisPipelineTest {
     }
 
     @Test
-    fun `local hypothesis failure removes only that candidate and keeps a warning`() {
+    fun `local hypothesis failure retains the full report entry but excludes it from search`() {
         val run = Harness()
+        val rejected = run.shortlist.first().copy(
+            ddl = "CREATE INDEX ON public.records USING btree (created_at DESC NULLS FIRST)",
+        )
+        run.shortlist = listOf(rejected) + run.shortlist.drop(1)
         run.onSize = { candidate ->
             if (candidate.id == "records_created_at") problem(ErrorCode.HYPOTHETICAL_INDEX_ERROR)
         }
@@ -180,11 +189,55 @@ class AnalysisPipelineTest {
         val result = run.execute()
 
         assertEquals(RunStatus.COMPLETED, result.status)
-        assertEquals(listOf("records_group_created_at"), run.report?.candidates?.candidates?.map { it.id })
+        val reported = checkNotNull(run.report).candidates.candidates
+        assertEquals(listOf("records_created_at", "records_group_created_at"), reported.map { it.id })
+        assertEquals(rejected.copy(estimatedBytes = null, budgetedBytes = null, writeUnitsPerHour = null),
+            reported.first())
+        assertEquals(ContractFixtures.candidates().last(), reported.last())
+        assertEquals(listOf("records_group_created_at"), run.optimizedCandidateIds)
         assertEquals(listOf(emptyList(), listOf("records_group_created_at")), run.evaluatedSets)
         assertEquals(listOf(WarningCode.CANDIDATE_REJECTED), result.diagnostics.warnings.map { it.code })
         assertEquals("records_created_at", result.diagnostics.candidateDecisions.single().candidateId)
         assertEquals(CandidateReason.HYPOTHETICAL_INDEX_ERROR, result.diagnostics.candidateDecisions.single().reason)
+    }
+
+    @Test
+    fun `all rejected hypotheses remain reportable and skip search`() {
+        val run = Harness()
+        run.onSize = { problem(ErrorCode.HYPOTHETICAL_INDEX_ERROR) }
+        val result = run.execute()
+
+        assertEquals(RunStatus.COMPLETED, result.status)
+        assertEquals(listOf(StopReason.NO_CANDIDATES), result.diagnostics.stopReasons)
+        assertFalse("optimize" in run.events)
+        assertEquals(listOf(emptyList<String>()), run.evaluatedSets)
+        assertEquals(run.shortlist.map {
+            it.copy(estimatedBytes = null, budgetedBytes = null, writeUnitsPerHour = null)
+        }, run.report?.candidates?.candidates)
+        assertEquals(run.shortlist.map { it.id }, result.diagnostics.candidateDecisions.map { it.candidateId })
+        assertTrue(result.diagnostics.candidateDecisions.all { it.reason == CandidateReason.HYPOTHETICAL_INDEX_ERROR })
+        assertEquals(2, result.diagnostics.warnings.count { it.code == WarningCode.CANDIDATE_REJECTED })
+    }
+
+    @Test
+    fun `interruption after a rejected hypothesis retains both its entry and the unfinished suffix`() {
+        val run = Harness()
+        run.onSize = { candidate ->
+            problem(if (candidate.id == "records_created_at") ErrorCode.HYPOTHETICAL_INDEX_ERROR
+                else ErrorCode.DB_CONNECTION_ERROR)
+        }
+        val result = run.execute()
+
+        assertEquals(RunStatus.PARTIAL, result.status)
+        assertEquals(listOf(StopReason.CONNECTION_LOST), result.diagnostics.stopReasons)
+        assertEquals(run.shortlist.map {
+            it.copy(estimatedBytes = null, budgetedBytes = null, writeUnitsPerHour = null)
+        }, run.report?.candidates?.candidates)
+        assertEquals("records_created_at", result.diagnostics.candidateDecisions.single().candidateId)
+        assertEquals(CandidateReason.HYPOTHETICAL_INDEX_ERROR, result.diagnostics.candidateDecisions.single().reason)
+        assertEquals(listOf(WarningCode.CANDIDATE_REJECTED), result.diagnostics.warnings.map { it.code })
+        assertFalse("optimize" in run.events)
+        assertEquals(1, run.closeCalls)
     }
 
     @Test
@@ -414,8 +467,7 @@ class AnalysisPipelineTest {
             run.exportFailure = failure
             val error = assertThrows(AnalysisException::class.java) { run.execute() }.error
 
-            assertEquals(if (failure is AnalysisException && failure.error.code == ErrorCode.OUTPUT_DIRECTORY_NOT_EMPTY)
-                ErrorCode.OUTPUT_DIRECTORY_NOT_EMPTY else ErrorCode.EXPORT_FAILED, error.code)
+            assertEquals(ErrorCode.EXPORT_FAILED, error.code)
             assertFalse(error.message.contains("secret"))
             assertFalse(error.message.contains("external details"))
             assertEquals(1, run.closeCalls)
@@ -423,14 +475,47 @@ class AnalysisPipelineTest {
         }
     }
 
-    private class Harness(val input: WorkloadInput = ContractFixtures.workload()) {
+    @Test
+    fun `CLI returns export failure when output becomes occupied after validation`(@TempDir directory: Path) {
+        val output = Files.createDirectory(directory.resolve("output"))
+        val occupiedFile = output.resolve("other-run.txt")
+        var harness: Harness? = null
+        val cli = IndexBudgetCli(WorkloadReader(), analysisRunner = AnalysisRunner { input, path, context ->
+            val run = Harness(input, context, path)
+            harness = run
+            run.afterCheckpoint = { Files.writeString(occupiedFile, "Another run's artifact") }
+            run.beforeExport = { OutputDirectoryValidator().validate(path) }
+            run.createPipeline().run(input, path, context)
+        })
+        val err = StringWriter()
+        val exit = cli.execute(arrayOf("analyze", "--workload", "examples/workload-v2.json",
+            "--output-dir", output.toString()), PrintWriter(StringWriter()), PrintWriter(err))
+
+        val run = checkNotNull(harness)
+        assertEquals(1, exit)
+        assertTrue(err.toString().contains("EXPORT_FAILED:"))
+        assertFalse(err.toString().contains("OUTPUT_DIRECTORY_NOT_EMPTY:"))
+        assertEquals(3, run.evaluatedSets.size)
+        assertEquals(1, run.closeCalls)
+        assertTrue("export" in run.events)
+        assertFalse(AnalysisPhase.REPORT in run.context.completedPhases())
+        assertEquals("Another run's artifact", Files.readString(occupiedFile))
+        assertEquals(1L, Files.list(output).use { it.count() })
+    }
+
+    private class Harness(
+        val input: WorkloadInput = ContractFixtures.workload(),
+        suppliedContext: RunContext? = null,
+        private val outputDirectory: Path = Path.of("reports/test-run"),
+    ) {
         private var now = 0L
         val progress = mutableListOf<RunProgress>()
-        val context = RunContext(clock = NanoClock { now }, onProgress = { progress += it }).apply {
+        val context = suppliedContext ?: RunContext(clock = NanoClock { now }, onProgress = { progress += it }).apply {
             recordInputHash("a".repeat(64))
         }
         val events = mutableListOf<String>()
         val evaluatedSets = mutableListOf<List<String>>()
+        var optimizedCandidateIds = emptyList<String>()
         var openCalls = 0
         var closeCalls = 0
         var cancelCalls = 0
@@ -449,6 +534,7 @@ class AnalysisPipelineTest {
         var afterBaseline: () -> Unit = {}
         var onSize: (IndexCandidate) -> Unit = {}
         var afterCheckpoint: () -> Unit = {}
+        var beforeExport: () -> Unit = {}
         var exportFailure: Exception? = null
         var transformReport: (AnalysisReport) -> AnalysisReport = { it }
         var shortlist = ContractFixtures.candidates()
@@ -556,6 +642,7 @@ class AnalysisPipelineTest {
                                   comparator: ObjectiveComparator, context: RunContext,
                                   onCheckpoint: (SearchCheckpoint) -> Unit): SearchResult {
                 observe("optimize", context)
+                optimizedCandidateIds = candidates.candidates.map { it.id }
                 assertSame(session, evaluator)
                 assertSame(this@Harness.metrics, metrics)
                 assertSame(this@Harness.comparator, comparator)
@@ -607,7 +694,11 @@ class AnalysisPipelineTest {
         fun execute(): SearchResult {
             context.enterPhase(AnalysisPhase.VALIDATION)
             context.completePhase()
-            val pipeline = AnalysisPipeline(
+            return createPipeline().run(input, outputDirectory, context)
+        }
+
+        fun createPipeline(): AnalysisPipeline {
+            return AnalysisPipeline(
                 sqlAnalyzer = object : SqlAnalyzer {
                     override fun parse(input: WorkloadInput, context: RunContext): ParsedWorkload {
                         observe("parse", context)
@@ -647,10 +738,11 @@ class AnalysisPipelineTest {
                 },
                 reportExporter = ReportExporter { built, output, exportContext ->
                     observe("export", exportContext)
-                    assertEquals(Path.of("reports/test-run"), output)
+                    assertEquals(outputDirectory, output)
                     assertTrue(closed || openCalls == 0)
                     report = built
                     exportRemaining = context.remainingTime()
+                    beforeExport()
                     exportFailure?.let { throw it }
                 },
                 shutdownCancellation = ShutdownCancellation { cancel ->
@@ -658,7 +750,6 @@ class AnalysisPipelineTest {
                     AutoCloseable { unregisterCalls++; events += "unregister" }
                 },
             )
-            return pipeline.run(input, Path.of("reports/test-run"), context)
         }
     }
 

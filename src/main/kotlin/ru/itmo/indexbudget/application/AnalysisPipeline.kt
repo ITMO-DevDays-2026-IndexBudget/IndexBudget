@@ -87,16 +87,16 @@ class AnalysisPipeline(
                 context.enterPhase(AnalysisPhase.CANDIDATES)
                 candidateBatch = candidateGenerator.generate(resolved, catalog, context)
                 context.checkDeadline()
-                prepareCandidateSizes(candidateBatch, session, input, context) { preparedBatch ->
+                val searchCandidates = prepareCandidateSizes(candidateBatch, session, input, context) { preparedBatch ->
                     candidateBatch = preparedBatch
                 }
                 context.completePhase()
-                if (candidateBatch.candidates.isEmpty()) {
+                if (searchCandidates.candidates.isEmpty()) {
                     result = SearchResult.Completed(input.objective, evaluatedBaseline, empty, empty,
                         SearchDiagnostics(stopReasons = listOf(StopReason.NO_CANDIDATES)))
                 } else {
                     context.enterPhase(AnalysisPhase.GREEDY)
-                    result = optimizer.optimize(resolved, candidateBatch, evaluatedBaseline, session, metrics,
+                    result = optimizer.optimize(resolved, searchCandidates, evaluatedBaseline, session, metrics,
                         comparator, context) { saved ->
                         validateCheckpoint(saved, evaluatedBaseline)
                         checkpoint = saved
@@ -161,9 +161,7 @@ class AnalysisPipeline(
             reportExporter.export(report, outputDirectory, context)
             context.completePhase()
         } catch (error: AnalysisException) {
-            if (error.error.code == ErrorCode.EXPORT_FAILED || error.error.code == ErrorCode.OUTPUT_DIRECTORY_NOT_EMPTY) {
-                throw error
-            }
+            if (error.error.code == ErrorCode.EXPORT_FAILED) throw error
             throw exportError()
         } catch (_: Exception) {
             throw exportError()
@@ -171,16 +169,17 @@ class AnalysisPipeline(
         return finalResult
     }
 
-    /** Publish each prepared prefix before checking the deadline, so partial reports retain it. */
+    /** Preserve the full shortlist for reports; return only usable candidates for search. */
     private fun prepareCandidateSizes(
         shortlist: CandidateBatch,
         session: AnalysisSession,
         input: WorkloadInput,
         context: RunContext,
         onPrepared: (CandidateBatch) -> Unit,
-    ) {
-        var preparedBatch = shortlist
+    ): CandidateBatch {
+        var reportBatch = shortlist
         val preparedCandidates = mutableListOf<IndexCandidate>()
+        val reportedCandidates = mutableListOf<IndexCandidate>()
         val shortlistedCandidates = shortlist.candidates
         for ((index, candidate) in shortlistedCandidates.withIndex()) {
             context.checkDeadline()
@@ -191,28 +190,33 @@ class AnalysisPipeline(
                 ))
                 val sized = candidate.copy(estimatedBytes = bytes)
                 val usage = metrics.assessBudget(listOf(sized), input).usage
-                preparedCandidates += sized.copy(budgetedBytes = usage.budgetedBytes,
+                val prepared = sized.copy(budgetedBytes = usage.budgetedBytes,
                     writeUnitsPerHour = usage.writeUnitsPerHour)
+                preparedCandidates += prepared
+                reportedCandidates += prepared
             } catch (error: AnalysisException) {
                 if (error.error.code != ErrorCode.HYPOTHETICAL_INDEX_ERROR) throw error
-                preparedBatch = preparedBatch.copy(diagnostics = preparedBatch.diagnostics.copy(
-                    decisions = preparedBatch.diagnostics.decisions + CandidateDecision(
+                reportedCandidates += candidate.copy(estimatedBytes = null, budgetedBytes = null,
+                    writeUnitsPerHour = null)
+                reportBatch = reportBatch.copy(diagnostics = reportBatch.diagnostics.copy(
+                    decisions = reportBatch.diagnostics.decisions + CandidateDecision(
                         CandidateReason.HYPOTHETICAL_INDEX_ERROR, candidateId = candidate.id,
                         phase = AnalysisPhase.CANDIDATES,
                     ),
-                    warnings = preparedBatch.diagnostics.warnings + AnalysisWarning(
+                    warnings = reportBatch.diagnostics.warnings + AnalysisWarning(
                         WarningCode.CANDIDATE_REJECTED, "A hypothetical index could not be created.",
                         details = mapOf("candidate_id" to candidate.id),
                     ),
                 ))
             }
-            // Unvisited candidates keep their unknown estimates, including on interruption.
-            preparedBatch = preparedBatch.copy(
-                candidates = preparedCandidates.toList() + shortlistedCandidates.drop(index + 1),
+            // Publish before checking the deadline: failed and unvisited entries keep unknown estimates.
+            reportBatch = reportBatch.copy(
+                candidates = reportedCandidates.toList() + shortlistedCandidates.drop(index + 1),
             )
-            onPrepared(preparedBatch)
+            onPrepared(reportBatch)
             context.checkDeadline()
         }
+        return reportBatch.copy(candidates = preparedCandidates.toList())
     }
 
     private fun finalizeResult(
