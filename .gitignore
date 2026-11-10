@@ -9,6 +9,7 @@ out/
 .env.*
 !.env.example
 reports/
+/index.html
 
 *.env
 *.dump
