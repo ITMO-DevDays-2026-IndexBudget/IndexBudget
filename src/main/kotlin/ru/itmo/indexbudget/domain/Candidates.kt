@@ -1,6 +1,15 @@
 package ru.itmo.indexbudget.domain
 
-enum class GenerationReason { SINGLE_COLUMN, ORDER_BY_PAIR, EQUALITY_AND_ORDER, EQUALITY_AND_RANGE, TWO_EQUALITIES }
+enum class GenerationReason(val pairPriority: Int? = null) {
+    SINGLE_COLUMN,
+    ORDER_BY_PAIR(0),
+    EQUALITY_AND_ORDER(1),
+    EQUALITY_AND_RANGE(2),
+    TWO_EQUALITIES(3),
+}
+
+/** Shared local/global pair ordering; all generation reasons remain available as provenance. */
+fun IndexCandidate.bestPairPriority(): Int? = generationReasons.mapNotNull { it.pairPriority }.minOrNull()
 
 /** Unknown estimates stay null. The PostgreSQL adapter fills sizes only for the final shortlist. */
 data class IndexCandidate(

@@ -1,7 +1,7 @@
 # Декомпозиция: метрики, бюджеты и компаратор (Равиль)
 
 > Рабочая заметка по [трекеру #16](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/issues/16), не альтернативная спецификация.
-> Статус на 10.11.2026: T5 принята в [PR #34](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/pull/34); общий helper T1 — в [PR #32](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/pull/32); T2 проходит исправления в [PR #37](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/pull/37).
+> Статус на 10.11.2026: T5 принята в [PR #34](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/pull/34); общий helper T1 — в [PR #32](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/pull/32); T2 принята в [PR #37](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/pull/37); T3 реализована в изменениях #41.
 > Формулы и фикстуры нужны к 10.11; PoC-стыки и минимальная сверка на настоящих costs — к 11.11. Полная проверка относится к MVP #21.
 
 ## Подзадачи (порядок исполнения)
@@ -10,8 +10,8 @@
 |----|-----------|-------|-------|--------|
 | **T5** | Fake `ConfigurationEvaluator` + cost-фикстуры (mean-vs-robust, plateau, 0→2, 1→2), #38 | `feat/metrics-fixtures` | Тестовый evaluator и полные векторы для поиска | PR #34 принят |
 | **T1** | Нормирование весов + инварианты (underflow, sum, конечность) | `main` | Общий `ProfileWeights` для CLI и метрик (`p_s = w/sum`, ошибки NUMERIC_ERROR) | PR #32 принят |
-| **T2** | Метрики профилей и агрегаты `M`/`R`, #40 | `feat/profile-metrics` с актуальным `main` | `MetricsCalculatorImpl.calculate(...)` → `SetMetrics`; `assessBudget` — NOT_IMPLEMENTED до T3 | Исправления PR #37 |
-| **T3** | Бюджеты: storage (1.2/ceil) + write units | `feat/budget-assessment` | `assessBudget(...)` → `BudgetAssessment` (заменить заглушку) | ⏳ |
+| **T2** | Метрики профилей и агрегаты `M`/`R`, #40 | `feat/profile-metrics` с актуальным `main` | `MetricsCalculatorImpl.calculate(...)` → `SetMetrics` | PR #37 принят |
+| **T3** | Бюджеты: storage (1.2/ceil) + write units, #41 | `feat/budget-assessment-41` | `assessBudget(...)` → `BudgetAssessment`, точные границы и явные ошибки | Реализовано, числовые тесты и проверка стыка с pipeline без БД |
 | **T4** | Компаратор: `compare` + `improvesPrimaryMetrics` | `feat/objective-comparator` | детерминированный ключ; гейт greedy | ⏳ |
 | **T6** | Zero-baseline регрессия и baseline-only, #43 | `feat/zero-baseline-regression` | Проверка допустимости после EXPLAIN и сигнал остановки поиска | ⏳ |
 | **T7** | `priceOfRobustness` из одного пула | `feat/price-of-robustness` | `C_mean(best_robust) − C_mean(best_mean)` | ⏳ |

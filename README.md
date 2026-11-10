@@ -64,10 +64,10 @@ UNSUPPORTED_SCHEMA_VERSION: {"code":"UNSUPPORTED_SCHEMA_VERSION","message":"Expe
 | --- | --- |
 | `cli` | Аргументы, сообщения и коды выхода |
 | `application` | Входной JSON, проверка разрешённого write profile, orchestration и владение ресурсами |
-| `domain` | Модели v2, результаты, лимиты и ошибки без Spring/JDBC/AST |
+| `domain` | Модели v2, метрики и бюджеты, интерфейс сравнения, результаты, лимиты и ошибки без Spring/JDBC/AST |
 | `sql` | AST-валидация и разрешение имён через CatalogSnapshot; полный ResolvedWorkload для генератора |
 | `candidates` | Ограниченный перечислитель, интерфейсы полного генератора shortlist и DDL |
-| `optimizer` | Интерфейсы метрик, бюджетов, сравнения и поиска |
+| `optimizer` | Интерфейсы поиска и оценки конфигураций |
 | `postgres` | JDBC-каталог, интерфейсы выделенной сессии и evaluator |
 | `report` | Интерфейсы сборки отчёта, экспорта и HTML-рендеринга |
 

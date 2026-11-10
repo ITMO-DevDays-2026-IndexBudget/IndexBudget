@@ -9,6 +9,10 @@ import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable
+import ru.itmo.indexbudget.candidates.BtreeCandidateCanonicalizer
+import ru.itmo.indexbudget.candidates.CandidateScope
+import ru.itmo.indexbudget.candidates.CandidateVariant
+import ru.itmo.indexbudget.candidates.PostgresDdlRenderer
 import ru.itmo.indexbudget.domain.*
 import ru.itmo.indexbudget.sql.JSqlParserSqlAnalyzer
 
@@ -272,6 +276,82 @@ class JdbcCatalogReaderIntegrationTest {
         sql("CREATE TABLE records (id integer PRIMARY KEY, a integer NOT NULL, b integer, label varchar(50))")
         sql("INSERT INTO records SELECT i, i % 10, i % 7, 'item' || i FROM generate_series(1, 100) i")
     }
+
+    @Test
+    fun `canonical DDL roundtrips quoted names explicit collation opclass and key ordering`() {
+        sql("CREATE TABLE \"Odd.Table\" (\"a\"\"Key\" varchar(50), b integer)")
+        sql("CREATE COLLATION \"Coll.a\"\"tion\" FROM pg_catalog.\"C\"")
+        asReader()
+        val table = TableRef(schema, "Odd.Table")
+        val definition = IndexDefinition(table, listOf(
+            IndexKey(ColumnRef(table, "a\"Key"), SortDirection.DESC, NullsOrder.LAST,
+                "$schema.\"Coll.a\"\"tion\"", "pg_catalog.varchar_pattern_ops"),
+            IndexKey(ColumnRef(table, "b"), SortDirection.ASC, NullsOrder.FIRST),
+        ))
+        val before = reader.readCatalog(setOf(TableName(table.name, schema)), RunContext())
+        val candidate = BtreeCandidateCanonicalizer(before, RunContext()).canonicalize(candidateScope(definition)).candidates.single()
+        assertEquals(PostgresDdlRenderer().render(candidate.definition), candidate.ddl)
+        sql("RESET ROLE")
+        sql(requireNotNull(candidate.ddl)) // Physical DDL only in this explicitly disposable test database.
+        asReader()
+        val after = reader.readCatalog(setOf(TableName(table.name, schema)), RunContext())
+        val index = after.tables.single().existingIndexes.single()
+        assertEquals("ib_" + candidate.id.take(60), index.name)
+        assertEquals(listOf("a\"Key", "b"), index.keys.map { it.column.name })
+        assertEquals(listOf(SortDirection.DESC, SortDirection.ASC), index.keys.map { it.direction })
+        assertEquals(listOf(NullsOrder.LAST, NullsOrder.FIRST), index.keys.map { it.nulls })
+        assertEquals("$schema.\"Coll.a\"\"tion\"", index.keys[0].collation)
+        assertEquals(listOf("pg_catalog.varchar_pattern_ops", "pg_catalog.int4_ops"), index.keys.map { it.operatorClass })
+        assertNull(index.keys[1].collation)
+        val result = BtreeCandidateCanonicalizer(after, RunContext()).canonicalize(candidateScope(definition))
+        assertTrue(result.candidates.isEmpty())
+        assertEquals(candidate.id, result.decisions.single().candidateId)
+        assertEquals(CandidateReason.EXACT_EXISTING_DUPLICATE, result.decisions.single().reason)
+    }
+
+    @Test
+    fun `real index exclusions match only exact available structures with resolved defaults`() {
+        recordsFixture()
+        sql("CREATE INDEX pair_idx ON records (a, b)")
+        sql("CREATE INDEX partial_idx ON records (a) WHERE b > 0")
+        sql("CREATE INDEX include_idx ON records (a) INCLUDE (label)")
+        sql("CREATE INDEX expression_idx ON records ((a + 1))")
+        sql("CREATE INDEX hash_idx ON records USING hash (a)")
+        sql("CREATE INDEX descending_idx ON records (a DESC)")
+        sql("CREATE INDEX nulls_idx ON records (a ASC NULLS FIRST)")
+        sql("CREATE INDEX pattern_idx ON records (label varchar_pattern_ops)")
+        sql("CREATE INDEX collation_idx ON records (label COLLATE \"C\")")
+        assertThrows(SQLException::class.java) { sql("CREATE UNIQUE INDEX CONCURRENTLY invalid_idx ON records (a)") }
+        asReader()
+        val before = reader.readCatalog(setOf(TableName("records")), RunContext())
+        val table = before.tables.single().ref
+        val canonicalizer = BtreeCandidateCanonicalizer(before, RunContext())
+        val definitions = listOf("a", "label").map { IndexDefinition(table, listOf(IndexKey(ColumnRef(table, it)))) }
+        val candidates = definitions.map {
+            val result = canonicalizer.canonicalize(candidateScope(it))
+            assertTrue(result.decisions.isEmpty())
+            result.candidates.single()
+        }
+        sql("RESET ROLE")
+        candidates.forEach { sql(requireNotNull(it.ddl)) }
+        asReader()
+        val after = reader.readCatalog(setOf(TableName("records")), RunContext())
+        assertEquals(before.tables.single().existingIndexes.toSet(),
+            after.tables.single().existingIndexes.filterNot { it.name.startsWith("ib_") }.toSet())
+        val finalCanonicalizer = BtreeCandidateCanonicalizer(after, RunContext())
+        for ((definition, candidate) in definitions.zip(candidates)) {
+            val result = finalCanonicalizer.canonicalize(candidateScope(definition))
+            assertTrue(result.candidates.isEmpty())
+            assertEquals(candidate.id, result.decisions.single().candidateId)
+        }
+    }
+
+    private fun candidateScope(definition: IndexDefinition) = CandidateScope(
+        "q", definition.table, definition.keys.size, definition.keys.map { it.column }, emptyList(),
+        listOf(CandidateVariant(definition, setOf("q"), setOf(
+            if (definition.keys.size == 1) GenerationReason.SINGLE_COLUMN else GenerationReason.ORDER_BY_PAIR,
+        ))), emptyList(), emptyList(),
+    )
 
     private fun asReader() {
         sql("GRANT SELECT ON ALL TABLES IN SCHEMA $schema TO $role")
