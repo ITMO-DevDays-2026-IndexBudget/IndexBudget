@@ -4,8 +4,11 @@ import java.sql.Connection
 import java.sql.PreparedStatement
 import java.sql.ResultSet
 import java.sql.SQLException
+import java.sql.Statement
 import java.time.Duration
 import java.util.concurrent.Executor
+import java.util.concurrent.ScheduledThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import ru.itmo.indexbudget.candidates.DdlRenderer
 import ru.itmo.indexbudget.candidates.PostgresDdlRenderer
@@ -31,6 +34,14 @@ class JdbcAnalysisSession(
     private val ddlRenderer: DdlRenderer = PostgresDdlRenderer(),
 ) : AnalysisSession {
     private val closed = AtomicBoolean()
+    private val operationLock = Any()
+    private var activeOperation: Operation? = null
+    private val watchdog = ScheduledThreadPoolExecutor(1) { task ->
+        Thread(task, "indexbudget-sql-deadline").apply { isDaemon = true }
+    }.apply {
+        removeOnCancelPolicy = true
+        setExecuteExistingDelayedTasksAfterShutdownPolicy(false)
+    }
     @Volatile private var activeContext: RunContext? = null
     private var extensionSchema: String? = null
     private var extensionChecked = false
@@ -47,6 +58,7 @@ class JdbcAnalysisSession(
                 beforeQuery = { run ->
                     configureTimeout(run, run.remainingTime())
                 },
+                beforeExecute = { statement, run -> guardOperation(run, statement) },
             ).readCatalog(tables, context)
         } catch (error: AnalysisException) {
             val mapped = mapExistingError(error, context)
@@ -139,13 +151,23 @@ class JdbcAnalysisSession(
                 if (primary == null) {
                     context.checkDeadline()
                     fail(ErrorCode.DB_CONNECTION_ERROR, "Analysis connection is closed")
+                } else {
+                    try {
+                        context.checkDeadline()
+                    } catch (stop: AnalysisException) {
+                        if ((primary as? AnalysisException)?.error?.code != stop.error.code) {
+                            primary.addSuppressed(stop)
+                        }
+                    }
                 }
             } else {
                 try {
                     if (primary != null && !connection.autoCommit) {
-                        configureNetworkTimeout(context.remainingTime())
-                        context.checkDeadline()
-                        connection.rollback()
+                        guardOperation(context).use {
+                            configureNetworkTimeout(context.remainingTime())
+                            context.checkDeadline()
+                            connection.rollback()
+                        }
                         context.checkDeadline()
                     }
                     reset(context)
@@ -253,16 +275,20 @@ class JdbcAnalysisSession(
             val limit = if (explain) context.explainTimeLimit() else context.remainingTime()
             configureTimeout(context, limit)
             return connection.prepareStatement(sql).use { statement ->
-                ensureOpen(context)
-                statement.queryTimeout = seconds(limit)
-                statement.bind()
-                context.checkDeadline()
-                if (explain) context.reserveExplainAttempt()
-                context.checkDeadline()
-                statement.executeQuery().use { rows ->
-                    val result = read(rows)
+                guardOperation(context, statement).use {
+                    ensureOpen(context)
+                    val remaining = minOf(limit, context.remainingTime())
+                    statement.queryTimeout = seconds(remaining)
+                    statement.bind()
                     context.checkDeadline()
-                    result
+                    ensureOpen(context)
+                    val rows = if (explain) context.withExplainAttempt { statement.executeQuery() }
+                        else statement.executeQuery()
+                    rows.use {
+                        val result = read(rows)
+                        context.checkDeadline()
+                        result
+                    }
                 }
             }
         } catch (error: SQLException) {
@@ -272,18 +298,62 @@ class JdbcAnalysisSession(
 
     /** Millisecond server timeout complements JDBC's rounded, whole-second timeout. */
     private fun configureTimeout(context: RunContext, limit: Duration) {
-        ensureOpen(context)
-        val remaining = minOf(limit, context.remainingTime())
-        configureNetworkTimeout(context.remainingTime())
-        connection.prepareStatement("SELECT pg_catalog.set_config('statement_timeout', ?, false)").use { statement ->
+        try {
             ensureOpen(context)
-            statement.queryTimeout = seconds(context.remainingTime())
-            statement.setString(1, "${milliseconds(remaining)}ms")
-            context.checkDeadline()
-            statement.executeQuery().use { rows ->
-                if (!rows.next()) fail(ErrorCode.DB_CONNECTION_ERROR, "Unable to set SQL timeout")
+            configureNetworkTimeout(context.remainingTime())
+            connection.prepareStatement("SELECT pg_catalog.set_config('statement_timeout', ?, false)").use { statement ->
+                guardOperation(context, statement).use {
+                    ensureOpen(context)
+                    statement.queryTimeout = seconds(context.remainingTime())
+                    statement.setString(1, "${milliseconds(minOf(limit, context.remainingTime()))}ms")
+                    context.checkDeadline()
+                    statement.executeQuery().use { rows ->
+                        if (!rows.next()) fail(ErrorCode.DB_CONNECTION_ERROR, "Unable to set SQL timeout")
+                    }
+                    context.checkDeadline()
+                }
             }
-            context.checkDeadline()
+        } catch (error: SQLException) {
+            // Failure of session configuration is never a local candidate/EXPLAIN failure.
+            abortQuietly()
+            throw databaseError(error, ErrorCode.DB_CONNECTION_ERROR, context)
+        }
+    }
+
+    /** Each scope covers execute and result consumption, including catalog SQL and rollback. */
+    private fun guardOperation(context: RunContext, statement: Statement? = null): AutoCloseable {
+        val operation = Operation(context, statement)
+        synchronized(operationLock) {
+            ensureOpen(context)
+            check(activeOperation == null) { "Concurrent SQL on one analysis session" }
+            activeOperation = operation
+            operation.arm()
+        }
+        return operation
+    }
+
+    private inner class Operation(val context: RunContext, val statement: Statement?) : AutoCloseable {
+        private var timer: java.util.concurrent.ScheduledFuture<*>? = null
+
+        fun arm() {
+            timer = watchdog.schedule({
+                synchronized(operationLock) {
+                    if (activeOperation !== this || closed.get()) return@schedule
+                    // Recheck the shared monotonic clock; test clocks may advance independently.
+                    if (!context.isCancelled && !context.remainingTime().isZero) {
+                        arm()
+                        return@schedule
+                    }
+                }
+                abortQuietly(this)
+            }, context.remainingTime().toNanos(), TimeUnit.NANOSECONDS)
+        }
+
+        override fun close() {
+            synchronized(operationLock) {
+                timer?.cancel(false)
+                if (activeOperation === this) activeOperation = null
+            }
         }
     }
 
@@ -318,8 +388,10 @@ class JdbcAnalysisSession(
             abortQuietly()
             return stop
         }
-        val state = error.sqlState?.takeIf { it.matches(Regex("[A-Z0-9]{5}")) }
-        val broken = closed.get() || state?.startsWith("08") == true || state in setOf("57P01", "57P02", "57P03") ||
+        val connectionFailure = jdbcConnectionFailure(error)
+        val state = ((connectionFailure as? SQLException)?.sqlState ?: error.sqlState)
+            ?.takeIf { it.matches(Regex("[A-Z0-9]{5}")) }
+        val broken = closed.get() || connectionFailure != null ||
             try { connection.isClosed } catch (_: SQLException) { true }
         if (broken) abortQuietly()
         val code = if (broken) ErrorCode.DB_CONNECTION_ERROR else fallback
@@ -345,6 +417,7 @@ class JdbcAnalysisSession(
 
     /** JDBC close failures attached by use must not retain driver messages or connection details. */
     private fun sanitize(error: AnalysisException): AnalysisException {
+        if (jdbcConnectionFailure(error) != null) abortQuietly()
         if (error.suppressed.isEmpty() && error.cause == null) return error
         return AnalysisException(error.error).also { safe ->
             for (suppressed in error.suppressed) {
@@ -356,26 +429,40 @@ class JdbcAnalysisSession(
 
     override fun cancel() {
         activeContext?.cancel()
-        // abort closes the socket and interrupts the active SQL without issuing cleanup SQL.
+        // Cancel is advisory; physical abort also releases a socket if cancel cannot reach the server.
         abortQuietly()
     }
 
     override fun close() {
-        if (!closed.compareAndSet(false, true)) return
+        synchronized(operationLock) {
+            if (!closed.compareAndSet(false, true)) return
+        }
+        watchdog.shutdownNow()
         try {
             connection.close()
-        } catch (_: SQLException) {
-            try { connection.abort(DIRECT_EXECUTOR) } catch (_: SQLException) { /* Best effort after failed close. */ }
+        } catch (_: Exception) {
+            try { connection.abort(DIRECT_EXECUTOR) } catch (_: Exception) { /* Best effort after failed close. */ }
             fail(ErrorCode.DB_CONNECTION_ERROR, "Unable to close analysis connection")
         }
     }
 
-    private fun abortQuietly() {
-        if (!closed.compareAndSet(false, true)) return
+    private fun abortQuietly(expected: Operation? = null) {
+        val statement = synchronized(operationLock) {
+            if (expected != null && activeOperation !== expected) return
+            if (!closed.compareAndSet(false, true)) return
+            activeOperation?.statement
+        }
+        watchdog.shutdownNow()
+        if (statement != null) {
+            // A driver's cancel call may itself block on the network; it must not postpone abort.
+            Thread.ofVirtual().name("indexbudget-sql-cancel").start {
+                try { statement.cancel() } catch (_: Exception) { /* Physical abort is authoritative. */ }
+            }
+        }
         try {
             connection.abort(DIRECT_EXECUTOR)
-        } catch (_: SQLException) {
-            try { connection.close() } catch (_: SQLException) { /* The original failure remains primary. */ }
+        } catch (_: Exception) {
+            try { connection.close() } catch (_: Exception) { /* The original failure remains primary. */ }
         }
     }
 

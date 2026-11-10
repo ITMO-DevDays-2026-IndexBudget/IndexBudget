@@ -438,6 +438,8 @@ class HtmlReportRenderer : ReportRenderer {
         CandidateReason.GLOBAL_CANDIDATE_LIMIT -> "Общий лимит"
         CandidateReason.STORAGE_BUDGET -> "Превышение бюджета места"
         CandidateReason.WRITE_BUDGET -> "Превышение бюджета записи"
+        CandidateReason.MAX_INDEXES -> "Достигнут лимит индексов"
+        CandidateReason.EVALUATION_FAILED -> "Ошибка оценки набора"
         CandidateReason.HYPOTHETICAL_INDEX_ERROR -> "Ошибка гипотезы"
         CandidateReason.NO_MARGINAL_IMPROVEMENT -> "Нет предельной пользы на шаге"
         CandidateReason.NOT_SELECTED -> "Не выбран поиском"

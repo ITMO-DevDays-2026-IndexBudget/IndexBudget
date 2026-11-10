@@ -105,7 +105,7 @@ UNSUPPORTED_SCHEMA_VERSION: {"code":"UNSUPPORTED_SCHEMA_VERSION","message":"Expe
 ./gradlew --no-daemon test --tests 'ru.itmo.indexbudget.report.*' --tests '*ReportIntegrationTest' --tests '*ReportConfigurationTest'
 ```
 
-## Оценка наборов через HypoPG (#13)
+## Оценка наборов через HypoPG (#13, #15)
 
 `JdbcAnalysisSessionFactory` открывает одно физическое соединение из `INDEXBUDGET_DATABASE_URL`
 (формат `jdbc:postgresql://host:port/database?user=...&password=...`). Переменная читается
@@ -120,6 +120,15 @@ SQL передаются целиком в `EXPLAIN (FORMAT JSON)` по query ID
 закрывает соединение при отмене или исчерпании времени. Реальные индексы и настройки
 планировщика сохраняются; `ANALYZE` и реальные CREATE INDEX адаптер не выполняет.
 
+Все операции используют общий `RunContext`: 90 секунд на команду, минимум остатка
+команды и 60 секунд с начала baseline для поиска, до 2 секунд на EXPLAIN, до 5 секунд
+на подключение и до 2000 фактически начатых EXPLAIN, включая неуспешные. Клиентский
+контроль deadline отменяет активный SQL и прерывает соединение. Отдельный timeout
+EXPLAIN обесценивает весь набор; продолжение возможно после восстановления сессии.
+При полном baseline остановка сохраняет лучший полный результат как `partial`,
+без полного baseline получается `failed`. Ошибки отдельного кандидата и потери
+соединения имеют разные коды; JDBC-сообщения с секретами в отчёт не попадают.
+
 Интеграционные проверки на собственной одноразовой PostgreSQL 16 + HypoPG:
 
 ```sh
@@ -129,7 +138,7 @@ bash demo/check-hypopg.sh
 Нужны Docker и JDK 25. Скрипт собирает существующий образ, создаёт отдельную БД на случайном
 loopback-порту, запускает тесты и удаляет только свои контейнер и тег образа. Секреты и
 данные общего стенда не используются. Без `INDEXBUDGET_HYPOPG_TEST_URL` обычный `test`
-пропускает этот integration-класс. Детали контрактов — в [docs/contracts.md](docs/contracts.md#сессия-hypopg-13).
+пропускает этот integration-класс. Детали контрактов — в [docs/contracts.md](docs/contracts.md#сессия-hypopg-лимиты-и-отмена-13-15).
 
 ## HTML-отчёт (#20)
 

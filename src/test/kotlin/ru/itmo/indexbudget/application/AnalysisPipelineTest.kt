@@ -5,12 +5,14 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.EnumSource
+import org.junit.jupiter.params.provider.ValueSource
 import ru.itmo.indexbudget.candidates.CandidateGenerator
 import ru.itmo.indexbudget.cli.IndexBudgetCli
 import ru.itmo.indexbudget.domain.*
 import ru.itmo.indexbudget.fixtures.ContractFixtures
 import ru.itmo.indexbudget.optimizer.ConfigurationEvaluator
 import ru.itmo.indexbudget.optimizer.GreedyOptimizer
+import ru.itmo.indexbudget.optimizer.LimitedRepairOptimizer
 import ru.itmo.indexbudget.optimizer.Optimizer
 import ru.itmo.indexbudget.optimizer.SearchCheckpoint
 import ru.itmo.indexbudget.postgres.AnalysisSession
@@ -69,6 +71,34 @@ class AnalysisPipelineTest {
         assertEquals(RunStatistics(4, 3, 2), result.diagnostics.statistics)
         assertEquals(ContractFixtures.robustEvaluation().plansByQueryId, result.selected?.evaluation?.plansByQueryId)
         assertEquals(3, run.evaluatedSets.size)
+        assertEquals(1, run.closeCalls)
+        assertSame(result, run.report?.result)
+    }
+
+    @Test
+    fun `failed vector retains both query and cleanup stop reasons with saved greedy incumbent`() {
+        val run = Harness(suppliedMetrics = MetricsCalculatorImpl(),
+            suppliedComparator = ObjectiveComparatorImpl(), suppliedOptimizer = GreedyOptimizer())
+        val queryFailure = AnalysisError(ErrorCode.EXPLAIN_FAILED, "EXPLAIN timed out.", queryId = "records_by_value")
+        val cleanupFailure = AnalysisError(ErrorCode.DEADLINE_EXCEEDED, "Cleanup reached the analysis deadline.")
+        run.beforeEvaluation = { ids ->
+            if (ids == listOf("records_group_created_at")) {
+                throw AnalysisException(queryFailure).apply {
+                    addSuppressed(AnalysisException(cleanupFailure))
+                }
+            }
+        }
+
+        val result = run.execute()
+
+        assertEquals(RunStatus.PARTIAL, result.status)
+        assertEquals(listOf(StopReason.EVALUATION_FAILED, StopReason.DEADLINE_EXCEEDED),
+            result.diagnostics.stopReasons)
+        assertEquals(listOf(queryFailure, cleanupFailure), result.diagnostics.errors)
+        assertEquals(ContractFixtures.robustEvaluation(), result.bestRobust?.evaluation)
+        assertEquals(result.bestRobust, result.bestMean)
+        assertEquals(3, run.evaluatedSets.size)
+        assertEquals(4, result.diagnostics.statistics.explainAttempts)
         assertEquals(1, run.closeCalls)
         assertSame(result, run.report?.result)
     }
@@ -139,6 +169,76 @@ class AnalysisPipelineTest {
             assertEquals(0, result.diagnostics.statistics.completedEvaluations)
             assertEquals(ErrorCode.EXPLAIN_FAILED, (result as SearchResult.Failed).error.code)
         }
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = [1, 5])
+    fun `EXPLAIN exhaustion in a vector exports only previously completed evaluations`(limit: Int) {
+        val context = RunContext(limits = RunLimits(maxExplainAttempts = limit), clock = NanoClock { 0L })
+            .apply { recordInputHash("a".repeat(64)) }
+        val run = Harness(suppliedContext = context, suppliedMetrics = MetricsCalculatorImpl(),
+            suppliedComparator = ObjectiveComparatorImpl(), suppliedOptimizer = LimitedRepairOptimizer())
+
+        val result = run.execute()
+
+        assertEquals(limit, result.diagnostics.statistics.explainAttempts)
+        assertEquals(if (limit == 1) 0 else 2, result.diagnostics.statistics.completedEvaluations)
+        assertEquals(if (limit == 1) 1 else 3, run.evaluatedSets.size)
+        if (limit == 1) {
+            assertEquals(RunStatus.FAILED, result.status)
+            assertEquals(ErrorCode.EXPLAIN_LIMIT, (result as SearchResult.Failed).error.code)
+            assertNull(result.baseline)
+            assertNull(result.selected)
+            assertFalse("generate" in run.events)
+        } else {
+            assertEquals(RunStatus.PARTIAL, result.status)
+            assertTrue(StopReason.EXPLAIN_LIMIT in result.diagnostics.stopReasons)
+            assertEquals(ContractFixtures.baselineEvaluation(), result.baseline)
+            assertEquals(ContractFixtures.robustEvaluation(), result.bestRobust?.evaluation)
+            assertEquals(result.bestRobust, result.bestMean)
+            assertFalse(result.selected?.evaluation?.candidateIds.orEmpty().contains("records_group_created_at"))
+        }
+        assertSame(result, run.report?.result)
+        assertEquals(1, run.closeCalls)
+        assertTrue(run.events.indexOf("close") < run.events.indexOf("report"))
+        // Report construction and export must not spend the last EXPLAIN slot or retry a vector.
+        assertEquals(limit, context.statistics().explainAttempts)
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = [1, 5])
+    fun `deadline in a vector preserves complete incumbents but never a partial baseline`(explainAtDeadline: Int) {
+        var now = 0L
+        val context = RunContext(clock = NanoClock { now }, onProgress = { progress ->
+            if (progress.statistics.explainAttempts == explainAtDeadline) {
+                now = Duration.ofSeconds(60).toNanos()
+            }
+        }).apply { recordInputHash("a".repeat(64)) }
+        val run = Harness(suppliedContext = context, suppliedMetrics = MetricsCalculatorImpl(),
+            suppliedComparator = ObjectiveComparatorImpl(), suppliedOptimizer = LimitedRepairOptimizer())
+
+        val result = run.execute()
+
+        assertEquals(explainAtDeadline, result.diagnostics.statistics.explainAttempts)
+        assertEquals(if (explainAtDeadline == 1) 0 else 2,
+            result.diagnostics.statistics.completedEvaluations)
+        assertEquals(if (explainAtDeadline == 1) 1 else 3, run.evaluatedSets.size)
+        if (explainAtDeadline == 1) {
+            assertEquals(RunStatus.FAILED, result.status)
+            assertEquals(ErrorCode.DEADLINE_EXCEEDED, (result as SearchResult.Failed).error.code)
+            assertNull(result.baseline)
+            assertNull(result.selected)
+        } else {
+            assertEquals(RunStatus.PARTIAL, result.status)
+            assertTrue(StopReason.DEADLINE_EXCEEDED in result.diagnostics.stopReasons)
+            assertEquals(ContractFixtures.baselineEvaluation(), result.baseline)
+            assertEquals(ContractFixtures.robustEvaluation(), result.bestRobust?.evaluation)
+            assertEquals(result.bestRobust, result.bestMean)
+        }
+        assertEquals(Duration.ofSeconds(30), run.exportRemaining)
+        assertEquals(1, run.cancelCalls)
+        assertEquals(1, run.closeCalls)
+        assertSame(result, run.report?.result)
     }
 
     @Test

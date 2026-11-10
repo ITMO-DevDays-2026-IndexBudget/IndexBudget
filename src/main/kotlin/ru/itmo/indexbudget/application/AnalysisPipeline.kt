@@ -32,6 +32,7 @@ class AnalysisPipeline(
         var result: SearchResult? = null
         var failure: AnalysisError? = null
         val cleanupErrors = mutableListOf<AnalysisError>()
+        val operationStopReasons = mutableListOf<StopReason>()
         val catalogWarnings = mutableListOf<AnalysisWarning>()
         val activeSession = AtomicReference<AnalysisSession?>()
         var registration: AutoCloseable? = null
@@ -126,7 +127,9 @@ class AnalysisPipeline(
         } catch (error: AnalysisException) {
             failure = error.error
             // The adapter preserves the primary failure and attaches safe typed cleanup failures.
-            cleanupErrors += error.suppressed.filterIsInstance<AnalysisException>().map { it.error }
+            val operationErrors = error.suppressed.filterIsInstance<AnalysisException>().map { it.error }
+            cleanupErrors += operationErrors
+            operationStopReasons += operationErrors.mapNotNull { partialReason(it.code) }
         } catch (_: Exception) {
             // Unexpected parser/driver/implementation exceptions may contain SQL or credentials.
             failure = AnalysisError(ErrorCode.INTERNAL_ERROR, "Analysis component failed unexpectedly.")
@@ -148,6 +151,7 @@ class AnalysisPipeline(
             result = result,
             failure = failure,
             cleanupErrors = cleanupErrors,
+            operationStopReasons = operationStopReasons,
             catalogWarnings = catalogWarnings,
             candidateBatch = candidateBatch,
             context = context,
@@ -233,6 +237,7 @@ class AnalysisPipeline(
         result: SearchResult?,
         failure: AnalysisError?,
         cleanupErrors: List<AnalysisError>,
+        operationStopReasons: List<StopReason>,
         catalogWarnings: List<AnalysisWarning>,
         candidateBatch: CandidateBatch,
         context: RunContext,
@@ -266,7 +271,7 @@ class AnalysisPipeline(
             val fatalCleanup = cleanupErrors.any { partialReason(it.code) == null }
             if (reason != null && !fatalCleanup && baseline != null && checkpoint != null) {
                 SearchResult.Partial(objective, baseline, checkpoint.bestRobust, checkpoint.bestMean,
-                    diagnostics.copy(stopReasons = (diagnostics.stopReasons + reason).distinct()))
+                    diagnostics.copy(stopReasons = (diagnostics.stopReasons + reason + operationStopReasons).distinct()))
             } else {
                 SearchResult.Failed(objective, primaryFailure, baseline, diagnostics)
             }

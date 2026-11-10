@@ -1,6 +1,7 @@
 package ru.itmo.indexbudget.postgres
 
 import java.sql.Connection
+import java.sql.PreparedStatement
 import java.sql.ResultSet
 import java.sql.SQLException
 import ru.itmo.indexbudget.domain.AnalysisError
@@ -34,6 +35,7 @@ import ru.itmo.indexbudget.domain.WarningCode
 class JdbcCatalogReader(
     private val connection: Connection,
     private val beforeQuery: (RunContext) -> Unit = {},
+    private val beforeExecute: (PreparedStatement, RunContext) -> AutoCloseable = { _, _ -> AutoCloseable {} },
 ) {
     fun readCatalog(tables: Set<TableName>, context: RunContext): CatalogSnapshot {
         context.checkDeadline()
@@ -99,7 +101,9 @@ class JdbcCatalogReader(
         } catch (error: SQLException) {
             context.checkDeadline()
             // JDBC messages/causes can contain connection details and SQL. Do not publish them.
-            fail("Unable to read PostgreSQL catalog", error.sqlState)
+            val connectionFailure = jdbcConnectionFailure(error)
+            fail("Unable to read PostgreSQL catalog", (connectionFailure as? SQLException)?.sqlState ?: error.sqlState,
+                if (connectionFailure != null) ErrorCode.DB_CONNECTION_ERROR else ErrorCode.CATALOG_ERROR)
         }
     }
 
@@ -148,20 +152,23 @@ class JdbcCatalogReader(
             context.checkDeadline()
             beforeQuery(context)
             context.checkDeadline()
-            statement.executeQuery().use { result ->
-                val values = mutableListOf<T>()
-                while (result.next()) {
-                    context.checkDeadline()
-                    values += result.row()
-                }
+            beforeExecute(statement, context).use {
                 context.checkDeadline()
-                values
+                statement.executeQuery().use { result ->
+                    val values = mutableListOf<T>()
+                    while (result.next()) {
+                        context.checkDeadline()
+                        values += result.row()
+                    }
+                    context.checkDeadline()
+                    values
+                }
             }
         }
     }
 
-    private fun fail(message: String, state: String? = null): Nothing = throw AnalysisException(
-        AnalysisError(ErrorCode.CATALOG_ERROR, message,
+    private fun fail(message: String, state: String? = null, code: ErrorCode = ErrorCode.CATALOG_ERROR): Nothing = throw AnalysisException(
+        AnalysisError(code, message,
             details = state?.takeIf { it.matches(Regex("[A-Z0-9]{5}")) }?.let { mapOf("sql_state" to it) } ?: emptyMap()),
     )
 

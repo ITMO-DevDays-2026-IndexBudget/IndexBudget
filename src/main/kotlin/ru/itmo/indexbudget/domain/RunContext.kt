@@ -160,10 +160,27 @@ class RunContext(
     }
 
     fun reserveExplainAttempt() {
+        claimExplainAttempt()
+        publishProgress()
+    }
+
+    /**
+     * JDBC uses this boundary so synchronous progress observers cannot delay SQL after reservation.
+     * Publish even on failure, but only once the actual execute call has begun.
+     */
+    fun <T> withExplainAttempt(execute: () -> T): T {
+        claimExplainAttempt()
+        try {
+            return execute()
+        } finally {
+            publishProgress()
+        }
+    }
+
+    private fun claimExplainAttempt() {
         checkDeadline()
         if (explainAttempts >= limits.maxExplainAttempts) fail(ErrorCode.EXPLAIN_LIMIT, "EXPLAIN attempt limit reached")
         explainAttempts++
-        publishProgress()
     }
 
     fun reserveEvaluationAttempt() {

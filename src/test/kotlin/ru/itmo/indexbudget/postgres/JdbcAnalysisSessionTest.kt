@@ -5,9 +5,15 @@ import java.sql.Connection
 import java.sql.PreparedStatement
 import java.sql.ResultSet
 import java.sql.SQLException
+import java.sql.SQLNonTransientConnectionException
 import java.time.Duration
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.Timeout
 import ru.itmo.indexbudget.domain.*
 
 /** Fault injection only; backend isolation and transaction semantics are tested against PostgreSQL. */
@@ -162,6 +168,42 @@ class JdbcAnalysisSessionTest {
     }
 
     @Test
+    fun `connection loss while releasing a failed plan aborts instead of reusing session`() {
+        val jdbc = FakeJdbc(listOf(null))
+        jdbc.explainResultCloseFailure = SQLException(SECRET, "08006")
+        JdbcAnalysisSession(jdbc.connection).use { session ->
+            val failure = assertThrows(AnalysisException::class.java) {
+                session.evaluate(emptyList(), workload(), RunContext())
+            }
+            assertEquals(ErrorCode.EXPLAIN_FAILED, failure.error.code)
+            assertTrue(failure.suppressed.filterIsInstance<AnalysisException>()
+                .any { it.error.code == ErrorCode.DB_CONNECTION_ERROR })
+            assertEquals(1, jdbc.resetAttempts)
+            assertTrue(jdbc.closed)
+            assertFalse(failure.stackTraceToString().contains(SECRET))
+            jdbc.assertResourcesReleased()
+        }
+    }
+
+    @Test
+    fun `connection loss suppressed on an SQL failure remains a session failure`() {
+        val jdbc = FakeJdbc()
+        jdbc.explainFailures[1] = SQLException(SECRET, "57014")
+        jdbc.explainStatementCloseFailure = SQLException(SECRET, "08006")
+        JdbcAnalysisSession(jdbc.connection).use { session ->
+            val failure = assertThrows(AnalysisException::class.java) {
+                session.evaluate(emptyList(), workload(), RunContext())
+            }
+            assertEquals(ErrorCode.DB_CONNECTION_ERROR, failure.error.code)
+            assertEquals("08006", failure.error.details["sql_state"])
+            assertTrue(jdbc.closed)
+            assertEquals(1, jdbc.resetAttempts)
+            assertFalse(failure.stackTraceToString().contains(SECRET))
+            jdbc.assertResourcesReleased()
+        }
+    }
+
+    @Test
     fun `disabled HypoPG fails explicitly without changing the setting or explaining queries`() {
         val jdbc = FakeJdbc()
         jdbc.hypopgEnabled = "off"
@@ -210,7 +252,7 @@ class JdbcAnalysisSessionTest {
     }
 
     @Test
-    fun `deadline during explain progress prevents SQL and closes connection without cleanup`() {
+    fun `explain progress is published after SQL starts and expiration prevents completion`() {
         var now = 0L
         var eventsAtDeadline = 0
         val jdbc = FakeJdbc(listOf(plan(10)))
@@ -229,13 +271,140 @@ class JdbcAnalysisSessionTest {
                 session.evaluate(emptyList(), workload(), context)
             }
             assertEquals(ErrorCode.DEADLINE_EXCEEDED, error.error.code)
-            assertTrue(jdbc.explains().isEmpty())
+            assertEquals(1, jdbc.explains().size)
             assertEquals(1, context.statistics().explainAttempts)
             assertEquals(0, context.statistics().completedEvaluations)
             assertEquals(1, jdbc.resetAttempts)
             assertTrue(jdbc.closed)
             assertEquals(listOf("CLOSE"), jdbc.events.drop(eventsAtDeadline))
             jdbc.assertResourcesReleased()
+        }
+    }
+
+    @Test
+    fun `timeout in the middle of an explicit transaction rolls back before reset and retry`() {
+        val jdbc = FakeJdbc(listOf(plan(10), plan(20), plan(30)))
+        jdbc.autoCommit = false
+        jdbc.explainFailures[2] = SQLException(SECRET, "57014")
+        val context = RunContext()
+        JdbcAnalysisSession(jdbc.connection).use { session ->
+            val failure = assertThrows(AnalysisException::class.java) {
+                session.evaluate(emptyList(), workload(2), context)
+            }
+            assertEquals(ErrorCode.EXPLAIN_FAILED, failure.error.code)
+            assertEquals("q2", failure.error.queryId)
+            val rollback = jdbc.events.indexOf("ROLLBACK")
+            assertTrue(rollback > jdbc.events.indexOfLast { it.startsWith("EXPLAIN") })
+            assertTrue(jdbc.events.drop(rollback + 1).any { it.contains("hypopg_reset") })
+            assertFalse(jdbc.closed)
+            assertEquals(0, context.statistics().completedEvaluations)
+            assertEquals(mapOf("q1" to 20.0, "q2" to 30.0),
+                session.evaluate(emptyList(), workload(2), context).costByQueryId)
+            assertEquals(4, context.statistics().explainAttempts)
+            jdbc.assertResourcesReleased()
+        }
+    }
+
+    @Test
+    fun `nested or typed connection failures never become candidate errors`() {
+        for (failure in listOf(
+            SQLException(SECRET, "XX000").apply { setNextException(SQLException(SECRET, "08006")) },
+            SQLNonTransientConnectionException(SECRET),
+        )) {
+            val jdbc = FakeJdbc()
+            jdbc.beforeSql = { sql -> if (sql.contains("hypopg_create_index")) throw failure }
+            JdbcAnalysisSession(jdbc.connection).use { session ->
+                val error = assertThrows(AnalysisException::class.java) {
+                    session.estimateSize(candidate(), RunContext())
+                }
+                assertEquals(ErrorCode.DB_CONNECTION_ERROR, error.error.code)
+                assertTrue(jdbc.closed)
+                assertEquals(1, jdbc.resetAttempts)
+                assertFalse(error.stackTraceToString().contains(SECRET))
+            }
+        }
+    }
+
+    @Test
+    fun `failure to configure timeout is a session failure before EXPLAIN starts`() {
+        val jdbc = FakeJdbc()
+        jdbc.beforeSql = { sql -> if (sql.contains("set_config")) throw SQLException(SECRET, "XX000") }
+        val context = RunContext()
+        JdbcAnalysisSession(jdbc.connection).use { session ->
+            val failure = assertThrows(AnalysisException::class.java) {
+                session.estimateSize(candidate(), context)
+            }
+            assertEquals(ErrorCode.DB_CONNECTION_ERROR, failure.error.code)
+            assertEquals(0, context.statistics().explainAttempts)
+            assertTrue(jdbc.closed)
+            assertFalse(failure.stackTraceToString().contains(SECRET))
+            jdbc.assertResourcesReleased()
+        }
+    }
+
+    @Test
+    @Timeout(5)
+    fun `client watchdog aborts blocked SQL at deadline without rollback or reset`() {
+        val jdbc = FakeJdbc()
+        jdbc.autoCommit = false
+        val entered = CountDownLatch(1)
+        jdbc.beforeSql = { sql ->
+            if (sql.startsWith("EXPLAIN")) {
+                entered.countDown()
+                assertTrue(jdbc.aborted.await(3, TimeUnit.SECONDS))
+                throw SQLException(SECRET, "08006")
+            }
+        }
+        val context = RunContext(limits = RunLimits(commandTimeout = Duration.ofSeconds(1)))
+        JdbcAnalysisSession(jdbc.connection).use { session ->
+            val future = CompletableFuture.supplyAsync {
+                assertThrows(AnalysisException::class.java) { session.evaluate(emptyList(), workload(), context) }
+            }
+            try {
+                assertTrue(entered.await(2, TimeUnit.SECONDS))
+                assertEquals(ErrorCode.DEADLINE_EXCEEDED, future.get(3, TimeUnit.SECONDS).error.code)
+                assertTrue(jdbc.cancelCalled.await(1, TimeUnit.SECONDS))
+                assertTrue(jdbc.closed)
+                assertEquals(1, jdbc.resetAttempts)
+                assertFalse(jdbc.events.contains("ROLLBACK"))
+                assertEquals(1, context.statistics().explainAttempts)
+                assertEquals(0, context.statistics().completedEvaluations)
+                jdbc.assertResourcesReleased()
+            } finally {
+                session.cancel()
+            }
+        }
+    }
+
+    @Test
+    @Timeout(5)
+    fun `explicit cancellation cancels active statement and physically aborts connection`() {
+        val jdbc = FakeJdbc()
+        val entered = CountDownLatch(1)
+        jdbc.beforeSql = { sql ->
+            if (sql.startsWith("EXPLAIN")) {
+                entered.countDown()
+                assertTrue(jdbc.aborted.await(3, TimeUnit.SECONDS))
+                throw SQLException(SECRET, "08006")
+            }
+        }
+        val context = RunContext()
+        JdbcAnalysisSession(jdbc.connection).use { session ->
+            val future = CompletableFuture.supplyAsync {
+                assertThrows(AnalysisException::class.java) { session.evaluate(emptyList(), workload(), context) }
+            }
+            try {
+                assertTrue(entered.await(2, TimeUnit.SECONDS))
+                session.cancel()
+                assertEquals(ErrorCode.CANCELLED, future.get(2, TimeUnit.SECONDS).error.code)
+                assertTrue(jdbc.cancelCalled.await(1, TimeUnit.SECONDS))
+                assertTrue(jdbc.closed)
+                assertEquals(1, jdbc.resetAttempts)
+                assertEquals(0, context.statistics().completedEvaluations)
+                jdbc.assertResourcesReleased()
+            } finally {
+                session.cancel()
+            }
         }
     }
 
@@ -299,18 +468,22 @@ class JdbcAnalysisSessionTest {
     private fun plan(cost: Int) = """[{"Plan":{"Total Cost":$cost}}]"""
 
     private class FakeJdbc(private val plans: List<String?> = emptyList()) {
-        val events = mutableListOf<String>()
+        val events = CopyOnWriteArrayList<String>()
         val explainFailures = mutableMapOf<Int, SQLException>()
         val resetFailures = mutableMapOf<Int, SQLException>()
         var explainResultCloseFailure: SQLException? = null
         var explainStatementCloseFailure: SQLException? = null
         var afterExplain: () -> Unit = {}
+        var beforeSql: (String) -> Unit = {}
+        val aborted = CountDownLatch(1)
+        val cancelCalled = CountDownLatch(1)
+        var autoCommit = true
         var resetAttempts = 0
         var sizeBytes = 11L
         var createFailureAt: Int? = null
         private var createAttempts = 0
         var hypopgEnabled = "on"
-        var closed = false
+        @Volatile var closed = false
         private var explainAttempts = 0
         private var planIndex = 0
         private var openStatements = 0
@@ -320,11 +493,11 @@ class JdbcAnalysisSessionTest {
             when (method) {
                 "prepareStatement" -> statement(args[0] as String)
                 "isClosed" -> closed
-                "getAutoCommit" -> true
+                "getAutoCommit" -> autoCommit
                 "setNetworkTimeout" -> null
                 "getNetworkTimeout" -> 0
                 "rollback" -> { events += "ROLLBACK"; null }
-                "abort", "close" -> { closed = true; events += "CLOSE"; null }
+                "abort", "close" -> { closed = true; events += "CLOSE"; aborted.countDown(); null }
                 else -> throw AssertionError("Unexpected Connection call: $method")
             }
         }
@@ -345,6 +518,7 @@ class JdbcAnalysisSessionTest {
                     "setQueryTimeout", "setString", "setLong", "setObject" -> null
                     "executeQuery" -> {
                         events += sql
+                        beforeSql(sql)
                         val value: Any? = when {
                             sql.contains("pg_catalog.pg_extension") -> "hypopg_schema"
                             sql.contains("set_config") -> "90000"
@@ -376,7 +550,7 @@ class JdbcAnalysisSessionTest {
                         if (sql.startsWith("EXPLAIN")) explainStatementCloseFailure?.let { throw it }
                         null
                     }
-                    "cancel" -> null
+                    "cancel" -> { cancelCalled.countDown(); null }
                     else -> throw AssertionError("Unexpected Statement call: $method")
                 }
             }
