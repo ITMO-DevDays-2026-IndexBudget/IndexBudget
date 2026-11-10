@@ -2,6 +2,7 @@ package ru.itmo.indexbudget.report
 
 import ru.itmo.indexbudget.domain.AnalysisReport
 import ru.itmo.indexbudget.domain.CandidateBatch
+import ru.itmo.indexbudget.domain.PriceOfRobustness
 import ru.itmo.indexbudget.domain.RunContext
 import ru.itmo.indexbudget.domain.SearchResult
 import ru.itmo.indexbudget.domain.WorkloadInput
@@ -13,6 +14,8 @@ fun interface ReportBuilder {
      * Copy context.inputHash, computed from the validated source JSON before applying DTO defaults.
      * Candidates include rejected shortlist entries with their definitions, provenance and diagnostics;
      * estimates that could not be obtained remain null. This is not the optimizer's filtered batch.
+     * Передаёт [PriceOfRobustness.calculate] в AnalysisReport.priceOfRobustness для того же
+     * result, comparisonScope=EVALUATED_SETS и selectedObjective; renderer использует готовое поле.
      */
     fun build(input: WorkloadInput, candidates: CandidateBatch, result: SearchResult, context: RunContext): AnalysisReport
 }

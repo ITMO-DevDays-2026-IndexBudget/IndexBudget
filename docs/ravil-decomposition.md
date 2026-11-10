@@ -14,7 +14,7 @@
 | **T3** | Бюджеты: storage (1.2/ceil) + write units, #41 | `feat/budget-assessment-41` | `assessBudget(...)` → `BudgetAssessment`, точные границы и явные ошибки | Реализовано, числовые тесты и проверка стыка с pipeline без БД |
 | **T4** | Компаратор: `compare` + `improvesPrimaryMetrics` | `feat/objective-comparator` | детерминированный ключ; гейт greedy | PR #47 принят |
 | **T6** | Zero-baseline регрессия и baseline-only, #43 | `codex/issue-43-zero-baseline` | `assessEvaluation(...)` → `Accepted(metrics, searchRequired)` / `Rejected(metrics, violations)` | Реализовано в этой ветке; рабочий Optimizer остаётся в #17 |
-| **T7** | `priceOfRobustness` из одного пула | `feat/price-of-robustness` | `C_mean(best_robust) − C_mean(best_mean)` | ⏳ |
+| **T7** | `priceOfRobustness` из одного пула, #44 | `codex/issue-44-price-of-robustness` | `PriceOfRobustness.calculate(SearchResult)` → `Double?`, контракт передачи в `AnalysisReport` | Реализовано; чистые тесты и фикстура отчёта, рабочий экспорт остаётся в #19/#20 |
 | **T8** | Кросс-проверка на реальных оценках (Егор/Марат) | интеграционная | числовая сверка, общий пул, консистентность отчёта | ⏳ |
 
 Общий `ProfileWeights` уже доступен в `main`. [PR #35](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/pull/35) закрыт без merge; отдельный `WeightNormalizer` удалён из PR #37. Зависимость T2 от нормирования обеспечивается PR #32.
