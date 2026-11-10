@@ -1,0 +1,18 @@
+{
+  "schema_version": 2,
+  "objective": "robust",
+  "queries": [
+    {"id": "by_group", "sql": "SELECT id, value FROM public.records WHERE group_id = 42 ORDER BY created_at DESC LIMIT 20"},
+    {"id": "by_value", "sql": "SELECT id, value FROM public.records WHERE value = 7 ORDER BY created_at DESC LIMIT 20"},
+    {"id": "groups", "sql": "SELECT id FROM public.groups WHERE category = 3"}
+  ],
+  "profiles": [
+    {"id": "normal", "weight": 9, "calls_per_hour": {"by_group": 3000, "by_value": 100, "groups": 100}},
+    {"id": "campaign", "weight": 1, "calls_per_hour": {"by_group": 100, "by_value": 3000, "groups": 100}}
+  ],
+  "table_write_rates": {
+    "public.records": {"inserts_per_hour": 1000, "updates_per_hour": 3000, "deletes_per_hour": 100, "source": "manual"},
+    "public.groups": {"inserts_per_hour": 1, "updates_per_hour": 8, "deletes_per_hour": 1, "source": "manual"}
+  },
+  "constraints": {"storage_budget_bytes": 67108864, "write_budget_units_per_hour": 20000, "max_indexes": 2}
+}

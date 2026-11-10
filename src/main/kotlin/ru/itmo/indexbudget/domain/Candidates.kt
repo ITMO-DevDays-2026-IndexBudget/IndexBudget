@@ -30,7 +30,9 @@ enum class CandidateReason {
     GLOBAL_CANDIDATE_LIMIT,
     STORAGE_BUDGET,
     WRITE_BUDGET,
+    MAX_INDEXES,
     HYPOTHETICAL_INDEX_ERROR,
+    EVALUATION_FAILED,
     NO_MARGINAL_IMPROVEMENT,
     NOT_SELECTED,
     NOT_EVALUATED_DUE_TO_LIMIT,
@@ -54,6 +56,8 @@ data class LocalGenerationStatistics(
     val deduplicatedDefinitions: Int,
     val retainedDefinitions: Int,
     val excludedColumns: List<ColumnRef> = emptyList(),
+    /** Before the local cap; null only for producers that do not observe this stage. */
+    val candidatesAfterExistingDeduplication: Int? = null,
 )
 
 data class CandidateDiagnostics(

@@ -45,6 +45,7 @@ class AnalysisPipeline(
             val parsed = checked(context) { sqlAnalyzer.parse(input, context) }
             val session = sessionFactory.open(context)
             activeSession.set(session)
+            context.recordDatabaseVersions(session.databaseVersions)
             context.checkDeadline()
             val catalog = checked(context) { session.readCatalog(parsed.referencedTables, context) }
             catalogWarnings += catalog.warnings
@@ -259,7 +260,11 @@ class AnalysisPipeline(
             val reason = partialReason(primaryFailure.code) ?: if (
                 primaryFailure.code == ErrorCode.HYPOTHETICAL_INDEX_ERROR
             ) cleanupErrors.firstNotNullOfOrNull { partialReason(it.code) } else null
-            if (reason != null && baseline != null && checkpoint != null) {
+            // A recoverable primary failure must not hide a fatal error found during cleanup.
+            // Keep the original error as primary, but do not publish a usable result after a
+            // numeric, input, catalog or internal failure in any part of that operation.
+            val fatalCleanup = cleanupErrors.any { partialReason(it.code) == null }
+            if (reason != null && !fatalCleanup && baseline != null && checkpoint != null) {
                 SearchResult.Partial(objective, baseline, checkpoint.bestRobust, checkpoint.bestMean,
                     diagnostics.copy(stopReasons = (diagnostics.stopReasons + reason).distinct()))
             } else {

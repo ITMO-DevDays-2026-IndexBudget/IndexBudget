@@ -4,11 +4,12 @@ import org.springframework.beans.factory.ObjectProvider
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import ru.itmo.indexbudget.candidates.CandidateGenerator
+import ru.itmo.indexbudget.candidates.ProfileAwareCandidateGenerator
 import ru.itmo.indexbudget.domain.MetricsCalculator
 import ru.itmo.indexbudget.domain.MetricsCalculatorImpl
 import ru.itmo.indexbudget.domain.ObjectiveComparator
 import ru.itmo.indexbudget.domain.ObjectiveComparatorImpl
-import ru.itmo.indexbudget.optimizer.GreedyOptimizer
+import ru.itmo.indexbudget.optimizer.LimitedRepairOptimizer
 import ru.itmo.indexbudget.optimizer.Optimizer
 import ru.itmo.indexbudget.postgres.AnalysisSessionFactory
 import ru.itmo.indexbudget.postgres.JdbcAnalysisSessionFactory
@@ -20,14 +21,17 @@ import ru.itmo.indexbudget.sql.SqlAnalyzer
 @Configuration(proxyBeanMethods = false)
 class AnalysisConfiguration {
     @Bean
+    fun candidateGenerator(): CandidateGenerator = ProfileAwareCandidateGenerator()
+
+    @Bean
     fun metricsCalculator(): MetricsCalculator = MetricsCalculatorImpl()
 
     @Bean
     fun objectiveComparator(): ObjectiveComparator = ObjectiveComparatorImpl()
 
-    /** PoC strategy; fixed-S0 repair and its complete stop handling are added in #18. */
+    /** Greedy followed by one bounded pass over the fixed repair neighborhood. */
     @Bean
-    fun optimizer(): Optimizer = GreedyOptimizer()
+    fun optimizer(): Optimizer = LimitedRepairOptimizer()
 
     @Bean
     fun analysisSessionFactory(): AnalysisSessionFactory = JdbcAnalysisSessionFactory()
