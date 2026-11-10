@@ -26,6 +26,12 @@ GitHub deployment status эта схема не создаёт и результ
 задаётся при запуске CLI через `INDEXBUDGET_DATABASE_URL`; сборка его не требует.
 Текущее приложение в `main` пока является каркасом: `analyze` возвращает `NOT_IMPLEMENTED`.
 
+Общая demo-БД развёртывается отдельно через
+[deploy/db](../deploy/db/README.md):
+установочный скрипт, пользовательский cron, постоянный external volume и backup перед
+обновлением. Её каталог — `~/indexbudget-db`; она не принадлежит `current`
+или `releases` этого CLI-деплоя. Существующее расписание CLI менять не нужно.
+
 ## Установка и повторная настройка
 
 Нужен Linux с активным сервисом `cron`, Bash, Git, curl, Python 3, tar,

@@ -9,3 +9,7 @@ out/
 .env.*
 !.env.example
 reports/
+*.env
+*.dump
+*.dump.pending
+__pycache__/

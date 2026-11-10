@@ -1,0 +1,24 @@
+name: indexbudget-demo
+
+services:
+  postgres:
+    build: ./demo/postgres
+    environment:
+      POSTGRES_DB: indexbudget
+      POSTGRES_USER: demo_admin
+      POSTGRES_PASSWORD: ${INDEXBUDGET_ADMIN_PASSWORD:?Run sh demo/init-env.sh first}
+      INDEXBUDGET_READER_PASSWORD: ${INDEXBUDGET_READER_PASSWORD:?Run sh demo/init-env.sh first}
+    ports:
+      - "127.0.0.1:${INDEXBUDGET_DEMO_PORT:-55432}:5432"
+    volumes:
+      - demo-data:/var/lib/postgresql/data
+      - ./demo/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "PGPASSWORD=\"$$INDEXBUDGET_READER_PASSWORD\" psql -h 127.0.0.1 -U indexbudget_reader -d indexbudget -Atqc 'SELECT ready FROM demo_meta.seed_status WHERE ready' | grep -qx t"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+volumes:
+  demo-data:

@@ -64,6 +64,19 @@ Workflow `CI` запускает `build-and-test` на PR в `main` и push в `
 
 ## Стенд и автоматическое обновление
 
+Локальная PostgreSQL 16 + HypoPG, детерминированный seed, роль анализа и
+workload для PoC находятся в [demo/](demo/README.md). Запуск из корня:
+
+```sh
+sh demo/init-env.sh
+docker compose up --build --detach --wait --wait-timeout 180
+sh demo/check.sh
+```
+
+Это стенд уровня 1 (#4); smoke check проверяет реальную БД через psql.
+JDBC-адаптер и pipeline CLI ещё не подключены. Workflow `Demo DB` проверяет
+сборку образа, seed, HypoPG и повторный запуск проверки отдельно от JVM CI.
+
 Для установки CLI из `main` на стенд предусмотрены скрипты в `deploy/`.
 После установки cron раз в минуту проверяет новый коммит, собирает его и запускает
 тесты; успешный релиз активируется атомарно. Установка, запуск и диагностика описаны

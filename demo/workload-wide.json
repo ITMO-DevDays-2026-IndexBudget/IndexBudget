@@ -1,0 +1,29 @@
+{
+  "schema_version": 2,
+  "objective": "robust",
+  "queries": [
+    {
+      "id": "wide_sparse",
+      "sql": "SELECT * FROM public.wide_records WHERE c1 = 42 ORDER BY c2 LIMIT 20"
+    },
+    {
+      "id": "wide_all",
+      "sql": "SELECT * FROM public.wide_records WHERE c1 >= 0 AND c2 >= 0 AND c3 >= 0 AND c4 >= 0 AND c5 >= 0 AND c6 >= 0 AND c7 >= 0 AND c8 >= 0 AND c9 >= 0 AND c10 >= 0 AND c11 >= 0 AND c12 >= 0 AND c13 >= 0 AND c14 >= 0 AND c15 >= 0 AND c16 >= 0 AND c17 >= 0 AND c18 >= 0 AND c19 >= 0 AND c20 >= 0 AND c21 >= 0 AND c22 >= 0 AND c23 >= 0 AND c24 >= 0 AND c25 >= 0 AND c26 >= 0 AND c27 >= 0 AND c28 >= 0 AND c29 >= 0 AND c30 >= 0 AND c31 >= 0 AND c32 >= 0 AND c33 >= 0 AND c34 >= 0 AND c35 >= 0 AND c36 >= 0 AND c37 >= 0 AND c38 >= 0 AND c39 >= 0 AND c40 >= 0 AND c41 >= 0 AND c42 >= 0 AND c43 >= 0 AND c44 >= 0 AND c45 >= 0 AND c46 >= 0 AND c47 >= 0 AND c48 >= 0 AND c49 >= 0 AND c50 >= 0 AND c51 >= 0 AND c52 >= 0 AND c53 >= 0 AND c54 >= 0 AND c55 >= 0 AND c56 >= 0 AND c57 >= 0 AND c58 >= 0 AND c59 >= 0 AND c60 >= 0 AND c61 >= 0 AND c62 >= 0 AND c63 >= 0 AND c64 >= 0 AND c65 >= 0 AND c66 >= 0 AND c67 >= 0 AND c68 >= 0 AND c69 >= 0 AND c70 >= 0 AND c71 >= 0 AND c72 >= 0 AND c73 >= 0 AND c74 >= 0 AND c75 >= 0 AND c76 >= 0 AND c77 >= 0 AND c78 >= 0 AND c79 >= 0 AND c80 >= 0 AND c81 >= 0 AND c82 >= 0 AND c83 >= 0 AND c84 >= 0 AND c85 >= 0 AND c86 >= 0 AND c87 >= 0 AND c88 >= 0 AND c89 >= 0 AND c90 >= 0 AND c91 >= 0 AND c92 >= 0 AND c93 >= 0 AND c94 >= 0 AND c95 >= 0 AND c96 >= 0 AND c97 >= 0 AND c98 >= 0 AND c99 >= 0 AND c100 >= 0 LIMIT 20"
+    }
+  ],
+  "profiles": [
+    {
+      "id": "wide",
+      "weight": 1,
+      "calls_per_hour": {
+        "wide_sparse": 100,
+        "wide_all": 1
+      }
+    }
+  ],
+  "constraints": {
+    "storage_budget_bytes": 67108864,
+    "write_budget_units_per_hour": null,
+    "max_indexes": 5
+  }
+}

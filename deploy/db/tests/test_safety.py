@@ -1,0 +1,97 @@
+"""Deployment control-flow checks. These do not replace the real PostgreSQL CI test."""
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+import unittest
+
+
+PROJECT = Path(__file__).resolve().parents[3]
+
+
+class DeploymentFailures(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="indexbudget-safety-")
+        self.addCleanup(self.temp.cleanup)
+        self.base = Path(self.temp.name)
+        self.repo = self.base / "repo"
+        (self.repo / "demo/postgres").mkdir(parents=True)
+        (self.repo / "deploy/db").mkdir(parents=True)
+        (self.repo / "demo/postgres/Dockerfile").write_text("FROM postgres:16.15-bookworm\n")
+        shutil.copy(PROJECT / "deploy/db/compose.yaml", self.repo / "deploy/db/compose.yaml")
+        self.run_git("init", "-q")
+        self.run_git("add", ".")
+        self.run_git("-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                     "-c", "commit.gpgsign=false", "commit", "-qm", "fixture")
+        self.revision = self.run_git("rev-parse", "HEAD").strip()
+        self.root = self.base / "state"
+        self.root.mkdir()
+        for name in ("releases", "backups"):
+            (self.root / name).mkdir()
+        subprocess.run(["git", "clone", "--bare", "-q", str(self.repo), str(self.root / "app.git")], check=True)
+        (self.root / "db.env").write_text("# Mock only; no database connection\n")
+        binaries = self.base / "bin"
+        binaries.mkdir()
+        docker = binaries / "docker"
+        docker.write_text('''#!/usr/bin/env python3
+import json, os, sys
+a = sys.argv[1:]
+with open(os.environ['CALL_LOG'], 'a') as out:
+    out.write(json.dumps(a) + '\\n')
+mode = os.environ['FAIL_MODE']
+if a[:2] == ['volume', 'inspect']:
+    sys.exit(0)
+if a[:1] == ['inspect']:
+    print('unrelated-volume' if mode == 'wrong-volume' else 'indexbudget-stand-pg16-data')
+elif 'ps' in a:
+    if mode != 'orphan-volume': print('existing-container')
+elif 'build' in a and mode == 'build':
+    sys.exit(23)
+elif 'pg_dump' in a and mode == 'backup':
+    sys.exit(24)
+''')
+        docker.chmod(0o755)
+        df = binaries / "df"
+        df.write_text("#!/bin/sh\nprintf 'Filesystem 1024-blocks Used Available Capacity Mounted\\nmock 99999999 0 99999999 0%% /\\n'\n")
+        df.chmod(0o755)
+        self.log = self.base / "calls.jsonl"
+        self.env = dict(os.environ, PATH=str(binaries) + os.pathsep + os.environ["PATH"], CALL_LOG=str(self.log))
+
+    def run_git(self, *args):
+        return subprocess.check_output(["git", "-C", str(self.repo), *args], text=True)
+
+    def assert_aborts_before_update(self, mode):
+        result = subprocess.run(
+            ["bash", str(PROJECT / "deploy/db/deploy.sh"), str(self.root), str(self.repo), self.revision],
+            env=dict(self.env, FAIL_MODE=mode), capture_output=True, text=True,
+        )
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertFalse(any("up" in call for call in calls), calls)
+        self.assertFalse(any(call[:2] == ["volume", "create"] for call in calls), calls)
+        self.assertFalse((self.root / "current").exists())
+        return calls
+
+    def test_build_failure_does_not_replace_database(self):
+        calls = self.assert_aborts_before_update("build")
+        self.assertTrue(any("build" in call for call in calls))
+        self.assertFalse(any("pg_dump" in call for call in calls))
+
+    def test_backup_failure_does_not_replace_database(self):
+        calls = self.assert_aborts_before_update("backup")
+        self.assertTrue(any("pg_dump" in call for call in calls))
+        self.assertEqual(list((self.root / "backups").glob("*.dump")), [])
+
+    def test_orphan_volume_requires_manual_recovery(self):
+        calls = self.assert_aborts_before_update("orphan-volume")
+        self.assertFalse(any("build" in call for call in calls))
+
+    def test_unexpected_volume_is_not_touched(self):
+        calls = self.assert_aborts_before_update("wrong-volume")
+        self.assertFalse(any("build" in call for call in calls))
+
+
+if __name__ == "__main__":
+    unittest.main()

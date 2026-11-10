@@ -1,0 +1,35 @@
+name: indexbudget-stand
+services:
+  postgres:
+    image: indexbudget-stand-postgres:${DB_RELEASE:?DB_RELEASE required}
+    build: ./source/demo/postgres
+    restart: unless-stopped
+    cpus: 2.0
+    mem_limit: 2g
+    memswap_limit: 2g
+    pids_limit: 256
+    environment:
+      POSTGRES_DB: indexbudget
+      POSTGRES_USER: demo_admin
+      POSTGRES_PASSWORD: ${INDEXBUDGET_ADMIN_PASSWORD:?admin password required}
+      INDEXBUDGET_READER_PASSWORD: ${INDEXBUDGET_READER_PASSWORD:?reader password required}
+    ports:
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - database:/var/lib/postgresql/data
+      - ./source/demo/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "PGPASSWORD=\"$$INDEXBUDGET_READER_PASSWORD\" psql -h 127.0.0.1 -U indexbudget_reader -d indexbudget -Atqc 'SELECT ready FROM demo_meta.seed_status WHERE ready' | grep -qx t"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+volumes:
+  database:
+    external: true
+    name: indexbudget-stand-pg16-data
