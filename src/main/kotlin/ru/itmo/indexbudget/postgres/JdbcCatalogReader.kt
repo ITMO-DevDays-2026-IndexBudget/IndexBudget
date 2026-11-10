@@ -9,6 +9,11 @@ import ru.itmo.indexbudget.domain.AnalysisWarning
 import ru.itmo.indexbudget.domain.CatalogColumn
 import ru.itmo.indexbudget.domain.CatalogSnapshot
 import ru.itmo.indexbudget.domain.CatalogTable
+import ru.itmo.indexbudget.domain.CatalogType
+import ru.itmo.indexbudget.domain.CatalogOperator
+import ru.itmo.indexbudget.domain.CatalogImplicitCast
+import ru.itmo.indexbudget.domain.CatalogSemantics
+import ru.itmo.indexbudget.domain.truncatePostgresIdentifier
 import ru.itmo.indexbudget.domain.ColumnRef
 import ru.itmo.indexbudget.domain.ErrorCode
 import ru.itmo.indexbudget.domain.ExistingIndex
@@ -31,9 +36,23 @@ class JdbcCatalogReader(private val connection: Connection) {
         context.checkDeadline()
         try {
             val path = query("SELECT pg_catalog.unnest(pg_catalog.current_schemas(true))", context) { getString(1) }
+            val identifierLength = query("SELECT pg_catalog.current_setting('max_identifier_length')::integer", context) { getInt(1) }.single()
+            val types = query(TYPES, context) {
+                CatalogType(getLong("oid"), getString("schema_name"), getString("typname"), getString("typcategory"),
+                    getBoolean("typispreferred"), getBoolean("builtin"), getString("typtype"), getLong("typelem"))
+            }
+            val operators = query(OPERATORS, context) {
+                CatalogOperator(getLong("oid"), getString("schema_name"), getString("oprname"),
+                    getLong("oprleft"), getLong("oprright"), getBoolean("builtin"))
+            }
+            val casts = query("SELECT castsource, casttarget FROM pg_catalog.pg_cast WHERE castcontext OPERATOR(pg_catalog.=) 'i'", context) {
+                CatalogImplicitCast(getLong("castsource"), getLong("casttarget"))
+            }
             val found = linkedMapOf<TableRef, CatalogTable>()
             val unresolved = mutableListOf<TableName>()
-            for (name in tables.sortedWith(compareBy({ it.schema ?: "" }, { it.name }))) {
+            val normalized = tables.map { TableName(truncatePostgresIdentifier(it.name, identifierLength),
+                it.schema?.let { schema -> truncatePostgresIdentifier(schema, identifierLength) }) }.distinct()
+            for (name in normalized.sortedWith(compareBy({ it.schema ?: "" }, { it.name }))) {
                 val qualified = listOfNotNull(name.schema, name.name).joinToString(".", transform = ::quoteIdentifier)
                 val relation = query(RELATION, context, qualified) {
                     Relation(
@@ -54,6 +73,7 @@ class JdbcCatalogReader(private val connection: Connection) {
                         name = getString("attname"), typeName = getString("type_name"),
                         nullable = !getBoolean("attnotnull"), collation = getString("collation"),
                         defaultOperatorClass = getString("opclass"), isBuiltinType = getBoolean("builtin"),
+                        typeOid = getLong("type_oid"),
                     )
                 }
                 val indexes = readIndexes(relation, context)
@@ -71,7 +91,7 @@ class JdbcCatalogReader(private val connection: Connection) {
             return CatalogSnapshot(ordered, path, unresolved, ordered.filterNot { it.statisticsAvailable }.map {
                 AnalysisWarning(WarningCode.MISSING_STATISTICS, "Planner statistics are unavailable; estimates may be inaccurate",
                     details = mapOf("schema" to it.ref.schema, "table" to it.ref.name))
-            })
+            }, identifierLength, CatalogSemantics(types, operators, casts))
         } catch (error: SQLException) {
             context.checkDeadline()
             // JDBC messages/causes can contain connection details and SQL. Do not publish them.
@@ -147,6 +167,22 @@ class JdbcCatalogReader(private val connection: Connection) {
         val collation: String?, val opclass: String?)
 
     private companion object {
+        val TYPES = """
+            SELECT t.oid, n.nspname AS schema_name, t.typname, t.typcategory, t.typispreferred,
+                   t.typtype, t.typelem, n.nspname OPERATOR(pg_catalog.=) 'pg_catalog'
+                   AND t.oid OPERATOR(pg_catalog.<) 16384 AS builtin
+            FROM pg_catalog.pg_type t JOIN pg_catalog.pg_namespace n ON n.oid OPERATOR(pg_catalog.=) t.typnamespace
+            ORDER BY t.oid
+        """.trimIndent()
+        val OPERATORS = """
+            SELECT o.oid, n.nspname AS schema_name, o.oprname, o.oprleft, o.oprright,
+                   n.nspname OPERATOR(pg_catalog.=) 'pg_catalog' AND o.oid OPERATOR(pg_catalog.<) 16384 AS builtin
+            FROM pg_catalog.pg_operator o JOIN pg_catalog.pg_namespace n ON n.oid OPERATOR(pg_catalog.=) o.oprnamespace
+            WHERE o.oprkind OPERATOR(pg_catalog.=) 'b'
+              AND o.oprname OPERATOR(pg_catalog.=) ANY(ARRAY['=', '<', '<=', '>', '>=']::pg_catalog.name[])
+              AND pg_catalog.pg_operator_is_visible(o.oid)
+            ORDER BY o.oid
+        """.trimIndent()
         fun quoteIdentifier(value: String) = "\"" + value.replace("\"", "\"\"") + "\""
 
         val RELATION = """
@@ -160,8 +196,8 @@ class JdbcCatalogReader(private val connection: Connection) {
         """.trimIndent()
 
         val COLUMNS = """
-            SELECT a.attname, pg_catalog.format_type(a.atttypid, a.atttypmod) AS type_name, a.attnotnull,
-                   tn.nspname = 'pg_catalog' AS builtin,
+            SELECT a.attname, a.atttypid AS type_oid, pg_catalog.format_type(a.atttypid, a.atttypmod) AS type_name, a.attnotnull,
+                   tn.nspname = 'pg_catalog' AND t.oid < 16384 AS builtin,
                    CASE WHEN co.oid IS NOT NULL THEN pg_catalog.format('%I.%I', cn.nspname, co.collname) END AS collation,
                    defaults.opclass
             FROM pg_catalog.pg_attribute a

@@ -4,6 +4,8 @@ import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.ValueSource
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable
 import ru.itmo.indexbudget.candidates.BtreeCandidateEnumerator
 import ru.itmo.indexbudget.candidates.CandidateScope
@@ -106,6 +108,106 @@ class SqlResolutionIntegrationTest {
         failure("SELECT * FROM custom_records", ErrorCode.UNSUPPORTED_SQL)
         failure("SELECT id FROM records WHERE value = '1'::custom_integer", ErrorCode.UNSUPPORTED_SQL)
         resolve("SELECT id FROM custom_records")
+    }
+
+    @Test
+    fun `visible custom equality is rejected before producing a false equality feature`() {
+        sql("CREATE OPERATOR $schema.= (LEFTARG = integer, RIGHTARG = integer, FUNCTION = pg_catalog.int4ne)")
+        sql("INSERT INTO records (id, value) VALUES (1, 1), (2, 2)")
+        val text = "SELECT id FROM records WHERE value = 1"
+        connection.createStatement().use { statement -> statement.executeQuery(text).use {
+            assertTrue(it.next())
+            assertEquals(2, it.getInt(1)) // PostgreSQL actually selected our not-equal implementation.
+            assertFalse(it.next())
+        } }
+        failure(text, ErrorCode.UNSUPPORTED_SQL)
+        // Schema presence alone must not cause blanket rejection of every comparison.
+        resolve("SELECT id FROM records WHERE value > 1")
+    }
+
+    @Test
+    fun `domain shadowing int4 is rejected while system syntax and qualification retain builtin identity`() {
+        sql("CREATE DOMAIN $schema.int4 AS pg_catalog.int4")
+        connection.createStatement().use { statement ->
+            statement.executeQuery("SELECT n.nspname FROM pg_catalog.pg_type t JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace WHERE t.oid = pg_catalog.pg_typeof('1'::int4)::oid").use {
+                assertTrue(it.next())
+                assertEquals(schema, it.getString(1))
+            }
+        }
+        failure("SELECT id FROM records WHERE value = '1'::int4", ErrorCode.UNSUPPORTED_SQL)
+        resolve("SELECT id FROM records WHERE value = '1'::pg_catalog.int4")
+        resolve("SELECT id FROM records WHERE value = CAST('1' AS integer)")
+    }
+
+    @Test
+    fun `operator identity depends on both operand types not only symbol or schema presence`() {
+        sql("CREATE OPERATOR $schema.= (LEFTARG = integer, RIGHTARG = bigint, FUNCTION = pg_catalog.int48ne)")
+        resolve("SELECT id FROM records WHERE value = 1")
+        failure("SELECT id FROM records WHERE value = 2147483648", ErrorCode.UNSUPPORTED_SQL)
+        // Unknown strings use the known argument's type for exact matching.
+        resolve("SELECT id FROM records WHERE value = '1'")
+        sql("EXPLAIN SELECT id FROM records WHERE value = '1'")
+    }
+
+    @Test
+    fun `implicit coercion to text cannot hide a custom equality operator`() {
+        sql("CREATE TABLE strings (value varchar(20))")
+        sql("CREATE OPERATOR $schema.= (LEFTARG = text, RIGHTARG = text, FUNCTION = pg_catalog.textne)")
+        failure("SELECT value FROM strings WHERE value = 'x'", ErrorCode.UNSUPPORTED_SQL)
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = ["WITH  TIME ZONE", "WITH\tTIME ZONE", "WITH\nTIME ZONE"])
+    fun `formatting of composed builtin types does not affect resolution`(zone: String) {
+        val text = "SELECT id FROM records WHERE created_at > CAST('2026-01-01' AS timestamp $zone)"
+        assertEquals(text, resolve(text).queries.single().sql)
+        sql("EXPLAIN $text")
+    }
+
+    @Test
+    fun `builtin types outside the former manual whitelist are supported from catalog facts`() {
+        sql("CREATE TABLE refs (target regclass, typ regtype, document tsvector, query tsquery)")
+        val queries = listOf(
+            "SELECT target FROM refs WHERE target = 'refs'::pg_catalog.regclass",
+            "SELECT typ FROM refs WHERE typ = 'integer'::pg_catalog.regtype",
+            "SELECT document FROM refs WHERE document = 'example'::pg_catalog.tsvector",
+            "SELECT query FROM refs WHERE query = 'example'::pg_catalog.tsquery",
+        )
+        queries.forEach { text ->
+            assertEquals(1, resolve(text).queries.single().predicates.size)
+            sql("EXPLAIN $text")
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = ["a", "Ж", "😀"])
+    fun `identifier byte clipping agrees with PostgreSQL for tables columns and aliases`(character: String) {
+        val supplied = character.repeat(64)
+        val expected = truncatePostgresIdentifier(supplied, 63)
+        sql("CREATE TABLE \"$supplied\" (\"$supplied\" integer)")
+        for (quoted in listOf(true, false)) {
+            if (!quoted && character == "😀") continue
+            val name = if (quoted) "\"$supplied\"" else supplied
+            val text = "SELECT $name.$name FROM $name AS $name ORDER BY $name.$name"
+            val query = resolve(text).queries.single()
+            val folded = if (quoted) expected else expected.map { if (it in 'A'..'Z') it.lowercaseChar() else it }.joinToString("")
+            assertEquals(setOf(ColumnRef(TableRef(schema, folded), folded)), query.referencedColumns)
+            assertEquals(text, query.sql)
+            sql("EXPLAIN $text")
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = ["foo", "'10'", "(10)"])
+    fun `separate AST typmod arguments must be integer constants`(argument: String) {
+        failure("SELECT id FROM groups WHERE label = CAST('x' AS \"varchar\"($argument))", ErrorCode.UNSUPPORTED_SQL)
+    }
+
+    @Test
+    fun `quoted type with integer typmod remains supported`() {
+        val text = "SELECT id FROM groups WHERE label = CAST('x' AS \"varchar\"(20))"
+        resolve(text)
+        sql("EXPLAIN $text")
     }
 
     private fun resolve(text: String): ResolvedWorkload {

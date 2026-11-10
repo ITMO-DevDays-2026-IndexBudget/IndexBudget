@@ -13,6 +13,7 @@ import ru.itmo.indexbudget.domain.*
 import ru.itmo.indexbudget.fixtures.CandidateGenerationContract
 import ru.itmo.indexbudget.fixtures.CandidateGenerationFixtures
 import ru.itmo.indexbudget.fixtures.CandidateGenerationScenario
+import ru.itmo.indexbudget.fixtures.withSqlSemantics
 import java.time.Duration
 
 class JSqlParserNameResolverTest {
@@ -23,7 +24,7 @@ class JSqlParserNameResolverTest {
         CatalogTable(records, listOf("id", "group_id", "value").map { CatalogColumn(it, "integer") } +
             CatalogColumn("created_at", "timestamp without time zone")),
         CatalogTable(groups, listOf(CatalogColumn("id", "integer"), CatalogColumn("label", "text"))),
-    ), searchPath = listOf("pg_catalog", "public"))
+    ), searchPath = listOf("pg_catalog", "public")).withSqlSemantics()
 
     @Test
     fun `all physical features and profiles survive resolution without duplicating SQL`() {
@@ -58,7 +59,7 @@ class JSqlParserNameResolverTest {
     @MethodSource("generationScenarios")
     fun `actual SQL resolution satisfies shared candidate generation contracts`(name: String, scenario: CandidateGenerationScenario) {
         val parsed = analyzer.parse(scenario.workload.input, RunContext())
-        val resolved = analyzer.resolve(parsed, scenario.catalog, RunContext())
+        val resolved = analyzer.resolve(parsed, scenario.catalog.withSqlSemantics(), RunContext())
         val actual = mutableListOf<CandidateScope>()
         BtreeCandidateEnumerator().forEachScope(resolved, RunContext(), actual::add)
         CandidateGenerationContract.assertScopes(scenario, actual)
@@ -108,7 +109,14 @@ class JSqlParserNameResolverTest {
     @Test
     fun `unknown table keeps the failing query id even when another table resolved`() {
         val snapshot = catalog.copy(unresolvedTables = listOf(TableName("missing")))
-        failure("SELECT id FROM missing", ErrorCode.UNKNOWN_TABLE, snapshot)
+        val input = input("SELECT id FROM records").copy(queries = listOf(
+            QueryInput("q1", "SELECT id FROM records"), QueryInput("q2", "SELECT id FROM missing"),
+        ), profiles = listOf(Profile("p", 1.0, mapOf("q1" to 1.0, "q2" to 1.0))))
+        val error = assertThrows(AnalysisException::class.java) {
+            analyzer.resolve(analyzer.parse(input, RunContext()), snapshot, RunContext())
+        }.error
+        assertEquals(ErrorCode.UNKNOWN_TABLE, error.code)
+        assertEquals("q2", error.queryId)
     }
 
     @Test
@@ -174,6 +182,9 @@ class JSqlParserNameResolverTest {
         "SELECT id FROM records WHERE value = '1'::pg_catalog.int4",
         "SELECT id FROM records WHERE value = '1'::PG_CATALOG.INT4",
         "SELECT id FROM records WHERE created_at > CAST('2026-01-01' AS timestamp)",
+        "SELECT id FROM records WHERE created_at > CAST('2026-01-01' AS timestamp WITH  TIME ZONE)",
+        "SELECT id FROM records WHERE created_at > CAST('2026-01-01' AS timestamp WITH\tTIME ZONE)",
+        "SELECT id FROM records WHERE created_at > CAST('2026-01-01' AS timestamp WITH\nTIME ZONE)",
         "SELECT id FROM groups WHERE label = CAST('x' AS varchar(20))",
     ])
     fun `builtin literal casts are supported`(sql: String) {
@@ -196,11 +207,42 @@ class JSqlParserNameResolverTest {
         assertEquals("q", error.queryId)
     }
 
+    @Test
+    fun `missing type and operator facts cannot silently imply builtin semantics`() {
+        val parsed = analyzer.parse(input("SELECT id FROM records WHERE value = 1"), RunContext())
+        val error = assertThrows(AnalysisException::class.java) {
+            analyzer.resolve(parsed, catalog.copy(semantics = null), RunContext())
+        }.error
+        assertEquals(ErrorCode.CATALOG_ERROR, error.code)
+        assertEquals("q", error.queryId)
+    }
+
+    @Test
+    fun `deadline interrupts the wide projection before reading another column`() {
+        val base = CatalogSnapshot(listOf(CatalogTable(TableRef("public", "wide"),
+            (1..100).map { CatalogColumn("c$it", "integer") }))).withSqlSemantics()
+        var now = 0L
+        val columns = object : AbstractList<CatalogColumn>() {
+            override val size = 100
+            override fun get(index: Int): CatalogColumn {
+                check(index <= 16) { "Resolution continued reading columns after the deadline" }
+                if (index == 16) now = 10
+                return base.tables.single().columns[index]
+            }
+        }
+        val snapshot = base.copy(tables = listOf(base.tables.single().copy(columns = columns)))
+        val parsed = analyzer.parse(input("SELECT * FROM public.wide"), RunContext())
+        val context = RunContext(limits = RunLimits(commandTimeout = Duration.ofNanos(5)), clock = NanoClock { now })
+        val error = assertThrows(AnalysisException::class.java) { analyzer.resolve(parsed, snapshot, context) }.error
+        assertEquals(ErrorCode.DEADLINE_EXCEEDED, error.code)
+        assertEquals("q", error.queryId)
+    }
+
     private fun col(name: String) = ColumnRef(records, name)
     private fun input(sql: String) = WorkloadInput(listOf(QueryInput("q", sql)),
         listOf(Profile("p", 1.0, mapOf("q" to 1.0))), Constraints(1024, null))
     private fun resolve(sql: String, snapshot: CatalogSnapshot = catalog) =
-        analyzer.resolve(analyzer.parse(input(sql), RunContext()), snapshot, RunContext()).queries.single()
+        analyzer.resolve(analyzer.parse(input(sql), RunContext()), snapshot.withSqlSemantics(), RunContext()).queries.single()
     private fun failure(sql: String, code: ErrorCode, snapshot: CatalogSnapshot = catalog) {
         val error = assertThrows(AnalysisException::class.java) { resolve(sql, snapshot) }.error
         assertEquals(code, error.code, sql)

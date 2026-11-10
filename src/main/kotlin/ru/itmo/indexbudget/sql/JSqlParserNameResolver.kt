@@ -1,6 +1,5 @@
 package ru.itmo.indexbudget.sql
 
-import net.sf.jsqlparser.expression.CastExpression
 import net.sf.jsqlparser.expression.Expression
 import net.sf.jsqlparser.expression.operators.conditional.AndExpression
 import net.sf.jsqlparser.expression.operators.relational.EqualsTo
@@ -18,6 +17,12 @@ import ru.itmo.indexbudget.domain.*
 
 /** A fresh resolver per workload; no JDBC, candidate caps or parser objects in the result. */
 internal class JSqlParserNameResolver(private val catalog: CatalogSnapshot, private val context: RunContext) {
+    private val literalTypes = PostgresLiteralTypes(catalog, context)
+    private val operators = PostgresOperatorResolver(catalog, context)
+
+    private fun identifier(token: String): String =
+        truncatePostgresIdentifier(decodePostgresIdentifier(token), catalog.maxIdentifierLength)
+
     fun resolve(parsed: JSqlParserParsedWorkload): ResolvedWorkload {
         val queries = parsed.input.queries.map { query ->
             try {
@@ -57,7 +62,7 @@ internal class JSqlParserNameResolver(private val catalog: CatalogSnapshot, priv
                 context.checkDeadline()
                 val column = element.expression as Column
                 val bound = if (column.table == null) {
-                    val outputs = outputNames[decodePostgresIdentifier(column.columnName)].orEmpty().distinct()
+                    val outputs = outputNames[identifier(column.columnName)].orEmpty().distinct()
                     if (outputs.size > 1) fail(ErrorCode.AMBIGUOUS_COLUMN, "ORDER BY output name is ambiguous.")
                     outputs.singleOrNull() ?: resolveColumn(column)
                 } else {
@@ -78,12 +83,12 @@ internal class JSqlParserNameResolver(private val catalog: CatalogSnapshot, priv
                 if (!table.alias?.aliasColumns.isNullOrEmpty()) {
                     fail(ErrorCode.UNSUPPORTED_SQL, "Table column alias lists are not supported.")
                 }
-                val name = TableName(decodePostgresIdentifier(table.name), table.schemaName?.let(::decodePostgresIdentifier))
+                val name = TableName(identifier(table.name), table.schemaName?.let(::identifier))
                 val physical = resolveTable(name)
                 if (physical.kind != TableKind.ORDINARY) {
                     fail(ErrorCode.UNSUPPORTED_SQL, "Only ordinary PostgreSQL tables are supported.")
                 }
-                val alias = table.alias?.name?.let(::decodePostgresIdentifier)
+                val alias = table.alias?.name?.let(::identifier)
                 val binding = Binding(bindings.size, physical, alias)
                 if (bindings.any { it.visibleName == binding.visibleName &&
                         (it.alias != null || alias != null || it.table.ref == physical.ref) }) {
@@ -96,7 +101,7 @@ internal class JSqlParserNameResolver(private val catalog: CatalogSnapshot, priv
         private fun resolveProjection() {
             for (item in select.selectItems) {
                 context.checkDeadline()
-                val alias = item.alias?.name?.let(::decodePostgresIdentifier)
+                val alias = item.alias?.name?.let(::identifier)
                 val columns = when (val expression = item.expression) {
                     is Column -> listOf(resolveColumn(expression))
                     is AllTableColumns -> {
@@ -148,6 +153,9 @@ internal class JSqlParserNameResolver(private val catalog: CatalogSnapshot, priv
                     }
                     val leftColumn = resolveOperand(left, visible)
                     val rightColumn = resolveOperand(right, visible)
+                    val leftType = leftColumn?.let { literalTypes.columnType(it.column) } ?: literalTypes.infer(left)
+                    val rightType = rightColumn?.let { literalTypes.columnType(it.column) } ?: literalTypes.infer(right)
+                    operators.requireBuiltin(expression.stringExpression, leftType, rightType)
                     if (leftColumn == null && rightColumn == null) {
                         fail(ErrorCode.UNSUPPORTED_SQL, "A comparison must reference a column.")
                     }
@@ -166,13 +174,12 @@ internal class JSqlParserNameResolver(private val catalog: CatalogSnapshot, priv
             if (expression is Column) {
                 return resolveColumn(expression, visible).also { referenced += it.ref }
             }
-            validateLiteralCasts(expression)
             return null
         }
 
         private fun resolveColumn(column: Column, visible: List<Binding> = bindings): BoundColumn {
             context.checkDeadline()
-            val name = decodePostgresIdentifier(column.columnName)
+            val name = identifier(column.columnName)
             val sources = column.table?.let { listOf(resolveQualifier(it, visible)) } ?: visible
             val matches = sources.flatMap { binding ->
                 binding.table.columns.filter { it.name == name }.map { checkedColumn(binding, it) }
@@ -187,8 +194,8 @@ internal class JSqlParserNameResolver(private val catalog: CatalogSnapshot, priv
             if (table.databaseName != null || table.catalogName != null) {
                 fail(ErrorCode.UNSUPPORTED_SQL, "Cross-database column references are not supported.")
             }
-            val name = decodePostgresIdentifier(table.name)
-            val schema = table.schemaName?.let(::decodePostgresIdentifier)
+            val name = identifier(table.name)
+            val schema = table.schemaName?.let(::identifier)
             val matches = visible.filter {
                 if (schema == null) it.visibleName == name
                 else it.alias == null && it.table.ref == TableRef(schema, name)
@@ -218,36 +225,6 @@ internal class JSqlParserNameResolver(private val catalog: CatalogSnapshot, priv
         return BoundColumn(binding, column)
     }
 
-    private fun validateLiteralCasts(expression: Expression) {
-        context.checkDeadline()
-        if (expression !is CastExpression) return
-        val type = expression.colDataType
-        var name = type.dataType.let {
-            when {
-                it.startsWith("pg_catalog.", ignoreCase = true) -> it.substring("pg_catalog.".length)
-                it.startsWith("\"pg_catalog\".") -> it.substring("\"pg_catalog\".".length)
-                else -> it
-            }
-        }
-        // JSqlParser 5.4 keeps typmods inside dataType for e.g. varchar (20).
-        val opening = name.indexOf('(')
-        if (opening >= 0 && '"' !in name) {
-            val closing = name.indexOf(')', opening)
-            if (closing < 0) fail(ErrorCode.UNSUPPORTED_SQL, "Invalid literal cast type modifier.")
-            if (name.substring(opening + 1, closing).split(',').any { it.trim().toIntOrNull() == null }) {
-                fail(ErrorCode.UNSUPPORTED_SQL, "Literal cast type modifiers must be integer constants.")
-            }
-            name = (name.substring(0, opening).trimEnd() + name.substring(closing + 1)).trim()
-        }
-        if (decodePostgresIdentifier(name) !in BUILTIN_CAST_TYPES || !type.arrayData.isNullOrEmpty() ||
-            type.characterSet != null || type.signedness != null || type.isZerofill ||
-            !type.typeModifiers.isNullOrEmpty() || type.isNational || type.xmlTypeModifier != null
-        ) {
-            fail(ErrorCode.UNSUPPORTED_SQL, "Only PostgreSQL built-in scalar literal casts are supported.")
-        }
-        validateLiteralCasts(expression.leftExpression)
-    }
-
     private fun reverse(operator: ComparisonOperator): ComparisonOperator = when (operator) {
         ComparisonOperator.EQUAL -> operator
         ComparisonOperator.LESS_THAN -> ComparisonOperator.GREATER_THAN
@@ -267,15 +244,4 @@ internal class JSqlParserNameResolver(private val catalog: CatalogSnapshot, priv
     private fun fail(code: ErrorCode, message: String): Nothing =
         throw AnalysisException(AnalysisError(code, message))
 
-    private companion object {
-        val BUILTIN_CAST_TYPES = setOf(
-            "smallint", "int2", "integer", "int", "int4", "bigint", "int8", "numeric", "decimal",
-            "real", "float4", "double precision", "float8", "float", "boolean", "bool",
-            "text", "varchar", "character varying", "character", "char", "bpchar", "name", "bytea",
-            "date", "time", "time without time zone", "time with time zone", "timetz",
-            "timestamp", "timestamp without time zone", "timestamp with time zone", "timestamptz", "interval",
-            "uuid", "inet", "cidr", "macaddr", "macaddr8", "bit", "varbit", "bit varying", "money", "oid",
-            "json", "jsonb", "xml", "pg_lsn", "int4range", "int8range", "numrange", "tsrange", "tstzrange", "daterange",
-        )
-    }
 }
