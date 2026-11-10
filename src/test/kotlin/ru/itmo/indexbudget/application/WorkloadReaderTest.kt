@@ -2,6 +2,7 @@ package ru.itmo.indexbudget.application
 
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -14,6 +15,7 @@ import ru.itmo.indexbudget.domain.AnalysisError
 import ru.itmo.indexbudget.domain.AnalysisException
 import ru.itmo.indexbudget.domain.ErrorCode
 import ru.itmo.indexbudget.domain.Objective
+import ru.itmo.indexbudget.domain.RunContext
 import ru.itmo.indexbudget.domain.WorkloadInput
 import ru.itmo.indexbudget.domain.WriteRateSource
 import tools.jackson.databind.json.JsonMapper
@@ -305,6 +307,104 @@ class WorkloadReaderTest {
             val error = failure(bad)
             assertFalse(error.message.contains("secret-password"))
         }
+    }
+
+    @Test
+    fun `input fingerprint hashes recursively sorted compact source JSON`() {
+        val expected = "eab14c75b8de97286b475d312c503023120ad6d6df926d7fe0c9cb388cf2c0d6"
+        // Independently fixed SHA-256 for this JSON with sorted keys at every object level.
+        val compact = json(queries = listOf(query("q1")),
+            profiles = listOf(profile(calls = """{"q1":1}""")))
+        val reordered = """
+            {
+              "profiles": [{"weight":1, "id":"normal", "calls_per_hour":{"q1":1}}],
+              "queries": [{"sql":"SELECT id FROM public.records", "id":"q1"}],
+              "constraints": {
+                "write_budget_units_per_hour": null,
+                "storage_budget_bytes": 1024,
+                "max_indexes": 5
+              },
+              "schema_version": 2
+            }
+        """.trimIndent()
+
+        assertEquals(expected, fingerprint(compact))
+        assertEquals(expected, fingerprint(reordered))
+    }
+
+    @Test
+    fun `fingerprint preserves SQL string contents but ignores JSON escape spelling`() {
+        val sql = "SELECT id FROM public.records WHERE value = 'я😀'"
+        val source = json(queries = listOf(query("q1", sql), query("q2")))
+        val sameSql = source.replace("SELECT", "\\u0053ELECT")
+        assertEquals(fingerprint(source), fingerprint(sameSql))
+        assertNotEquals(fingerprint(source),
+            fingerprint(json(queries = listOf(query("q1", " $sql\n"), query("q2")))))
+
+        val context = RunContext()
+        val path = directory.resolve("sql-hash.json")
+        Files.writeString(path, source)
+        assertEquals(sql, reader.read(path, context).queries.first().sql)
+        assertEquals(fingerprint(source), context.inputHash)
+    }
+
+    @Test
+    fun `fingerprint preserves both query and profile array order`() {
+        val original = fingerprint(json())
+        assertNotEquals(original, fingerprint(json(queries = listOf(query("q2"), query("q1")))))
+        assertNotEquals(original, fingerprint(json(profiles = listOf(
+            profile("campaign", "1", """{"q1":0,"q2":10}"""),
+            profile("normal", "9", """{"q1":10,"q2":0}"""),
+        ))))
+        // Object order inside calls_per_hour has no effect, unlike the surrounding array order.
+        assertEquals(original, fingerprint(json(profiles = listOf(
+            profile("normal", "9", """{"q2":0,"q1":10}"""),
+            profile("campaign", "1", """{"q2":10,"q1":0}"""),
+        ))))
+    }
+
+    @Test
+    fun `fingerprint distinguishes omitted fields from equivalent explicit defaults`() {
+        for ((omitted, explicit) in listOf(
+            json() to json(objective = "\"robust\""),
+            json(constraints = constraintsJson(maxIndexes = null)) to json(),
+            json() to json(writeRates = "null"),
+        )) {
+            assertEquals(read(omitted), read(explicit))
+            assertNotEquals(fingerprint(omitted), fingerprint(explicit))
+        }
+    }
+
+    @Test
+    fun `invalid workload never records an input fingerprint`() {
+        for (source in listOf("{", json(schemaVersion = "1"), json(objective = "\"invalid\""),
+            json(writeRates = "{}"))) {
+            val context = RunContext()
+            val path = directory.resolve("invalid-hash.json")
+            Files.writeString(path, source)
+            assertThrows(AnalysisException::class.java) { reader.read(path, context) }
+            assertNull(context.inputHash)
+        }
+    }
+
+    @Test
+    fun `one run cannot replace its input fingerprint`() {
+        val context = RunContext()
+        val path = directory.resolve("single-input.json")
+        Files.writeString(path, json())
+        reader.read(path, context)
+        val original = context.inputHash
+        Files.writeString(path, json(objective = "\"mean\""))
+        assertThrows(IllegalStateException::class.java) { reader.read(path, context) }
+        assertEquals(original, context.inputHash)
+    }
+
+    private fun fingerprint(json: String): String {
+        val context = RunContext()
+        val path = directory.resolve("fingerprint.json")
+        Files.writeString(path, json)
+        reader.read(path, context)
+        return requireNotNull(context.inputHash)
     }
 
     private fun json(

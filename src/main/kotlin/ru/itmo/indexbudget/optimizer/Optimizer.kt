@@ -2,12 +2,21 @@ package ru.itmo.indexbudget.optimizer
 
 import ru.itmo.indexbudget.domain.CandidateBatch
 import ru.itmo.indexbudget.domain.EvaluationResult
+import ru.itmo.indexbudget.domain.EvaluatedConfiguration
 import ru.itmo.indexbudget.domain.IndexCandidate
 import ru.itmo.indexbudget.domain.MetricsCalculator
 import ru.itmo.indexbudget.domain.ObjectiveComparator
 import ru.itmo.indexbudget.domain.ResolvedWorkload
 import ru.itmo.indexbudget.domain.RunContext
 import ru.itmo.indexbudget.domain.SearchResult
+import ru.itmo.indexbudget.domain.SearchDiagnostics
+
+/** A saved pair from one evaluated pool, available even if the next external call fails. */
+data class SearchCheckpoint(
+    val bestRobust: EvaluatedConfiguration,
+    val bestMean: EvaluatedConfiguration,
+    val diagnostics: SearchDiagnostics = SearchDiagnostics(),
+)
 
 /** The only database-facing capability needed by search; implementations may also be test fixtures. */
 interface ConfigurationEvaluator {
@@ -30,6 +39,10 @@ interface Optimizer {
      * The application supplies the complete baseline and final shortlist with known sizes.
      * Keep the run-local cache and both incumbents here; all formulas come from [metrics].
      * No Spring, JDBC, or parser types belong in optimizer implementations.
+     * Before evaluating a nonempty set, use assessBudget: exclude inadmissible singletons with
+     * budget CandidateDecisions, and never evaluate a configuration that violates any budget.
+     * Publish both incumbents through onCheckpoint after every accepted full evaluation, before
+     * starting the next operation. Enter/complete GREEDY and REPAIR phases on the shared context.
      */
     fun optimize(
         workload: ResolvedWorkload,
@@ -39,5 +52,6 @@ interface Optimizer {
         metrics: MetricsCalculator,
         comparator: ObjectiveComparator,
         context: RunContext,
+        onCheckpoint: (SearchCheckpoint) -> Unit = {},
     ): SearchResult
 }

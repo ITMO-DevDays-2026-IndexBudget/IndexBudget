@@ -10,7 +10,7 @@ import ru.itmo.indexbudget.optimizer.ConfigurationEvaluator
  * Owns one physical connection for one command. It is not shared or pooled across active analyses.
  * Every evaluate resets hypotheses before creating the exact set and again in finally, with rollback
  * before reset after a failed transaction. Closing must clean up or close the connection. No JDBC type
- * crosses this port. The application owns the session lifetime and closes it with `use`.
+ * crosses this port. The application owns the session lifetime and closes it in finally.
  */
 interface AnalysisSession : ConfigurationEvaluator, AutoCloseable {
     /** Unqualified names are resolved against this connection's PostgreSQL search path. */
@@ -18,6 +18,13 @@ interface AnalysisSession : ConfigurationEvaluator, AutoCloseable {
 
     /** Size of a shortlisted hypothetical index, with the same cleanup/deadline contract as evaluate. */
     fun estimateSize(candidate: IndexCandidate, context: RunContext): Long
+
+    /**
+     * Idempotent cancellation, safe to call from a shutdown thread while a SQL operation is active.
+     * Cancel the active statement and release/abort the physical connection. Do not start cleanup
+     * SQL after the context's time budget expires. Closing afterward must remain safe.
+     */
+    fun cancel()
 
     override fun close()
 }

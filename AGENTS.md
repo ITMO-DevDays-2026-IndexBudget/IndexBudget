@@ -18,7 +18,7 @@
 
 ## Состояние репозитория и структура
 
-В репозитории есть собираемый каркас CLI, Gradle wrapper, общие модели и интерфейсы, тесты и синтетические фикстуры. Команда `analyze` пока возвращает `NOT_IMPLEMENTED`: SQL-анализ, HypoPG, расчёты, поиск и экспорт ещё не подключены. Команды сборки и запуска смотри в [README](README.md), существующие стыки — в [docs/contracts.md](docs/contracts.md). Перед изменениями осмотри актуальное дерево и build-файлы; не создавай повторный каркас.
+В репозитории есть CLI с валидацией JSON v2, orchestration `AnalysisPipeline`, общий RunContext, AST-валидация, JDBC-каталог, ограниченный перечислитель кандидатов, тесты и синтетические фикстуры. Команда `analyze` пока возвращает `NOT_IMPLEMENTED` с отсутствующими зависимостями: разрешение SQL, сессия HypoPG, полный shortlist, расчёты, поиск и экспорт ещё не подключены целиком. Команды сборки и запуска смотри в [README](README.md), существующие стыки — в [docs/contracts.md](docs/contracts.md). Перед изменениями осмотри актуальное дерево и build-файлы; не создавай повторный каркас.
 
 Целевой стек: Kotlin/JVM, JDK 25 LTS, Gradle Kotlin DSL, Spring Boot с `WebApplicationType.NONE`, Jackson, PostgreSQL JDBC, PostgreSQL 16 + HypoPG. Предусмотрены CLI и автономный HTML; HTTP API в MVP отсутствует.
 
