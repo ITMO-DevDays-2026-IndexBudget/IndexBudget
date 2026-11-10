@@ -12,12 +12,14 @@
 | **T1** | Нормирование весов + инварианты (underflow, sum, конечность) | `main` | Общий `ProfileWeights` для CLI и метрик (`p_s = w/sum`, ошибки NUMERIC_ERROR) | PR #32 принят |
 | **T2** | Метрики профилей и агрегаты `M`/`R`, #40 | `feat/profile-metrics` с актуальным `main` | `MetricsCalculatorImpl.calculate(...)` → `SetMetrics` | PR #37 принят |
 | **T3** | Бюджеты: storage (1.2/ceil) + write units, #41 | `feat/budget-assessment-41` | `assessBudget(...)` → `BudgetAssessment`, точные границы и явные ошибки | Реализовано, числовые тесты и проверка стыка с pipeline без БД |
-| **T4** | Компаратор: `compare` + `improvesPrimaryMetrics` | `feat/objective-comparator` | детерминированный ключ; гейт greedy | ⏳ |
-| **T6** | Zero-baseline регрессия и baseline-only, #43 | `feat/zero-baseline-regression` | Проверка допустимости после EXPLAIN и сигнал остановки поиска | ⏳ |
+| **T4** | Компаратор: `compare` + `improvesPrimaryMetrics` | `feat/objective-comparator` | детерминированный ключ; гейт greedy | PR #47 принят |
+| **T6** | Zero-baseline регрессия и baseline-only, #43 | `codex/issue-43-zero-baseline` | `assessEvaluation(...)` → `Accepted(metrics, searchRequired)` / `Rejected(metrics, violations)` | Реализовано в этой ветке; рабочий Optimizer остаётся в #17 |
 | **T7** | `priceOfRobustness` из одного пула | `feat/price-of-robustness` | `C_mean(best_robust) − C_mean(best_mean)` | ⏳ |
 | **T8** | Кросс-проверка на реальных оценках (Егор/Марат) | интеграционная | числовая сверка, общий пул, консистентность отчёта | ⏳ |
 
 Общий `ProfileWeights` уже доступен в `main`. [PR #35](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/pull/35) закрыт без merge; отдельный `WeightNormalizer` удалён из PR #37. Зависимость T2 от нормирования обеспечивается PR #32.
+
+Контракт T6 отделён от бюджетов T3: после полного EXPLAIN потребитель вызывает `assessEvaluation`, сохраняет `ZERO_BASELINE_REGRESSION` с profile ID при отказе и не обновляет incumbents. При принятом baseline с `searchRequired = false` pipeline возвращает пустой набор без генерации и поиска. Сырые метрики остаются доступны, численные ошибки не превращаются в отказ набору. Подробности и пример потребления для #14/#17 — в [контрактах](contracts.md#допустимость-после-оценки-43). Это не реализация greedy/repair и не подтверждение сквозного анализа с HypoPG.
 
 ## Работа с ветками и заметками
 

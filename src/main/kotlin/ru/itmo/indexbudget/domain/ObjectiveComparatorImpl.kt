@@ -24,8 +24,11 @@ class ObjectiveComparatorImpl : ObjectiveComparator {
         return compareIds(left.evaluation.candidateIds, right.evaluation.candidateIds)
     }
 
-    override fun improvesPrimaryMetrics(proposed: SetMetrics, current: SetMetrics, objective: Objective): Boolean =
-        primaryOrder(proposed, current, objective) < 0
+    override fun improvesPrimaryMetrics(proposed: SetMetrics, current: SetMetrics, objective: Objective): Boolean {
+        proposed.requireAdmissible()
+        current.requireAdmissible()
+        return primaryOrder(proposed, current, objective) < 0
+    }
 
     private fun primaryOrder(left: SetMetrics, right: SetMetrics, objective: Objective): Int {
         val leftKey = primaryKey(left, objective)

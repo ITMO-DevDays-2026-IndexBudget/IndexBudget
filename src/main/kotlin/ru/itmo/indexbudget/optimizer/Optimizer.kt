@@ -41,6 +41,12 @@ interface Optimizer {
      * No Spring, JDBC, or parser types belong in optimizer implementations.
      * Before evaluating a nonempty set, use assessBudget: exclude inadmissible singletons with
      * budget CandidateDecisions, and never evaluate a configuration that violates any budget.
+     * After every complete evaluation, use metrics.assessEvaluation before comparing or saving it.
+     * Rejected assessments retain raw metrics and ZERO_BASELINE_REGRESSION diagnostics with profile IDs:
+     * record the rejection for that set, preserve both incumbents, and continue without throwing it.
+     * Numeric calculation failures still propagate as AnalysisException. An accepted baseline with
+     * searchRequired=false returns the empty set before generation/search; the application handles
+     * this early exit. Only accepted configurations may be compared or published in checkpoints.
      * Publish both incumbents through onCheckpoint after every accepted full evaluation, before
      * starting the next operation. Enter/complete GREEDY and REPAIR phases on the shared context.
      */

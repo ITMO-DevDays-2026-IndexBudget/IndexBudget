@@ -1,6 +1,6 @@
 # Контракты компонентов v0.2
 
-Модели и интерфейсы задают стыки совместной реализации [#3](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/issues/3) и [#14](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/issues/14). Источник поведения — [спецификация v0.2](../IndexBudget-spec-v0.2.md). Реализованы валидация JSON v2, orchestration, AST-валидация, JDBC-каталог и ограниченный перечислитель кандидатов. Для реального запуска ещё нужны разрешение SQL, сессия HypoPG, полный генератор shortlist, метрики/компаратор, поиск, сборка и экспорт отчётов. Проверки orchestration используют подставные реализации этих интерфейсов.
+Модели и интерфейсы задают стыки совместной реализации [#3](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/issues/3) и [#14](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/issues/14). Источник поведения — [спецификация v0.2](../IndexBudget-spec-v0.2.md). Реализованы валидация JSON v2, orchestration, AST-валидация, JDBC-каталог, ограниченный перечислитель кандидатов, профильные метрики, расчёт бюджетов, компаратор и проверка допустимости после оценки. Для реального запуска ещё нужны разрешение SQL, сессия HypoPG, полный генератор shortlist, поиск, сборка и экспорт отчётов. Проверки orchestration используют подставные реализации недостающих интерфейсов.
 
 Проект пока собирается одним Gradle-модулем. Пакеты `cli`, `application`, `domain`, `sql`, `candidates`, `optimizer`, `postgres` и `report` обозначают границы ответственности. Доменные модели и интерфейсы расчётов не зависят от Spring, JDBC, Jackson и JSqlParser AST.
 
@@ -46,7 +46,7 @@ JSON использует `snake_case` и регистрозависимые з�
 
 Модуль расчётов получает costs и размеры; поиск вызывает его интерфейс. В поиске, JDBC-адаптере и HTML не должно появляться второй реализации формул или прежнего скалярного score.
 
-`MetricsCalculatorImpl.calculate` вычисляет профильные метрики и агрегаты `M`/`R` по полным baseline и evaluation, проверяя их точное покрытие workload через `requireQueryCoverage`. Суммирование идёт по отсортированным query IDs и profile IDs. При нулевых baseline отношения и проценты остаются `null`, абсолютные costs и gains сохраняются; `B_mean=0` при положительном `B_s` даёт `NUMERIC_ERROR`. Компаратор и проверка допустимости после оценки остаются в #42/#43. Реализация расчётов не означает, что они уже подключены к сквозному анализу CLI.
+`MetricsCalculatorImpl.calculate` вычисляет профильные метрики и агрегаты `M`/`R` по полным baseline и evaluation, проверяя их точное покрытие workload через `requireQueryCoverage`. Суммирование идёт по отсортированным query IDs и profile IDs. При нулевых baseline отношения и проценты остаются `null`, абсолютные costs и gains сохраняются; `B_mean=0` при положительном `B_s` даёт `NUMERIC_ERROR`. Это расчёт сырых метрик, а не разрешение обновить incumbents. `ObjectiveComparatorImpl` реализует общий порядок и условие жадного шага. Реализация расчётов не означает, что они уже подключены к сквозному анализу CLI.
 
 `MetricsCalculatorImpl.assessBudget` (#41) рассчитывает расходы только переданного набора новых кандидатов. Для каждого индекса запас округляется вверх до суммирования: `n + ceil(n/5)` целочисленно, без преобразования `Long` в `Double`. Отрицательный размер или переполнение размера/суммы дают `NUMERIC_ERROR`; неизвестный размер — `HYPOTHETICAL_INDEX_ERROR` с `candidate_id`. `BudgetAssessment` содержит общие расходы и все нарушенные ограничения (`STORAGE_BUDGET`, `WRITE_BUDGET`, `MAX_INDEXES`); равенство лимиту допустимо. Реальные индексы остаются в baseline и не передаются как новые кандидаты.
 
@@ -55,6 +55,39 @@ Write units рассчитываются по исходным rates табли�
 Без профиля значение — `null`, даже у пустого набора; с профилем рассчитывается и при выключенном лимите, у пустого набора равно нулю. Отсутствующий профиль при включённом лимите, пустой профиль, невалидные rates или отсутствие rates таблицы кандидата дают `INVALID_WRITE_PROFILE`; переполнение расчёта — `NUMERIC_ERROR`. Полное покрытие **всех** таблиц workload, лишние и неоднозначные ключи проверяет `ResolvedWorkloadValidator` до baseline: `WorkloadInput` сам по себе не содержит разрешённых таблиц, а набор кандидатов может быть пустым.
 
 Источники расчёта — `estimatedBytes` и `tableWriteRates`; заполненные `budgetedBytes`/`writeUnitsPerHour` кандидата не подменяют их. Pipeline сохраняет рассчитанные значения в копиях кандидатов для поиска и отчёта. `calculate` переносит готовый `BudgetUsage` в `SetMetrics`; потребители не применяют запас повторно. Нулевое место или `maxIndexes=0` обрабатываются pipeline как baseline-only до генерации, нулевой write budget допускает только нулевые write units.
+
+### Допустимость после оценки (#43)
+
+`MetricsCalculator.assessEvaluation(workload, baseline, evaluation, usage)` вызывает общий `calculate` и возвращает `EvaluationAssessment`. Это отдельная от `assessBudget` проверка: бюджет известен до EXPLAIN, а zero-baseline регрессия определяется по уже полученному полному вектору costs. Домен проверяет готовые профильные метрики, без второго калькулятора и без новых запросов к БД.
+
+- `Accepted(metrics, searchRequired)` означает отсутствие zero-baseline регрессий. При хотя бы одном положительном `B_s` значение `searchRequired` равно `true`.
+- `Accepted(metrics, searchRequired = false)` сообщает, что все `B_s` равны нулю. При оценке baseline pipeline возвращает пустой набор с `StopReason.ZERO_BASELINE`, `M/R = null`, не вызывая генерацию, оценку размеров и поиск. Нулевой бюджет места или `max_indexes = 0` также могут завершить запуск раньше со своей причиной.
+- `Rejected(metrics, violations)` содержит все профили с `B_s = 0` и `C_s(S) > 0`, в порядке profile ID. Каждая запись — `AnalysisError` с `code = ZERO_BASELINE_REGRESSION` и `profileId`. Абсолютные costs/gains и вычисленные отношения остальных профилей сохраняются в `metrics`; нулевой профиль по-прежнему имеет `ratio/gainPercent = null`.
+
+`Rejected` — нормальный отказ конкретному набору, а не `AnalysisException`, `NUMERIC_ERROR` или основание завершить весь запуск как failed/partial. Поиск сохраняет причину вместе с ID набора, не обновляет ни один incumbent и рассматривает следующий набор. Если все baseline нулевые, но переданная оценка имеет положительные costs, результат остаётся `Rejected`, а не разрешением выбрать её как baseline. Численные ошибки при расчёте сохраняют прежний контракт `AnalysisException(NUMERIC_ERROR)`.
+
+Пример: два профиля одинакового веса используют только `q1` и только `q2` соответственно, с частотой 1. Для baseline costs `(0, 100)` оценка `(0, 50)` принимается с `M = R = 0.5`. Оценка `(1, 1)` отклоняется для первого профиля, хотя её сырые `M = 0.02` и `R = 0.01` выглядят лучше. Для baseline `(0, 0)` его повторное представление в памяти даёт `Accepted(..., false)`; новый EXPLAIN для этого не нужен.
+
+Стык [#17](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/issues/17) внутри будущего цикла поиска выглядит так. Выбор следующего набора, кэш и лимиты остаются обязанностью Optimizer; этот фрагмент не является реализацией алгоритма. `rejectedConfigurations` обозначает сохраняемые поиском причины отказов, `bestRobust` и `bestMean` изначально содержат принятый baseline:
+
+```kotlin
+val budget = metrics.assessBudget(configurationCandidates, workload.input)
+if (!budget.admissible) continue
+val evaluation = evaluator.evaluate(configurationCandidates, workload, context)
+when (val assessment = metrics.assessEvaluation(workload.input, baseline, evaluation, budget.usage)) {
+    is EvaluationAssessment.Rejected -> {
+        rejectedConfigurations[evaluation.candidateIds] = assessment.violations
+        continue
+    }
+    is EvaluationAssessment.Accepted -> {
+        val configuration = EvaluatedConfiguration(evaluation, assessment.metrics)
+        if (comparator.compare(configuration, bestRobust, Objective.ROBUST) < 0) bestRobust = configuration
+        if (comparator.compare(configuration, bestMean, Objective.MEAN) < 0) bestMean = configuration
+    }
+}
+```
+
+До этого цикла потребитель обрабатывает baseline с `searchRequired = false`. `EvaluatedConfiguration` защищает границу incumbents: не принимает rejected метрики и непустой набор при отсутствии необходимости поиска. `improvesPrimaryMetrics` также не допускает rejected метрики. Попытка обойти проверку — ошибка реализации через `require`, а не штатный способ обработать отказ. Рабочая реализация Optimizer пока отсутствует; раннее завершение подключено в pipeline, а переход от отказа к следующему набору проверяется через тестовые потребители контракта.
 
 ## Оценки и результаты
 

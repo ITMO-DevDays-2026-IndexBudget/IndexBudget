@@ -3,6 +3,8 @@ package ru.itmo.indexbudget.application
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
+import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.EnumSource
 import ru.itmo.indexbudget.candidates.CandidateGenerator
 import ru.itmo.indexbudget.cli.IndexBudgetCli
 import ru.itmo.indexbudget.domain.*
@@ -116,16 +118,85 @@ class AnalysisPipelineTest {
 
     @Test
     fun `all zero baseline costs return empty set before candidate generation`() {
-        val run = Harness()
-        run.zeroBaseline = true
-        val result = run.execute()
+        for (objective in Objective.entries) {
+            for (withWriteProfile in listOf(false, true)) {
+                val run = Harness(
+                    ContractFixtures.workload(objective, withWriteProfile),
+                    suppliedMetrics = MetricsCalculatorImpl(),
+                )
+                run.baselineAction = {
+                    val baseline = ContractFixtures.baselineEvaluation()
+                    baseline.copy(costByQueryId = baseline.costByQueryId.mapValues { 0.0 })
+                }
+                val result = run.execute()
 
-        assertEquals(RunStatus.COMPLETED, result.status)
-        assertEquals(listOf(StopReason.ZERO_BASELINE), result.diagnostics.stopReasons)
-        assertNull(result.selected?.metrics?.meanRatio)
-        assertNull(result.selected?.metrics?.worstRatio)
-        assertFalse("generate" in run.events)
-        assertFalse("optimize" in run.events)
+                assertEquals(RunStatus.COMPLETED, result.status)
+                assertEquals(listOf(StopReason.ZERO_BASELINE), result.diagnostics.stopReasons)
+                assertNull(result.selected?.metrics?.meanRatio)
+                assertNull(result.selected?.metrics?.worstRatio)
+                assertEquals(emptyList<String>(), result.selected?.evaluation?.candidateIds)
+                assertSame(result.bestRobust, result.bestMean)
+                assertSame(result, run.report?.result)
+                assertEquals(listOf(emptyList<String>()), run.evaluatedSets)
+                assertEquals(1, result.diagnostics.statistics.completedEvaluations)
+                assertEquals(2, result.diagnostics.statistics.explainAttempts)
+                assertFalse("generate" in run.events)
+                assertFalse("optimize" in run.events)
+                assertFalse(run.events.any { it.startsWith("size:") })
+                assertEquals(1, run.closeCalls)
+                assertEquals(1, run.unregisterCalls)
+                assertEquals(listOf("report", "export"), run.events.takeLast(2))
+                if (withWriteProfile) {
+                    assertEquals(0.0, result.selected?.metrics?.budgetUsage?.writeUnitsPerHour)
+                } else {
+                    assertNull(result.selected?.metrics?.budgetUsage?.writeUnitsPerHour)
+                }
+            }
+        }
+    }
+
+    @ParameterizedTest
+    @EnumSource(Objective::class)
+    fun `zero-baseline rejection preserves incumbents and does not fail the run`(objective: Objective) {
+        val acceptedIds = listOf("records_created_at")
+        val rejectedIds = listOf("records_group_created_at")
+        for ((first, second) in listOf(acceptedIds to rejectedIds, rejectedIds to acceptedIds)) {
+            val input = ContractFixtures.workload(objective).copy(profiles = listOf(
+                Profile("zero", 1.0, mapOf("records_by_group" to 1.0, "records_by_value" to 0.0)),
+                Profile("positive", 1.0, mapOf("records_by_group" to 0.0, "records_by_value" to 1.0)),
+            ))
+            val run = Harness(input, suppliedMetrics = MetricsCalculatorImpl())
+            run.baselineAction = {
+                ContractFixtures.baselineEvaluation().copy(costByQueryId = mapOf(
+                    "records_by_group" to 0.0, "records_by_value" to 100.0,
+                ))
+            }
+            run.scriptedEvaluations[acceptedIds] = ContractFixtures.robustEvaluation().copy(costByQueryId = mapOf(
+                "records_by_group" to 0.0, "records_by_value" to 50.0,
+            ))
+            run.scriptedEvaluations[rejectedIds] = ContractFixtures.meanEvaluation().copy(costByQueryId = mapOf(
+                "records_by_group" to 1.0, "records_by_value" to 1.0,
+            ))
+            run.greedyConfigurationIds = first
+            run.repairConfigurationIds = second
+            run.robustIncumbentIds = acceptedIds
+            run.meanIncumbentIds = acceptedIds
+
+            val result = run.execute()
+
+            assertEquals(RunStatus.COMPLETED, result.status)
+            assertEquals(acceptedIds, result.bestRobust?.evaluation?.candidateIds)
+            assertEquals(acceptedIds, result.bestMean?.evaluation?.candidateIds)
+            assertEquals(0.5, result.selected?.metrics?.meanRatio)
+            assertEquals(0.5, result.selected?.metrics?.worstRatio)
+            assertEquals(listOf(emptyList(), first, second), run.evaluatedSets)
+            val rejection = result.diagnostics.errors.single()
+            assertEquals(ErrorCode.ZERO_BASELINE_REGRESSION, rejection.code)
+            assertEquals("zero", rejection.profileId)
+            assertEquals(listOf(StopReason.SEARCH_COMPLETE), result.diagnostics.stopReasons)
+            assertSame(result, run.report?.result)
+            assertEquals(1, run.closeCalls)
+        }
     }
 
     @Test
@@ -540,7 +611,6 @@ class AnalysisPipelineTest {
         var report: AnalysisReport? = null
         var exportRemaining: Duration? = null
         var cancelRegistered: (() -> Unit)? = null
-        var zeroBaseline = false
         var failClose = false
         var publishInvalidCheckpoint = false
         var returnedSearchFailure: ErrorCode? = null
@@ -569,6 +639,7 @@ class AnalysisPipelineTest {
             listOf("records_created_at") to ContractFixtures.robustConfiguration(),
             listOf("records_group_created_at") to ContractFixtures.meanConfiguration(),
         )
+        val scriptedEvaluations = configurationsByIds.mapValues { it.value.evaluation }.toMutableMap()
 
         fun advance(seconds: Long) { now += Duration.ofSeconds(seconds).toNanos() }
 
@@ -600,11 +671,9 @@ class AnalysisPipelineTest {
                 evaluatedSets += configurationIds
                 context.reserveEvaluationAttempt()
                 input.queries.forEach { context.reserveExplainAttempt() }
-                val scriptedEvaluation = configurationsByIds.getValue(configurationIds).evaluation
+                val scriptedEvaluation = scriptedEvaluations.getValue(configurationIds)
                 val evaluation = if (candidates.isEmpty()) {
-                    baselineAction?.invoke() ?: scriptedEvaluation.let { baseline ->
-                        if (zeroBaseline) baseline.copy(costByQueryId = baseline.costByQueryId.mapValues { 0.0 }) else baseline
-                    }
+                    baselineAction?.invoke() ?: scriptedEvaluation
                 } else scriptedEvaluation
                 if (evaluation.costByQueryId.keys == input.queries.map { it.id }.toSet()) {
                     context.recordCompletedEvaluation()
@@ -625,7 +694,9 @@ class AnalysisPipelineTest {
         private val metrics: MetricsCalculator = suppliedMetrics ?: object : MetricsCalculator {
             override fun assessBudget(candidates: List<IndexCandidate>, workload: WorkloadInput): BudgetAssessment {
                 assertSame(input, workload)
-                val usage = if (candidates.isEmpty()) BudgetUsage(0, 0, 0.0, 0) else {
+                val usage = if (candidates.isEmpty()) {
+                    BudgetUsage(0, 0, if (workload.tableWriteRates == null) null else 0.0, 0)
+                } else {
                     val candidate = candidates.single()
                     val expected = expectedUsageByCandidateId.getValue(candidate.id)
                     assertEquals(expected.estimatedBytes, candidate.estimatedBytes, candidate.id)
@@ -637,12 +708,8 @@ class AnalysisPipelineTest {
             override fun calculate(workload: WorkloadInput, baseline: EvaluationResult,
                                    evaluation: EvaluationResult, usage: BudgetUsage): SetMetrics {
                 assertSame(input, workload)
-                assertSame(baseline, evaluation)
-                val metrics = ContractFixtures.baselineConfiguration().metrics
-                return if (zeroBaseline) metrics.copy(
-                    profiles = metrics.profiles.map { it.copy(baselineCost = 0.0, cost = 0.0, ratio = null, gainPercent = null) },
-                    baselineMeanCost = 0.0, meanCost = 0.0, meanRatio = null, worstRatio = null, budgetUsage = usage,
-                ) else metrics.copy(budgetUsage = usage)
+                val metrics = configurationsByIds.getValue(evaluation.candidateIds).metrics
+                return metrics.copy(budgetUsage = usage)
             }
         }
 
@@ -671,14 +738,16 @@ class AnalysisPipelineTest {
                 }
                 val candidatesById = candidates.candidates.associateBy { it.id }
                 val saved = mutableMapOf<List<String>, EvaluatedConfiguration>()
+                val rejections = mutableListOf<AnalysisError>()
                 fun evaluateScriptedConfiguration(ids: List<String>) {
-                    val expected = configurationsByIds.getValue(ids)
                     val selected = ids.map { candidatesById.getValue(it) }
-                    val budget = suppliedMetrics?.assessBudget(selected, workload.input)
-                    if (budget != null) assertTrue(budget.admissible)
+                    val budget = metrics.assessBudget(selected, input)
+                    check(budget.admissible)
                     val evaluation = evaluator.evaluate(selected, workload, context)
-                    saved[ids] = if (budget == null) expected.copy(evaluation = evaluation) else {
-                        EvaluatedConfiguration(evaluation, metrics.calculate(workload.input, baseline, evaluation, budget.usage))
+                    when (val assessment = metrics.assessEvaluation(input, baseline, evaluation, budget.usage)) {
+                        is EvaluationAssessment.Accepted ->
+                            saved[ids] = EvaluatedConfiguration(evaluation, assessment.metrics)
+                        is EvaluationAssessment.Rejected -> rejections += assessment.violations
                     }
                 }
 
@@ -694,7 +763,7 @@ class AnalysisPipelineTest {
                 }
                 val robust = saved.getValue(robustIncumbentIds)
                 val mean = saved.getValue(meanIncumbentIds)
-                onCheckpoint(SearchCheckpoint(robust, mean))
+                onCheckpoint(SearchCheckpoint(robust, mean, SearchDiagnostics(errors = rejections.toList())))
                 if (publishInvalidCheckpoint) {
                     val invalid = mean.evaluation.copy(
                         costByQueryId = mean.evaluation.costByQueryId.filterKeys { it == "records_by_group" },
@@ -709,7 +778,7 @@ class AnalysisPipelineTest {
                     return SearchResult.Failed(input.objective, AnalysisError(code, "Synthetic search failure"))
                 }
                 return SearchResult.Completed(input.objective, baseline, robust, mean,
-                    SearchDiagnostics(stopReasons = listOf(StopReason.SEARCH_COMPLETE)))
+                    SearchDiagnostics(stopReasons = listOf(StopReason.SEARCH_COMPLETE), errors = rejections.toList()))
             }
         }
 

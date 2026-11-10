@@ -5,7 +5,7 @@
 ## Область
 Модуль `MetricsCalculator` + `ObjectiveComparator` в `domain/`. Чистые расчёты, без БД. Единственная реализация формул в проекте.
 
-Общий `ProfileWeights` принят в [PR #32](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/pull/32) и используется в CLI и расчётах. Отдельный PR #35 закрыт без merge. [PR #37](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/pull/37) реализует `calculate(...)` для #40; в #41 реализован `assessBudget(...)`. Компаратор, проверка допустимости после оценки и цена устойчивости остаются отдельными задачами.
+Общий `ProfileWeights` принят в [PR #32](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/pull/32) и используется в CLI и расчётах. Отдельный PR #35 закрыт без merge. [PR #37](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/pull/37) реализует `calculate(...)` для #40; в #41 реализован `assessBudget(...)`, в [PR #47](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/pull/47) — `ObjectiveComparatorImpl`. В этой ветке реализован `assessEvaluation(...)` для #43; цена устойчивости остаётся отдельной задачей.
 
 ## Формулы
 ```text
@@ -21,7 +21,7 @@ R(S)      = max_s (C_s/B_s) for s with B_s>0      # НЕВЗВЕШЕННЫЙ м�
 ```
 `M ≠ sum(p*C/B)`. `R` — худшая нормированная стоимость, не regret. При `B_s=0`: ratio/gainPercent = null, профиль вне максимума `R`, но набор обязан сохранять `C_s=0` (иначе ZERO_BASELINE_REGRESSION). Все `B_s=0` → baseline + пустой набор, `M`/`R` = null, поиск не запускается.
 
-`calculate(...)` сохраняет абсолютные метрики и при нулевых baseline. Решение о недопустимости регрессии и завершении поиска относится к T6 (#43), а не подменяется обнулением costs.
+`calculate(...)` сохраняет абсолютные метрики и при нулевых baseline. `assessEvaluation(...)` из T6 (#43) возвращает `Rejected` при регрессии или `Accepted(searchRequired = false)` для baseline-only, не подменяя costs нулём. Pipeline использует этот сигнал до генерации кандидатов и поиска.
 
 До расчёта baseline и evaluation должны покрывать ровно query IDs workload. Суммы внутри профиля вычисляются по query ID, агрегаты — по profile ID, чтобы порядок `Map` и входных списков не влиял на результат. Профильные отношения и проценты проверяются на конечность до создания `ProfileMetrics`; `R` использует проверенные отношения.
 
@@ -45,10 +45,10 @@ Pipeline сохраняет исходный estimated size и рассчита�
 
 ## Зафиксированные решения
 - Plateau-фикстура — через округление до 9 знаков HALF_EVEN.
-- Zero-baseline регрессия требует проверки после EXPLAIN: `assessBudget` не получает baseline/costs, поэтому одного расширения `BudgetViolation` недостаточно. Контракт согласуется в T6 (#43).
+- Zero-baseline регрессия проверяется после полного EXPLAIN через `assessEvaluation`: `assessBudget` не получает baseline/costs. Контракт T6 (#43) и стык поиска описаны в [контрактах](contracts.md#допустимость-после-оценки-43).
 - `priceOfRobustness` = `C_mean(best_robust) − C_mean(best_mean)` из одного пула (helper над двумя `EvaluatedConfiguration`).
 
 ## Инварианты (проверки §10)
 - `sum(p*C)/sum(p*B) ≠ sum(p*C/B)`; `B_mean=0` при `B_s>0` → ошибка; положительный вес, потерянный из-за underflow, ≠ нулевой вероятности (проверяет общий `ProfileWeights`).
 - Нечисловой/отрицательный cost и переполнение сумм, произведений, отношений или процентов не превращаются в успешные метрики. Численные ошибки расчёта имеют код `NUMERIC_ERROR`, а профильные — также `profileId`.
-- Детерминированные равенства `(r,m) → bytes → writes → ids` относятся к будущему компаратору T4.
+- Детерминированные равенства `(r,m) → bytes → writes → ids` проверяются общим `ObjectiveComparatorImpl` из T4.
