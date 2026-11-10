@@ -1,0 +1,775 @@
+{
+  "scope" : "fixed_test_pool_not_optimizer",
+  "seed" : "demo/postgres/init/001-seed.sql",
+  "seed_sha256" : "645bd179aa8e58e0e4cdbdce68e9f1a3693dd62b8414aa72730ae16863f1f8bd",
+  "java" : "25.0.5",
+  "input_hash" : "0d147e2ef52a1dad7fb1208bce2a70228ff6f612011df9b38e3084368005ca9f",
+  "workload" : {
+    "queries" : [ {
+      "id" : "by_group",
+      "sql" : "SELECT id, value FROM public.records WHERE group_id = 42 ORDER BY created_at DESC LIMIT 20"
+    }, {
+      "id" : "by_value",
+      "sql" : "SELECT id, value FROM public.records WHERE value = 7 ORDER BY created_at DESC LIMIT 20"
+    }, {
+      "id" : "groups",
+      "sql" : "SELECT id FROM public.groups WHERE category = 3"
+    } ],
+    "profiles" : [ {
+      "id" : "normal",
+      "weight" : 9.0,
+      "callsPerHour" : {
+        "by_group" : 3000.0,
+        "by_value" : 100.0,
+        "groups" : 100.0
+      }
+    }, {
+      "id" : "campaign",
+      "weight" : 1.0,
+      "callsPerHour" : {
+        "by_group" : 100.0,
+        "by_value" : 3000.0,
+        "groups" : 100.0
+      }
+    } ],
+    "constraints" : {
+      "storageBudgetBytes" : 67108864,
+      "writeBudgetUnitsPerHour" : 20000.0,
+      "maxIndexes" : 2
+    },
+    "schemaVersion" : 2,
+    "objective" : "ROBUST",
+    "tableWriteRates" : {
+      "public.records" : {
+        "insertsPerHour" : 1000.0,
+        "updatesPerHour" : 3000.0,
+        "deletesPerHour" : 100.0,
+        "source" : "MANUAL"
+      },
+      "public.groups" : {
+        "insertsPerHour" : 1.0,
+        "updatesPerHour" : 8.0,
+        "deletesPerHour" : 1.0,
+        "source" : "MANUAL"
+      }
+    }
+  },
+  "postgres" : "16.15 (Debian 16.15-1.pgdg12+2)",
+  "hypopg" : "1.4.2",
+  "planner_settings" : {
+    "enable_seqscan" : "on",
+    "random_page_cost" : "4",
+    "seq_page_cost" : "1",
+    "effective_cache_size" : "4GB",
+    "search_path" : "\"$user\", public"
+  },
+  "candidates" : [ {
+    "id" : "group",
+    "definition" : {
+      "table" : {
+        "schema" : "public",
+        "name" : "records"
+      },
+      "keys" : [ {
+        "column" : {
+          "table" : {
+            "schema" : "public",
+            "name" : "records"
+          },
+          "name" : "group_id"
+        },
+        "direction" : "ASC",
+        "nulls" : "LAST",
+        "collation" : null,
+        "operatorClass" : "\"pg_catalog\".\"int4_ops\""
+      }, {
+        "column" : {
+          "table" : {
+            "schema" : "public",
+            "name" : "records"
+          },
+          "name" : "created_at"
+        },
+        "direction" : "DESC",
+        "nulls" : "FIRST",
+        "collation" : null,
+        "operatorClass" : "\"pg_catalog\".\"timestamp_ops\""
+      } ],
+      "method" : "btree",
+      "unique" : false
+    },
+    "sourceQueryIds" : [ "by_group" ],
+    "generationReasons" : [ "EQUALITY_AND_ORDER" ],
+    "ddl" : "CREATE INDEX \"ib_3f6f88416e95fa4497a1f7f760158b3011f867dfbeba72e8264218af7428\" ON \"public\".\"records\" USING btree (\"group_id\" \"pg_catalog\".\"int4_ops\" ASC NULLS LAST, \"created_at\" \"pg_catalog\".\"timestamp_ops\" DESC NULLS FIRST);",
+    "estimatedBytes" : 6963200,
+    "budgetedBytes" : null,
+    "writeUnitsPerHour" : null
+  }, {
+    "id" : "value",
+    "definition" : {
+      "table" : {
+        "schema" : "public",
+        "name" : "records"
+      },
+      "keys" : [ {
+        "column" : {
+          "table" : {
+            "schema" : "public",
+            "name" : "records"
+          },
+          "name" : "value"
+        },
+        "direction" : "ASC",
+        "nulls" : "LAST",
+        "collation" : null,
+        "operatorClass" : "\"pg_catalog\".\"int4_ops\""
+      }, {
+        "column" : {
+          "table" : {
+            "schema" : "public",
+            "name" : "records"
+          },
+          "name" : "created_at"
+        },
+        "direction" : "DESC",
+        "nulls" : "FIRST",
+        "collation" : null,
+        "operatorClass" : "\"pg_catalog\".\"timestamp_ops\""
+      } ],
+      "method" : "btree",
+      "unique" : false
+    },
+    "sourceQueryIds" : [ "by_value" ],
+    "generationReasons" : [ "EQUALITY_AND_ORDER" ],
+    "ddl" : "CREATE INDEX \"ib_62c6a45542d55bc5b53a20ed06fce7905e7fb1440da2955e4b04807b6838\" ON \"public\".\"records\" USING btree (\"value\" \"pg_catalog\".\"int4_ops\" ASC NULLS LAST, \"created_at\" \"pg_catalog\".\"timestamp_ops\" DESC NULLS FIRST);",
+    "estimatedBytes" : 6963200,
+    "budgetedBytes" : null,
+    "writeUnitsPerHour" : null
+  }, {
+    "id" : "category",
+    "definition" : {
+      "table" : {
+        "schema" : "public",
+        "name" : "groups"
+      },
+      "keys" : [ {
+        "column" : {
+          "table" : {
+            "schema" : "public",
+            "name" : "groups"
+          },
+          "name" : "category"
+        },
+        "direction" : "ASC",
+        "nulls" : "LAST",
+        "collation" : null,
+        "operatorClass" : "\"pg_catalog\".\"int4_ops\""
+      } ],
+      "method" : "btree",
+      "unique" : false
+    },
+    "sourceQueryIds" : [ "groups" ],
+    "generationReasons" : [ "SINGLE_COLUMN" ],
+    "ddl" : "CREATE INDEX \"ib_5d770c036759e8cb1b45d974e372dea64ca5606fe78c1eacaeb76fc54080\" ON \"public\".\"groups\" USING btree (\"category\" \"pg_catalog\".\"int4_ops\" ASC NULLS LAST);",
+    "estimatedBytes" : 16384,
+    "budgetedBytes" : null,
+    "writeUnitsPerHour" : null
+  } ],
+  "configurations" : [ {
+    "evaluation" : {
+      "candidateIds" : [ ],
+      "costByQueryId" : {
+        "by_group" : 6698.23,
+        "by_value" : 6698.23,
+        "groups" : 19.5
+      },
+      "plansByQueryId" : {
+        "by_group" : {
+          "json" : "[\n  {\n    \"Plan\": {\n      \"Node Type\": \"Limit\",\n      \"Parallel Aware\": false,\n      \"Async Capable\": false,\n      \"Startup Cost\": 6695.90,\n      \"Total Cost\": 6698.23,\n      \"Plan Rows\": 20,\n      \"Plan Width\": 20,\n      \"Plans\": [\n        {\n          \"Node Type\": \"Gather Merge\",\n          \"Parent Relationship\": \"Outer\",\n          \"Parallel Aware\": false,\n          \"Async Capable\": false,\n          \"Startup Cost\": 6695.90,\n          \"Total Cost\": 6715.27,\n          \"Plan Rows\": 166,\n          \"Plan Width\": 20,\n          \"Workers Planned\": 2,\n          \"Plans\": [\n            {\n              \"Node Type\": \"Sort\",\n              \"Parent Relationship\": \"Outer\",\n              \"Parallel Aware\": false,\n              \"Async Capable\": false,\n              \"Startup Cost\": 5695.88,\n              \"Total Cost\": 5696.08,\n              \"Plan Rows\": 83,\n              \"Plan Width\": 20,\n              \"Sort Key\": [\"created_at DESC\"],\n              \"Plans\": [\n                {\n                  \"Node Type\": \"Seq Scan\",\n                  \"Parent Relationship\": \"Outer\",\n                  \"Parallel Aware\": true,\n                  \"Async Capable\": false,\n                  \"Relation Name\": \"records\",\n                  \"Alias\": \"records\",\n                  \"Startup Cost\": 0.00,\n                  \"Total Cost\": 5693.67,\n                  \"Plan Rows\": 83,\n                  \"Plan Width\": 20,\n                  \"Filter\": \"(group_id = 42)\"\n                }\n              ]\n            }\n          ]\n        }\n      ]\n    }\n  }\n]"
+        },
+        "by_value" : {
+          "json" : "[\n  {\n    \"Plan\": {\n      \"Node Type\": \"Limit\",\n      \"Parallel Aware\": false,\n      \"Async Capable\": false,\n      \"Startup Cost\": 6695.90,\n      \"Total Cost\": 6698.23,\n      \"Plan Rows\": 20,\n      \"Plan Width\": 20,\n      \"Plans\": [\n        {\n          \"Node Type\": \"Gather Merge\",\n          \"Parent Relationship\": \"Outer\",\n          \"Parallel Aware\": false,\n          \"Async Capable\": false,\n          \"Startup Cost\": 6695.90,\n          \"Total Cost\": 6715.27,\n          \"Plan Rows\": 166,\n          \"Plan Width\": 20,\n          \"Workers Planned\": 2,\n          \"Plans\": [\n            {\n              \"Node Type\": \"Sort\",\n              \"Parent Relationship\": \"Outer\",\n              \"Parallel Aware\": false,\n              \"Async Capable\": false,\n              \"Startup Cost\": 5695.88,\n              \"Total Cost\": 5696.08,\n              \"Plan Rows\": 83,\n              \"Plan Width\": 20,\n              \"Sort Key\": [\"created_at DESC\"],\n              \"Plans\": [\n                {\n                  \"Node Type\": \"Seq Scan\",\n                  \"Parent Relationship\": \"Outer\",\n                  \"Parallel Aware\": true,\n                  \"Async Capable\": false,\n                  \"Relation Name\": \"records\",\n                  \"Alias\": \"records\",\n                  \"Startup Cost\": 0.00,\n                  \"Total Cost\": 5693.67,\n                  \"Plan Rows\": 83,\n                  \"Plan Width\": 20,\n                  \"Filter\": \"(value = 7)\"\n                }\n              ]\n            }\n          ]\n        }\n      ]\n    }\n  }\n]"
+        },
+        "groups" : {
+          "json" : "[\n  {\n    \"Plan\": {\n      \"Node Type\": \"Seq Scan\",\n      \"Parallel Aware\": false,\n      \"Async Capable\": false,\n      \"Relation Name\": \"groups\",\n      \"Alias\": \"groups\",\n      \"Startup Cost\": 0.00,\n      \"Total Cost\": 19.50,\n      \"Plan Rows\": 100,\n      \"Plan Width\": 4,\n      \"Filter\": \"(category = 3)\"\n    }\n  }\n]"
+        }
+      }
+    },
+    "metrics" : {
+      "profiles" : [ {
+        "profileId" : "campaign",
+        "normalizedWeight" : 0.1,
+        "baselineCost" : 2.0766463E7,
+        "cost" : 2.0766463E7,
+        "gain" : 0.0,
+        "ratio" : 1.0,
+        "gainPercent" : 0.0
+      }, {
+        "profileId" : "normal",
+        "normalizedWeight" : 0.9,
+        "baselineCost" : 2.0766463E7,
+        "cost" : 2.0766463E7,
+        "gain" : 0.0,
+        "ratio" : 1.0,
+        "gainPercent" : 0.0
+      } ],
+      "baselineMeanCost" : 2.0766463E7,
+      "meanCost" : 2.0766463E7,
+      "meanRatio" : 1.0,
+      "worstRatio" : 1.0,
+      "budgetUsage" : {
+        "estimatedBytes" : 0,
+        "budgetedBytes" : 0,
+        "writeUnitsPerHour" : 0.0,
+        "indexCount" : 0,
+        "sizeSafetyFactor" : 1.2
+      }
+    }
+  }, {
+    "evaluation" : {
+      "candidateIds" : [ "group" ],
+      "costByQueryId" : {
+        "by_group" : 79.18,
+        "by_value" : 6698.23,
+        "groups" : 19.5
+      },
+      "plansByQueryId" : {
+        "by_group" : {
+          "json" : "[\n  {\n    \"Plan\": {\n      \"Node Type\": \"Limit\",\n      \"Parallel Aware\": false,\n      \"Async Capable\": false,\n      \"Startup Cost\": 0.04,\n      \"Total Cost\": 79.18,\n      \"Plan Rows\": 20,\n      \"Plan Width\": 20,\n      \"Plans\": [\n        {\n          \"Node Type\": \"Index Scan\",\n          \"Parent Relationship\": \"Outer\",\n          \"Parallel Aware\": false,\n          \"Async Capable\": false,\n          \"Scan Direction\": \"Forward\",\n          \"Index Name\": \"<13561>btree_records_group_id_created_at\",\n          \"Relation Name\": \"records\",\n          \"Alias\": \"records\",\n          \"Startup Cost\": 0.04,\n          \"Total Cost\": 787.49,\n          \"Plan Rows\": 199,\n          \"Plan Width\": 20,\n          \"Index Cond\": \"(group_id = 42)\"\n        }\n      ]\n    }\n  }\n]"
+        },
+        "by_value" : {
+          "json" : "[\n  {\n    \"Plan\": {\n      \"Node Type\": \"Limit\",\n      \"Parallel Aware\": false,\n      \"Async Capable\": false,\n      \"Startup Cost\": 6695.90,\n      \"Total Cost\": 6698.23,\n      \"Plan Rows\": 20,\n      \"Plan Width\": 20,\n      \"Plans\": [\n        {\n          \"Node Type\": \"Gather Merge\",\n          \"Parent Relationship\": \"Outer\",\n          \"Parallel Aware\": false,\n          \"Async Capable\": false,\n          \"Startup Cost\": 6695.90,\n          \"Total Cost\": 6715.27,\n          \"Plan Rows\": 166,\n          \"Plan Width\": 20,\n          \"Workers Planned\": 2,\n          \"Plans\": [\n            {\n              \"Node Type\": \"Sort\",\n              \"Parent Relationship\": \"Outer\",\n              \"Parallel Aware\": false,\n              \"Async Capable\": false,\n              \"Startup Cost\": 5695.88,\n              \"Total Cost\": 5696.08,\n              \"Plan Rows\": 83,\n              \"Plan Width\": 20,\n              \"Sort Key\": [\"created_at DESC\"],\n              \"Plans\": [\n                {\n                  \"Node Type\": \"Seq Scan\",\n                  \"Parent Relationship\": \"Outer\",\n                  \"Parallel Aware\": true,\n                  \"Async Capable\": false,\n                  \"Relation Name\": \"records\",\n                  \"Alias\": \"records\",\n                  \"Startup Cost\": 0.00,\n                  \"Total Cost\": 5693.67,\n                  \"Plan Rows\": 83,\n                  \"Plan Width\": 20,\n                  \"Filter\": \"(value = 7)\"\n                }\n              ]\n            }\n          ]\n        }\n      ]\n    }\n  }\n]"
+        },
+        "groups" : {
+          "json" : "[\n  {\n    \"Plan\": {\n      \"Node Type\": \"Seq Scan\",\n      \"Parallel Aware\": false,\n      \"Async Capable\": false,\n      \"Relation Name\": \"groups\",\n      \"Alias\": \"groups\",\n      \"Startup Cost\": 0.00,\n      \"Total Cost\": 19.50,\n      \"Plan Rows\": 100,\n      \"Plan Width\": 4,\n      \"Filter\": \"(category = 3)\"\n    }\n  }\n]"
+        }
+      }
+    },
+    "metrics" : {
+      "profiles" : [ {
+        "profileId" : "campaign",
+        "normalizedWeight" : 0.1,
+        "baselineCost" : 2.0766463E7,
+        "cost" : 2.0104558E7,
+        "gain" : 661905.0,
+        "ratio" : 0.9681262524099554,
+        "gainPercent" : 3.187374759004458
+      }, {
+        "profileId" : "normal",
+        "normalizedWeight" : 0.9,
+        "baselineCost" : 2.0766463E7,
+        "cost" : 909313.0,
+        "gain" : 1.985715E7,
+        "ratio" : 0.043787572298662515,
+        "gainPercent" : 95.62124277013375
+      } ],
+      "baselineMeanCost" : 2.0766463E7,
+      "meanCost" : 2828837.5,
+      "meanRatio" : 0.1362214403097918,
+      "worstRatio" : 0.9681262524099554,
+      "budgetUsage" : {
+        "estimatedBytes" : 6963200,
+        "budgetedBytes" : 8355840,
+        "writeUnitsPerHour" : 8200.0,
+        "indexCount" : 1,
+        "sizeSafetyFactor" : 1.2
+      }
+    }
+  }, {
+    "evaluation" : {
+      "candidateIds" : [ "value" ],
+      "costByQueryId" : {
+        "by_group" : 6698.23,
+        "by_value" : 79.19,
+        "groups" : 19.5
+      },
+      "plansByQueryId" : {
+        "by_group" : {
+          "json" : "[\n  {\n    \"Plan\": {\n      \"Node Type\": \"Limit\",\n      \"Parallel Aware\": false,\n      \"Async Capable\": false,\n      \"Startup Cost\": 6695.90,\n      \"Total Cost\": 6698.23,\n      \"Plan Rows\": 20,\n      \"Plan Width\": 20,\n      \"Plans\": [\n        {\n          \"Node Type\": \"Gather Merge\",\n          \"Parent Relationship\": \"Outer\",\n          \"Parallel Aware\": false,\n          \"Async Capable\": false,\n          \"Startup Cost\": 6695.90,\n          \"Total Cost\": 6715.27,\n          \"Plan Rows\": 166,\n          \"Plan Width\": 20,\n          \"Workers Planned\": 2,\n          \"Plans\": [\n            {\n              \"Node Type\": \"Sort\",\n              \"Parent Relationship\": \"Outer\",\n              \"Parallel Aware\": false,\n              \"Async Capable\": false,\n              \"Startup Cost\": 5695.88,\n              \"Total Cost\": 5696.08,\n              \"Plan Rows\": 83,\n              \"Plan Width\": 20,\n              \"Sort Key\": [\"created_at DESC\"],\n              \"Plans\": [\n                {\n                  \"Node Type\": \"Seq Scan\",\n                  \"Parent Relationship\": \"Outer\",\n                  \"Parallel Aware\": true,\n                  \"Async Capable\": false,\n                  \"Relation Name\": \"records\",\n                  \"Alias\": \"records\",\n                  \"Startup Cost\": 0.00,\n                  \"Total Cost\": 5693.67,\n                  \"Plan Rows\": 83,\n                  \"Plan Width\": 20,\n                  \"Filter\": \"(group_id = 42)\"\n                }\n              ]\n            }\n          ]\n        }\n      ]\n    }\n  }\n]"
+        },
+        "by_value" : {
+          "json" : "[\n  {\n    \"Plan\": {\n      \"Node Type\": \"Limit\",\n      \"Parallel Aware\": false,\n      \"Async Capable\": false,\n      \"Startup Cost\": 0.04,\n      \"Total Cost\": 79.19,\n      \"Plan Rows\": 20,\n      \"Plan Width\": 20,\n      \"Plans\": [\n        {\n          \"Node Type\": \"Index Scan\",\n          \"Parent Relationship\": \"Outer\",\n          \"Parallel Aware\": false,\n          \"Async Capable\": false,\n          \"Scan Direction\": \"Forward\",\n          \"Index Name\": \"<13561>btree_records_value_created_at\",\n          \"Relation Name\": \"records\",\n          \"Alias\": \"records\",\n          \"Startup Cost\": 0.04,\n          \"Total Cost\": 791.54,\n          \"Plan Rows\": 200,\n          \"Plan Width\": 20,\n          \"Index Cond\": \"(value = 7)\"\n        }\n      ]\n    }\n  }\n]"
+        },
+        "groups" : {
+          "json" : "[\n  {\n    \"Plan\": {\n      \"Node Type\": \"Seq Scan\",\n      \"Parallel Aware\": false,\n      \"Async Capable\": false,\n      \"Relation Name\": \"groups\",\n      \"Alias\": \"groups\",\n      \"Startup Cost\": 0.00,\n      \"Total Cost\": 19.50,\n      \"Plan Rows\": 100,\n      \"Plan Width\": 4,\n      \"Filter\": \"(category = 3)\"\n    }\n  }\n]"
+        }
+      }
+    },
+    "metrics" : {
+      "profiles" : [ {
+        "profileId" : "campaign",
+        "normalizedWeight" : 0.1,
+        "baselineCost" : 2.0766463E7,
+        "cost" : 909343.0,
+        "gain" : 1.985712E7,
+        "ratio" : 0.04378901693562356,
+        "gainPercent" : 95.62109830643764
+      }, {
+        "profileId" : "normal",
+        "normalizedWeight" : 0.9,
+        "baselineCost" : 2.0766463E7,
+        "cost" : 2.0104559E7,
+        "gain" : 661904.0,
+        "ratio" : 0.9681263005645208,
+        "gainPercent" : 3.1873699435479215
+      } ],
+      "baselineMeanCost" : 2.0766463E7,
+      "meanCost" : 1.8185037400000002E7,
+      "meanRatio" : 0.8756925722016312,
+      "worstRatio" : 0.9681263005645208,
+      "budgetUsage" : {
+        "estimatedBytes" : 6963200,
+        "budgetedBytes" : 8355840,
+        "writeUnitsPerHour" : 8200.0,
+        "indexCount" : 1,
+        "sizeSafetyFactor" : 1.2
+      }
+    }
+  }, {
+    "evaluation" : {
+      "candidateIds" : [ "category" ],
+      "costByQueryId" : {
+        "by_group" : 6698.23,
+        "by_value" : 6698.23,
+        "groups" : 13.05
+      },
+      "plansByQueryId" : {
+        "by_group" : {
+          "json" : "[\n  {\n    \"Plan\": {\n      \"Node Type\": \"Limit\",\n      \"Parallel Aware\": false,\n      \"Async Capable\": false,\n      \"Startup Cost\": 6695.90,\n      \"Total Cost\": 6698.23,\n      \"Plan Rows\": 20,\n      \"Plan Width\": 20,\n      \"Plans\": [\n        {\n          \"Node Type\": \"Gather Merge\",\n          \"Parent Relationship\": \"Outer\",\n          \"Parallel Aware\": false,\n          \"Async Capable\": false,\n          \"Startup Cost\": 6695.90,\n          \"Total Cost\": 6715.27,\n          \"Plan Rows\": 166,\n          \"Plan Width\": 20,\n          \"Workers Planned\": 2,\n          \"Plans\": [\n            {\n              \"Node Type\": \"Sort\",\n              \"Parent Relationship\": \"Outer\",\n              \"Parallel Aware\": false,\n              \"Async Capable\": false,\n              \"Startup Cost\": 5695.88,\n              \"Total Cost\": 5696.08,\n              \"Plan Rows\": 83,\n              \"Plan Width\": 20,\n              \"Sort Key\": [\"created_at DESC\"],\n              \"Plans\": [\n                {\n                  \"Node Type\": \"Seq Scan\",\n                  \"Parent Relationship\": \"Outer\",\n                  \"Parallel Aware\": true,\n                  \"Async Capable\": false,\n                  \"Relation Name\": \"records\",\n                  \"Alias\": \"records\",\n                  \"Startup Cost\": 0.00,\n                  \"Total Cost\": 5693.67,\n                  \"Plan Rows\": 83,\n                  \"Plan Width\": 20,\n                  \"Filter\": \"(group_id = 42)\"\n                }\n              ]\n            }\n          ]\n        }\n      ]\n    }\n  }\n]"
+        },
+        "by_value" : {
+          "json" : "[\n  {\n    \"Plan\": {\n      \"Node Type\": \"Limit\",\n      \"Parallel Aware\": false,\n      \"Async Capable\": false,\n      \"Startup Cost\": 6695.90,\n      \"Total Cost\": 6698.23,\n      \"Plan Rows\": 20,\n      \"Plan Width\": 20,\n      \"Plans\": [\n        {\n          \"Node Type\": \"Gather Merge\",\n          \"Parent Relationship\": \"Outer\",\n          \"Parallel Aware\": false,\n          \"Async Capable\": false,\n          \"Startup Cost\": 6695.90,\n          \"Total Cost\": 6715.27,\n          \"Plan Rows\": 166,\n          \"Plan Width\": 20,\n          \"Workers Planned\": 2,\n          \"Plans\": [\n            {\n              \"Node Type\": \"Sort\",\n              \"Parent Relationship\": \"Outer\",\n              \"Parallel Aware\": false,\n              \"Async Capable\": false,\n              \"Startup Cost\": 5695.88,\n              \"Total Cost\": 5696.08,\n              \"Plan Rows\": 83,\n              \"Plan Width\": 20,\n              \"Sort Key\": [\"created_at DESC\"],\n              \"Plans\": [\n                {\n                  \"Node Type\": \"Seq Scan\",\n                  \"Parent Relationship\": \"Outer\",\n                  \"Parallel Aware\": true,\n                  \"Async Capable\": false,\n                  \"Relation Name\": \"records\",\n                  \"Alias\": \"records\",\n                  \"Startup Cost\": 0.00,\n                  \"Total Cost\": 5693.67,\n                  \"Plan Rows\": 83,\n                  \"Plan Width\": 20,\n                  \"Filter\": \"(value = 7)\"\n                }\n              ]\n            }\n          ]\n        }\n      ]\n    }\n  }\n]"
+        },
+        "groups" : {
+          "json" : "[\n  {\n    \"Plan\": {\n      \"Node Type\": \"Bitmap Heap Scan\",\n      \"Parallel Aware\": false,\n      \"Async Capable\": false,\n      \"Relation Name\": \"groups\",\n      \"Alias\": \"groups\",\n      \"Startup Cost\": 4.80,\n      \"Total Cost\": 13.05,\n      \"Plan Rows\": 100,\n      \"Plan Width\": 4,\n      \"Recheck Cond\": \"(category = 3)\",\n      \"Plans\": [\n        {\n          \"Node Type\": \"Bitmap Index Scan\",\n          \"Parent Relationship\": \"Outer\",\n          \"Parallel Aware\": false,\n          \"Async Capable\": false,\n          \"Index Name\": \"<13561>btree_groups_category\",\n          \"Startup Cost\": 0.00,\n          \"Total Cost\": 4.78,\n          \"Plan Rows\": 100,\n          \"Plan Width\": 0,\n          \"Index Cond\": \"(category = 3)\"\n        }\n      ]\n    }\n  }\n]"
+        }
+      }
+    },
+    "metrics" : {
+      "profiles" : [ {
+        "profileId" : "campaign",
+        "normalizedWeight" : 0.1,
+        "baselineCost" : 2.0766463E7,
+        "cost" : 2.0765818E7,
+        "gain" : 645.0,
+        "ratio" : 0.9999689403053375,
+        "gainPercent" : 0.0031059694662495005
+      }, {
+        "profileId" : "normal",
+        "normalizedWeight" : 0.9,
+        "baselineCost" : 2.0766463E7,
+        "cost" : 2.0765818E7,
+        "gain" : 645.0,
+        "ratio" : 0.9999689403053375,
+        "gainPercent" : 0.0031059694662495005
+      } ],
+      "baselineMeanCost" : 2.0766463E7,
+      "meanCost" : 2.0765818E7,
+      "meanRatio" : 0.9999689403053375,
+      "worstRatio" : 0.9999689403053375,
+      "budgetUsage" : {
+        "estimatedBytes" : 16384,
+        "budgetedBytes" : 19661,
+        "writeUnitsPerHour" : 10.0,
+        "indexCount" : 1,
+        "sizeSafetyFactor" : 1.2
+      }
+    }
+  }, {
+    "evaluation" : {
+      "candidateIds" : [ "group", "value" ],
+      "costByQueryId" : {
+        "by_group" : 79.18,
+        "by_value" : 79.19,
+        "groups" : 19.5
+      },
+      "plansByQueryId" : {
+        "by_group" : {
+          "json" : "[\n  {\n    \"Plan\": {\n      \"Node Type\": \"Limit\",\n      \"Parallel Aware\": false,\n      \"Async Capable\": false,\n      \"Startup Cost\": 0.04,\n      \"Total Cost\": 79.18,\n      \"Plan Rows\": 20,\n      \"Plan Width\": 20,\n      \"Plans\": [\n        {\n          \"Node Type\": \"Index Scan\",\n          \"Parent Relationship\": \"Outer\",\n          \"Parallel Aware\": false,\n          \"Async Capable\": false,\n          \"Scan Direction\": \"Forward\",\n          \"Index Name\": \"<13561>btree_records_group_id_created_at\",\n          \"Relation Name\": \"records\",\n          \"Alias\": \"records\",\n          \"Startup Cost\": 0.04,\n          \"Total Cost\": 787.49,\n          \"Plan Rows\": 199,\n          \"Plan Width\": 20,\n          \"Index Cond\": \"(group_id = 42)\"\n        }\n      ]\n    }\n  }\n]"
+        },
+        "by_value" : {
+          "json" : "[\n  {\n    \"Plan\": {\n      \"Node Type\": \"Limit\",\n      \"Parallel Aware\": false,\n      \"Async Capable\": false,\n      \"Startup Cost\": 0.04,\n      \"Total Cost\": 79.19,\n      \"Plan Rows\": 20,\n      \"Plan Width\": 20,\n      \"Plans\": [\n        {\n          \"Node Type\": \"Index Scan\",\n          \"Parent Relationship\": \"Outer\",\n          \"Parallel Aware\": false,\n          \"Async Capable\": false,\n          \"Scan Direction\": \"Forward\",\n          \"Index Name\": \"<13562>btree_records_value_created_at\",\n          \"Relation Name\": \"records\",\n          \"Alias\": \"records\",\n          \"Startup Cost\": 0.04,\n          \"Total Cost\": 791.54,\n          \"Plan Rows\": 200,\n          \"Plan Width\": 20,\n          \"Index Cond\": \"(value = 7)\"\n        }\n      ]\n    }\n  }\n]"
+        },
+        "groups" : {
+          "json" : "[\n  {\n    \"Plan\": {\n      \"Node Type\": \"Seq Scan\",\n      \"Parallel Aware\": false,\n      \"Async Capable\": false,\n      \"Relation Name\": \"groups\",\n      \"Alias\": \"groups\",\n      \"Startup Cost\": 0.00,\n      \"Total Cost\": 19.50,\n      \"Plan Rows\": 100,\n      \"Plan Width\": 4,\n      \"Filter\": \"(category = 3)\"\n    }\n  }\n]"
+        }
+      }
+    },
+    "metrics" : {
+      "profiles" : [ {
+        "profileId" : "campaign",
+        "normalizedWeight" : 0.1,
+        "baselineCost" : 2.0766463E7,
+        "cost" : 247438.0,
+        "gain" : 2.0519025E7,
+        "ratio" : 0.011915269345578974,
+        "gainPercent" : 98.8084730654421
+      }, {
+        "profileId" : "normal",
+        "normalizedWeight" : 0.9,
+        "baselineCost" : 2.0766463E7,
+        "cost" : 247409.00000000003,
+        "gain" : 2.0519054E7,
+        "ratio" : 0.011913872863183298,
+        "gainPercent" : 98.80861271368167
+      } ],
+      "baselineMeanCost" : 2.0766463E7,
+      "meanCost" : 247411.90000000002,
+      "meanRatio" : 0.011914012511422866,
+      "worstRatio" : 0.011915269345578974,
+      "budgetUsage" : {
+        "estimatedBytes" : 13926400,
+        "budgetedBytes" : 16711680,
+        "writeUnitsPerHour" : 16400.0,
+        "indexCount" : 2,
+        "sizeSafetyFactor" : 1.2
+      }
+    }
+  }, {
+    "evaluation" : {
+      "candidateIds" : [ "category", "group" ],
+      "costByQueryId" : {
+        "by_group" : 79.18,
+        "by_value" : 6698.23,
+        "groups" : 13.05
+      },
+      "plansByQueryId" : {
+        "by_group" : {
+          "json" : "[\n  {\n    \"Plan\": {\n      \"Node Type\": \"Limit\",\n      \"Parallel Aware\": false,\n      \"Async Capable\": false,\n      \"Startup Cost\": 0.04,\n      \"Total Cost\": 79.18,\n      \"Plan Rows\": 20,\n      \"Plan Width\": 20,\n      \"Plans\": [\n        {\n          \"Node Type\": \"Index Scan\",\n          \"Parent Relationship\": \"Outer\",\n          \"Parallel Aware\": false,\n          \"Async Capable\": false,\n          \"Scan Direction\": \"Forward\",\n          \"Index Name\": \"<13561>btree_records_group_id_created_at\",\n          \"Relation Name\": \"records\",\n          \"Alias\": \"records\",\n          \"Startup Cost\": 0.04,\n          \"Total Cost\": 787.49,\n          \"Plan Rows\": 199,\n          \"Plan Width\": 20,\n          \"Index Cond\": \"(group_id = 42)\"\n        }\n      ]\n    }\n  }\n]"
+        },
+        "by_value" : {
+          "json" : "[\n  {\n    \"Plan\": {\n      \"Node Type\": \"Limit\",\n      \"Parallel Aware\": false,\n      \"Async Capable\": false,\n      \"Startup Cost\": 6695.90,\n      \"Total Cost\": 6698.23,\n      \"Plan Rows\": 20,\n      \"Plan Width\": 20,\n      \"Plans\": [\n        {\n          \"Node Type\": \"Gather Merge\",\n          \"Parent Relationship\": \"Outer\",\n          \"Parallel Aware\": false,\n          \"Async Capable\": false,\n          \"Startup Cost\": 6695.90,\n          \"Total Cost\": 6715.27,\n          \"Plan Rows\": 166,\n          \"Plan Width\": 20,\n          \"Workers Planned\": 2,\n          \"Plans\": [\n            {\n              \"Node Type\": \"Sort\",\n              \"Parent Relationship\": \"Outer\",\n              \"Parallel Aware\": false,\n              \"Async Capable\": false,\n              \"Startup Cost\": 5695.88,\n              \"Total Cost\": 5696.08,\n              \"Plan Rows\": 83,\n              \"Plan Width\": 20,\n              \"Sort Key\": [\"created_at DESC\"],\n              \"Plans\": [\n                {\n                  \"Node Type\": \"Seq Scan\",\n                  \"Parent Relationship\": \"Outer\",\n                  \"Parallel Aware\": true,\n                  \"Async Capable\": false,\n                  \"Relation Name\": \"records\",\n                  \"Alias\": \"records\",\n                  \"Startup Cost\": 0.00,\n                  \"Total Cost\": 5693.67,\n                  \"Plan Rows\": 83,\n                  \"Plan Width\": 20,\n                  \"Filter\": \"(value = 7)\"\n                }\n              ]\n            }\n          ]\n        }\n      ]\n    }\n  }\n]"
+        },
+        "groups" : {
+          "json" : "[\n  {\n    \"Plan\": {\n      \"Node Type\": \"Bitmap Heap Scan\",\n      \"Parallel Aware\": false,\n      \"Async Capable\": false,\n      \"Relation Name\": \"groups\",\n      \"Alias\": \"groups\",\n      \"Startup Cost\": 4.80,\n      \"Total Cost\": 13.05,\n      \"Plan Rows\": 100,\n      \"Plan Width\": 4,\n      \"Recheck Cond\": \"(category = 3)\",\n      \"Plans\": [\n        {\n          \"Node Type\": \"Bitmap Index Scan\",\n          \"Parent Relationship\": \"Outer\",\n          \"Parallel Aware\": false,\n          \"Async Capable\": false,\n          \"Index Name\": \"<13562>btree_groups_category\",\n          \"Startup Cost\": 0.00,\n          \"Total Cost\": 4.78,\n          \"Plan Rows\": 100,\n          \"Plan Width\": 0,\n          \"Index Cond\": \"(category = 3)\"\n        }\n      ]\n    }\n  }\n]"
+        }
+      }
+    },
+    "metrics" : {
+      "profiles" : [ {
+        "profileId" : "campaign",
+        "normalizedWeight" : 0.1,
+        "baselineCost" : 2.0766463E7,
+        "cost" : 2.0103913E7,
+        "gain" : 662550.0,
+        "ratio" : 0.9680951927152929,
+        "gainPercent" : 3.1904807284707077
+      }, {
+        "profileId" : "normal",
+        "normalizedWeight" : 0.9,
+        "baselineCost" : 2.0766463E7,
+        "cost" : 908668.0,
+        "gain" : 1.9857795E7,
+        "ratio" : 0.043756512604000014,
+        "gainPercent" : 95.6243487396
+      } ],
+      "baselineMeanCost" : 2.0766463E7,
+      "meanCost" : 2828192.5,
+      "meanRatio" : 0.1361903806151293,
+      "worstRatio" : 0.9680951927152929,
+      "budgetUsage" : {
+        "estimatedBytes" : 6979584,
+        "budgetedBytes" : 8375501,
+        "writeUnitsPerHour" : 8210.0,
+        "indexCount" : 2,
+        "sizeSafetyFactor" : 1.2
+      }
+    }
+  }, {
+    "evaluation" : {
+      "candidateIds" : [ "category", "value" ],
+      "costByQueryId" : {
+        "by_group" : 6698.23,
+        "by_value" : 79.19,
+        "groups" : 13.05
+      },
+      "plansByQueryId" : {
+        "by_group" : {
+          "json" : "[\n  {\n    \"Plan\": {\n      \"Node Type\": \"Limit\",\n      \"Parallel Aware\": false,\n      \"Async Capable\": false,\n      \"Startup Cost\": 6695.90,\n      \"Total Cost\": 6698.23,\n      \"Plan Rows\": 20,\n      \"Plan Width\": 20,\n      \"Plans\": [\n        {\n          \"Node Type\": \"Gather Merge\",\n          \"Parent Relationship\": \"Outer\",\n          \"Parallel Aware\": false,\n          \"Async Capable\": false,\n          \"Startup Cost\": 6695.90,\n          \"Total Cost\": 6715.27,\n          \"Plan Rows\": 166,\n          \"Plan Width\": 20,\n          \"Workers Planned\": 2,\n          \"Plans\": [\n            {\n              \"Node Type\": \"Sort\",\n              \"Parent Relationship\": \"Outer\",\n              \"Parallel Aware\": false,\n              \"Async Capable\": false,\n              \"Startup Cost\": 5695.88,\n              \"Total Cost\": 5696.08,\n              \"Plan Rows\": 83,\n              \"Plan Width\": 20,\n              \"Sort Key\": [\"created_at DESC\"],\n              \"Plans\": [\n                {\n                  \"Node Type\": \"Seq Scan\",\n                  \"Parent Relationship\": \"Outer\",\n                  \"Parallel Aware\": true,\n                  \"Async Capable\": false,\n                  \"Relation Name\": \"records\",\n                  \"Alias\": \"records\",\n                  \"Startup Cost\": 0.00,\n                  \"Total Cost\": 5693.67,\n                  \"Plan Rows\": 83,\n                  \"Plan Width\": 20,\n                  \"Filter\": \"(group_id = 42)\"\n                }\n              ]\n            }\n          ]\n        }\n      ]\n    }\n  }\n]"
+        },
+        "by_value" : {
+          "json" : "[\n  {\n    \"Plan\": {\n      \"Node Type\": \"Limit\",\n      \"Parallel Aware\": false,\n      \"Async Capable\": false,\n      \"Startup Cost\": 0.04,\n      \"Total Cost\": 79.19,\n      \"Plan Rows\": 20,\n      \"Plan Width\": 20,\n      \"Plans\": [\n        {\n          \"Node Type\": \"Index Scan\",\n          \"Parent Relationship\": \"Outer\",\n          \"Parallel Aware\": false,\n          \"Async Capable\": false,\n          \"Scan Direction\": \"Forward\",\n          \"Index Name\": \"<13561>btree_records_value_created_at\",\n          \"Relation Name\": \"records\",\n          \"Alias\": \"records\",\n          \"Startup Cost\": 0.04,\n          \"Total Cost\": 791.54,\n          \"Plan Rows\": 200,\n          \"Plan Width\": 20,\n          \"Index Cond\": \"(value = 7)\"\n        }\n      ]\n    }\n  }\n]"
+        },
+        "groups" : {
+          "json" : "[\n  {\n    \"Plan\": {\n      \"Node Type\": \"Bitmap Heap Scan\",\n      \"Parallel Aware\": false,\n      \"Async Capable\": false,\n      \"Relation Name\": \"groups\",\n      \"Alias\": \"groups\",\n      \"Startup Cost\": 4.80,\n      \"Total Cost\": 13.05,\n      \"Plan Rows\": 100,\n      \"Plan Width\": 4,\n      \"Recheck Cond\": \"(category = 3)\",\n      \"Plans\": [\n        {\n          \"Node Type\": \"Bitmap Index Scan\",\n          \"Parent Relationship\": \"Outer\",\n          \"Parallel Aware\": false,\n          \"Async Capable\": false,\n          \"Index Name\": \"<13562>btree_groups_category\",\n          \"Startup Cost\": 0.00,\n          \"Total Cost\": 4.78,\n          \"Plan Rows\": 100,\n          \"Plan Width\": 0,\n          \"Index Cond\": \"(category = 3)\"\n        }\n      ]\n    }\n  }\n]"
+        }
+      }
+    },
+    "metrics" : {
+      "profiles" : [ {
+        "profileId" : "campaign",
+        "normalizedWeight" : 0.1,
+        "baselineCost" : 2.0766463E7,
+        "cost" : 908698.0,
+        "gain" : 1.9857765E7,
+        "ratio" : 0.043757957240961064,
+        "gainPercent" : 95.62420427590389
+      }, {
+        "profileId" : "normal",
+        "normalizedWeight" : 0.9,
+        "baselineCost" : 2.0766463E7,
+        "cost" : 2.0103914E7,
+        "gain" : 662549.0,
+        "ratio" : 0.9680952408698583,
+        "gainPercent" : 3.190475913014171
+      } ],
+      "baselineMeanCost" : 2.0766463E7,
+      "meanCost" : 1.8184392400000002E7,
+      "meanRatio" : 0.8756615125069687,
+      "worstRatio" : 0.9680952408698583,
+      "budgetUsage" : {
+        "estimatedBytes" : 6979584,
+        "budgetedBytes" : 8375501,
+        "writeUnitsPerHour" : 8210.0,
+        "indexCount" : 2,
+        "sizeSafetyFactor" : 1.2
+      }
+    }
+  } ],
+  "explain_attempts" : 21,
+  "best_robust" : [ "group", "value" ],
+  "best_mean" : [ "group", "value" ],
+  "expected_price_of_robustness" : 0.0,
+  "budget_checks" : [ {
+    "constraints" : {
+      "storageBudgetBytes" : 1,
+      "writeBudgetUnitsPerHour" : 20000.0,
+      "maxIndexes" : 2
+    },
+    "allowed_sets" : [ [ ] ]
+  }, {
+    "constraints" : {
+      "storageBudgetBytes" : 67108864,
+      "writeBudgetUnitsPerHour" : 1.0,
+      "maxIndexes" : 2
+    },
+    "allowed_sets" : [ [ ] ]
+  } ],
+  "held_out" : [ {
+    "candidate_ids" : [ ],
+    "metrics" : {
+      "profiles" : [ {
+        "profileId" : "held_out_balanced",
+        "normalizedWeight" : 1.0,
+        "baselineCost" : 1.340621E7,
+        "cost" : 1.340621E7,
+        "gain" : 0.0,
+        "ratio" : 1.0,
+        "gainPercent" : 0.0
+      } ],
+      "baselineMeanCost" : 1.340621E7,
+      "meanCost" : 1.340621E7,
+      "meanRatio" : 1.0,
+      "worstRatio" : 1.0,
+      "budgetUsage" : {
+        "estimatedBytes" : 0,
+        "budgetedBytes" : 0,
+        "writeUnitsPerHour" : 0.0,
+        "indexCount" : 0,
+        "sizeSafetyFactor" : 1.2
+      }
+    }
+  }, {
+    "candidate_ids" : [ "group" ],
+    "metrics" : {
+      "profiles" : [ {
+        "profileId" : "held_out_balanced",
+        "normalizedWeight" : 1.0,
+        "baselineCost" : 1.340621E7,
+        "cost" : 6787160.0,
+        "gain" : 6619050.0,
+        "ratio" : 0.5062698555370981,
+        "gainPercent" : 49.37301444629019
+      } ],
+      "baselineMeanCost" : 1.340621E7,
+      "meanCost" : 6787160.0,
+      "meanRatio" : 0.5062698555370981,
+      "worstRatio" : 0.5062698555370981,
+      "budgetUsage" : {
+        "estimatedBytes" : 6963200,
+        "budgetedBytes" : 8355840,
+        "writeUnitsPerHour" : 8200.0,
+        "indexCount" : 1,
+        "sizeSafetyFactor" : 1.2
+      }
+    }
+  }, {
+    "candidate_ids" : [ "value" ],
+    "metrics" : {
+      "profiles" : [ {
+        "profileId" : "held_out_balanced",
+        "normalizedWeight" : 1.0,
+        "baselineCost" : 1.340621E7,
+        "cost" : 6787170.0,
+        "gain" : 6619040.0,
+        "ratio" : 0.5062706014600696,
+        "gainPercent" : 49.37293985399304
+      } ],
+      "baselineMeanCost" : 1.340621E7,
+      "meanCost" : 6787170.0,
+      "meanRatio" : 0.5062706014600696,
+      "worstRatio" : 0.5062706014600696,
+      "budgetUsage" : {
+        "estimatedBytes" : 6963200,
+        "budgetedBytes" : 8355840,
+        "writeUnitsPerHour" : 8200.0,
+        "indexCount" : 1,
+        "sizeSafetyFactor" : 1.2
+      }
+    }
+  }, {
+    "candidate_ids" : [ "category" ],
+    "metrics" : {
+      "profiles" : [ {
+        "profileId" : "held_out_balanced",
+        "normalizedWeight" : 1.0,
+        "baselineCost" : 1.340621E7,
+        "cost" : 1.3402985E7,
+        "gain" : 3225.0,
+        "ratio" : 0.9997594398416854,
+        "gainPercent" : 0.024056015831469147
+      } ],
+      "baselineMeanCost" : 1.340621E7,
+      "meanCost" : 1.3402985E7,
+      "meanRatio" : 0.9997594398416854,
+      "worstRatio" : 0.9997594398416854,
+      "budgetUsage" : {
+        "estimatedBytes" : 16384,
+        "budgetedBytes" : 19661,
+        "writeUnitsPerHour" : 10.0,
+        "indexCount" : 1,
+        "sizeSafetyFactor" : 1.2
+      }
+    }
+  }, {
+    "candidate_ids" : [ "group", "value" ],
+    "metrics" : {
+      "profiles" : [ {
+        "profileId" : "held_out_balanced",
+        "normalizedWeight" : 1.0,
+        "baselineCost" : 1.340621E7,
+        "cost" : 168120.0,
+        "gain" : 1.323809E7,
+        "ratio" : 0.01254045699716773,
+        "gainPercent" : 98.74595430028323
+      } ],
+      "baselineMeanCost" : 1.340621E7,
+      "meanCost" : 168120.0,
+      "meanRatio" : 0.01254045699716773,
+      "worstRatio" : 0.01254045699716773,
+      "budgetUsage" : {
+        "estimatedBytes" : 13926400,
+        "budgetedBytes" : 16711680,
+        "writeUnitsPerHour" : 16400.0,
+        "indexCount" : 2,
+        "sizeSafetyFactor" : 1.2
+      }
+    }
+  }, {
+    "candidate_ids" : [ "category", "group" ],
+    "metrics" : {
+      "profiles" : [ {
+        "profileId" : "held_out_balanced",
+        "normalizedWeight" : 1.0,
+        "baselineCost" : 1.340621E7,
+        "cost" : 6783935.0,
+        "gain" : 6622275.0,
+        "ratio" : 0.5060292953787834,
+        "gainPercent" : 49.39707046212166
+      } ],
+      "baselineMeanCost" : 1.340621E7,
+      "meanCost" : 6783935.0,
+      "meanRatio" : 0.5060292953787834,
+      "worstRatio" : 0.5060292953787834,
+      "budgetUsage" : {
+        "estimatedBytes" : 6979584,
+        "budgetedBytes" : 8375501,
+        "writeUnitsPerHour" : 8210.0,
+        "indexCount" : 2,
+        "sizeSafetyFactor" : 1.2
+      }
+    }
+  }, {
+    "candidate_ids" : [ "category", "value" ],
+    "metrics" : {
+      "profiles" : [ {
+        "profileId" : "held_out_balanced",
+        "normalizedWeight" : 1.0,
+        "baselineCost" : 1.340621E7,
+        "cost" : 6783945.0,
+        "gain" : 6622265.0,
+        "ratio" : 0.5060300413017549,
+        "gainPercent" : 49.39699586982451
+      } ],
+      "baselineMeanCost" : 1.340621E7,
+      "meanCost" : 6783945.0,
+      "meanRatio" : 0.5060300413017549,
+      "worstRatio" : 0.5060300413017549,
+      "budgetUsage" : {
+        "estimatedBytes" : 6979584,
+        "budgetedBytes" : 8375501,
+        "writeUnitsPerHour" : 8210.0,
+        "indexCount" : 2,
+        "sizeSafetyFactor" : 1.2
+      }
+    }
+  } ],
+  "independent_metrics" : [ {
+    "candidate_ids" : [ ],
+    "expected" : {
+      "baseline_mean" : 20766463.0000,
+      "mean" : 20766463.0000,
+      "mean_ratio" : 1,
+      "worst_ratio" : 1.0
+    }
+  }, {
+    "candidate_ids" : [ "group" ],
+    "expected" : {
+      "baseline_mean" : 20766463.0000,
+      "mean" : 2828837.5000,
+      "mean_ratio" : 0.1362214403097918022919935860045112,
+      "worst_ratio" : 0.9681262524099554
+    }
+  }, {
+    "candidate_ids" : [ "value" ],
+    "expected" : {
+      "baseline_mean" : 20766463.0000,
+      "mean" : 18185037.4000,
+      "mean_ratio" : 0.8756925722016310625454127648025569,
+      "worst_ratio" : 0.9681263005645208
+    }
+  }, {
+    "candidate_ids" : [ "category" ],
+    "expected" : {
+      "baseline_mean" : 20766463.0000,
+      "mean" : 20765818.0000,
+      "mean_ratio" : 0.9999689403053375049954342248846132,
+      "worst_ratio" : 0.9999689403053375
+    }
+  }, {
+    "candidate_ids" : [ "group", "value" ],
+    "expected" : {
+      "baseline_mean" : 20766463.0000,
+      "mean" : 247411.9000,
+      "mean_ratio" : 0.01191401251142286483740635080706811,
+      "worst_ratio" : 0.011915269345578974
+    }
+  }, {
+    "candidate_ids" : [ "category", "group" ],
+    "expected" : {
+      "baseline_mean" : 20766463.0000,
+      "mean" : 2828192.5000,
+      "mean_ratio" : 0.1361903806151293072874278108891245,
+      "worst_ratio" : 0.9680951927152929
+    }
+  }, {
+    "candidate_ids" : [ "category", "value" ],
+    "expected" : {
+      "baseline_mean" : 20766463.0000,
+      "mean" : 18184392.4000,
+      "mean_ratio" : 0.8756615125069685675408469896871701,
+      "worst_ratio" : 0.9680952408698583
+    }
+  } ],
+  "unverified" : [ "production evaluator", "optimizer", "price helper #44", "JSON/HTML/SQL export" ]
+}
