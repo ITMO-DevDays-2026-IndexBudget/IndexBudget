@@ -1,0 +1,93 @@
+name: Demo DB
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      database: ${{ steps.detect.outputs.database }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - id: detect
+        name: Detect database changes
+        run: python3 deploy/db/ci_checks.py changes
+
+  demo-db:
+    needs: changes
+    if: needs.changes.outputs.database == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Start PostgreSQL and seed
+        run: |
+          sh demo/init-env.sh
+          docker compose up --build --detach --wait --wait-timeout 180
+      - name: Verify HypoPG and repeatability
+        run: |
+          sh demo/check.sh
+          sh demo/check.sh
+      - name: Reject disabled HypoPG
+        run: |
+          if docker compose exec -T -e PGOPTIONS='-c hypopg.enabled=off' postgres sh -c 'export PGPASSWORD="$INDEXBUDGET_READER_PASSWORD"; exec psql -X -h 127.0.0.1 -U indexbudget_reader -d indexbudget -v ON_ERROR_STOP=1' < demo/checks/smoke.sql > /tmp/hypopg-disabled.log 2>&1; then
+            echo 'Smoke accepted disabled HypoPG'; exit 1
+          fi
+          grep -q 'HypoPG must be enabled for the smoke check' /tmp/hypopg-disabled.log
+      - name: Database logs
+        if: always()
+        run: docker compose logs --no-color postgres
+      - name: Remove disposable CI database
+        if: always()
+        run: docker compose down --volumes
+
+  stand-persistence:
+    needs: demo-db
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Validate deployment scripts
+        run: |
+          for script in deploy/db/*.sh deploy/db/tests/*.sh; do bash -n "$script"; done
+          python3 -m unittest discover -s deploy/db/tests -p 'test_*.py' -v
+          DB_RELEASE=check INDEXBUDGET_ADMIN_PASSWORD=check INDEXBUDGET_READER_PASSWORD=check docker compose -f deploy/db/compose.yaml config --quiet
+      - name: Verify data survives container replacement
+        run: bash deploy/db/tests/persistence.sh
+      - name: Show database logs
+        if: always()
+        run: |
+          for container in $(docker ps -aq --filter label=com.docker.compose.project=indexbudget-stand); do
+            docker logs "$container"
+          done
+      - name: Remove only disposable CI resources
+        if: always()
+        run: |
+          for container in $(docker ps -aq --filter label=com.docker.compose.project=indexbudget-stand); do
+            docker rm -f "$container"
+          done
+          docker volume rm indexbudget-stand-pg16-data || true
+
+  database-checks:
+    name: database-checks
+    if: always()
+    needs: [changes, demo-db, stand-persistence]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Require all applicable database checks to succeed
+        env:
+          CHECK_RESULTS: ${{ toJSON(needs) }}
+        run: python3 deploy/db/ci_checks.py gate
