@@ -1,4 +1,5 @@
 """Deployment control-flow checks. These do not replace the real PostgreSQL CI test."""
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -49,7 +50,10 @@ mode = os.environ['FAIL_MODE']
 if a[:2] == ['volume', 'inspect']:
     sys.exit(0)
 if a[:1] == ['inspect']:
-    print('unrelated-volume' if mode == 'wrong-volume' else 'indexbudget-stand-pg16-data')
+    if '.Config.Image' in a[2]:
+        print(os.environ.get('ACTUAL_RELEASE', 'wrong-image') + '|running|healthy')
+    else:
+        print('unrelated-volume' if mode == 'wrong-volume' else 'indexbudget-stand-pg16-data')
 elif 'ps' in a:
     if mode != 'orphan-volume': print('existing-container')
 elif 'build' in a and mode == 'build':
@@ -78,6 +82,43 @@ elif 'pg_dump' in a and mode == 'backup':
         self.assertFalse(any(call[:2] == ["volume", "create"] for call in calls), calls)
         self.assertFalse((self.root / "current").exists())
         return calls
+
+    def prepare_current(self):
+        trees = [self.run_git("rev-parse", "HEAD:" + path).strip()
+                 for path in ("deploy/db", "demo/postgres")]
+        release = hashlib.sha256(("\n".join(trees) + "\n").encode()).hexdigest()
+        current = self.root / "current"
+        current.mkdir()
+        (current / "RELEASE").write_text(release + "\n")
+        return release
+
+    def deploy(self, **env):
+        return subprocess.run(
+            ["bash", str(PROJECT / "deploy/db/deploy.sh"), str(self.root), str(self.repo), self.revision],
+            env=dict(self.env, FAIL_MODE="none", **env), capture_output=True, text=True,
+        )
+
+    def test_matching_healthy_container_is_noop(self):
+        release = self.prepare_current()
+        result = self.deploy(ACTUAL_RELEASE="indexbudget-stand-postgres:" + release)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertFalse(any("up" in call or "build" in call for call in calls))
+
+    def test_mismatching_container_cannot_be_noop(self):
+        self.prepare_current()
+        result = self.deploy()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("manual recovery required", result.stderr)
+
+    def test_unfinished_other_release_blocks_revert(self):
+        release = self.prepare_current()
+        (self.root / "pending-release").write_text("failed-b\n")
+        result = self.deploy(ACTUAL_RELEASE="indexbudget-stand-postgres:" + release)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Unfinished database deployment", result.stderr)
+        self.assertFalse(self.log.exists(), "Must stop before any Docker mutations")
+        self.assertEqual((self.root / "pending-release").read_text(), "failed-b\n")
 
     def test_build_failure_does_not_replace_database(self):
         calls = self.assert_aborts_before_update("build")

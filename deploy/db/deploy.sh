@@ -12,7 +12,19 @@ config_tree=$(git --git-dir="$root/app.git" rev-parse "$app_revision:deploy/db")
 # Application-only changes do not rebuild or restart PostgreSQL.
 release_id=$(printf '%s\n%s\n' "$config_tree" "$db_tree" | sha256sum | cut -d' ' -f1)
 release="$root/releases/$release_id"
-if [[ -f "$root/current/RELEASE" ]] && [[ $(cat "$root/current/RELEASE") == "$release_id" ]]; then
+if [[ -f "$root/pending-release" ]] && [[ $(cat "$root/pending-release") != "$release_id" ]]; then
+    echo 'Unfinished database deployment targets another release; manual recovery required.' >&2
+    exit 1
+fi
+if [[ ! -f "$root/pending-release" && -f "$root/current/RELEASE" ]] && [[ $(cat "$root/current/RELEASE") == "$release_id" ]]; then
+    container=$(docker ps -aq --filter label=com.docker.compose.project=indexbudget-stand --filter label=com.docker.compose.service=postgres)
+    [[ -n "$container" ]] || { echo 'Current release has no database container; manual recovery required.' >&2; exit 1; }
+    actual=$(docker inspect -f '{{.Config.Image}}|{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$container")
+    volume=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/var/lib/postgresql/data"}}{{.Name}}{{end}}{{end}}' "$container")
+    if [[ "$actual" != "indexbudget-stand-postgres:$release_id|running|healthy" || "$volume" != indexbudget-stand-pg16-data ]]; then
+        echo 'Container does not match the healthy current release; manual recovery required.' >&2
+        exit 1
+    fi
     exit 0
 fi
 free_kib=$(df -Pk "$root" | awk 'END {print $4}')
@@ -56,6 +68,10 @@ if [[ -n "$container" ]]; then
     mv "$backup.pending" "$backup"
 fi
 docker volume create indexbudget-stand-pg16-data >/dev/null
+# Persist intent before replacing the container; a failed post-up check must not
+# become an apparent no-op if main is subsequently reverted to the old release.
+printf '%s\n' "$release_id" > "$root/pending-release.next"
+mv -f "$root/pending-release.next" "$root/pending-release"
 "${compose[@]}" up --detach --wait --wait-timeout 180 postgres
 
 bash "$snapshot/deploy/db/migrate.sh" "$root" "$release" "$snapshot/deploy/db/migrations"
@@ -64,4 +80,5 @@ printf '%s\n' "$release_id" > "$release/RELEASE"
 rm -f "$root/current.next"
 ln -s "$release" "$root/current.next"
 mv -Tf "$root/current.next" "$root/current"
+rm -f "$root/pending-release"
 printf '%s Database release %s is healthy.\n' "$(date -Is)" "$release_id"

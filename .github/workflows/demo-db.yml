@@ -39,6 +39,12 @@ jobs:
         run: |
           sh demo/check.sh
           sh demo/check.sh
+      - name: Reject disabled HypoPG
+        run: |
+          if docker compose exec -T -e PGOPTIONS='-c hypopg.enabled=off' postgres sh -c 'export PGPASSWORD="$INDEXBUDGET_READER_PASSWORD"; exec psql -X -h 127.0.0.1 -U indexbudget_reader -d indexbudget -v ON_ERROR_STOP=1' < demo/checks/smoke.sql > /tmp/hypopg-disabled.log 2>&1; then
+            echo 'Smoke accepted disabled HypoPG'; exit 1
+          fi
+          grep -q 'HypoPG must be enabled for the smoke check' /tmp/hypopg-disabled.log
       - name: Database logs
         if: always()
         run: docker compose logs --no-color postgres

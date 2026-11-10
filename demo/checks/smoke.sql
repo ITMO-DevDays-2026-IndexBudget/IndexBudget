@@ -39,19 +39,34 @@ DECLARE
     proposed json;
     restored json;
     candidate_oid oid;
+    candidate_name text;
     estimated_bytes bigint;
     real_indexes bigint;
     query_sql text := 'SELECT id, value FROM public.records WHERE group_id = 42 ORDER BY created_at DESC LIMIT 20';
 BEGIN
+    IF current_setting('hypopg.enabled') <> 'on' THEN
+        RAISE EXCEPTION 'HypoPG must be enabled for the smoke check';
+    END IF;
     SELECT count(*) INTO real_indexes FROM pg_index WHERE indrelid = 'public.records'::regclass;
     EXECUTE 'EXPLAIN (FORMAT JSON) ' || query_sql INTO baseline;
-    SELECT indexrelid INTO candidate_oid FROM hypopg_create_index(
+    SELECT indexrelid, indexname INTO candidate_oid, candidate_name FROM hypopg_create_index(
         'CREATE INDEX ON public.records (group_id, created_at DESC)');
     SELECT hypopg_relation_size(candidate_oid) INTO estimated_bytes;
     IF estimated_bytes IS NULL OR estimated_bytes <= 0 THEN
         RAISE EXCEPTION 'HypoPG returned no positive size';
     END IF;
     EXECUTE 'EXPLAIN (FORMAT JSON) ' || query_sql INTO proposed;
+    IF NOT EXISTS (
+        WITH RECURSIVE nodes(node) AS (
+            SELECT proposed::jsonb->0->'Plan'
+            UNION ALL
+            SELECT child.node FROM nodes
+            CROSS JOIN LATERAL jsonb_array_elements(COALESCE(nodes.node->'Plans', '[]'::jsonb)) AS child(node)
+        )
+        SELECT 1 FROM nodes WHERE node->>'Index Name' = candidate_name
+    ) THEN
+        RAISE EXCEPTION 'Smoke plan does not use the created hypothetical index';
+    END IF;
     RAISE NOTICE 'baseline cost=%, candidate cost=%, estimated bytes=%',
         baseline->0->'Plan'->>'Total Cost', proposed->0->'Plan'->>'Total Cost', estimated_bytes;
     RAISE NOTICE 'baseline plan=%', baseline;
