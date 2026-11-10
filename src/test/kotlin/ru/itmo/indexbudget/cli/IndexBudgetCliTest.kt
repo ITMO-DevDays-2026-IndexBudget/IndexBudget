@@ -33,7 +33,7 @@ class IndexBudgetCliTest {
         val result = invoke("--help")
         assertEquals(0, result.code)
         assertTrue(result.stdout.contains("indexbudget analyze"))
-        assertEquals("", result.stderr)
+        assertEquals("", result.diagnosticStderr)
     }
 
     @Test
@@ -41,7 +41,7 @@ class IndexBudgetCliTest {
         val output = directory.resolve("report")
         val result = analyze(output)
         assertEquals(1, result.code)
-        assertTrue(result.stderr.startsWith("NOT_IMPLEMENTED:"))
+        assertTrue(result.diagnosticStderr.startsWith("NOT_IMPLEMENTED:"))
         assertFalse(Files.exists(output))
         assertEquals("", result.stdout)
     }
@@ -57,9 +57,9 @@ class IndexBudgetCliTest {
         """.trimIndent())
         val result = analyze(directory.resolve("report"), input)
         assertEquals(2, result.code)
-        assertTrue(result.stderr.startsWith("INVALID_INPUT:"))
-        assertFalse(result.stderr.contains("private-sql-and-password"))
-        val diagnostic = JsonMapper.builder().build().readTree(result.stderr.substringAfter(": "))
+        assertTrue(result.diagnosticStderr.startsWith("INVALID_INPUT:"))
+        assertFalse(result.diagnosticStderr.contains("private-sql-and-password"))
+        val diagnostic = JsonMapper.builder().build().readTree(result.diagnosticStderr.substringAfter(": "))
         assertEquals("INVALID_INPUT", diagnostic.get("code").stringValue())
         assertEquals("queries", diagnostic.get("details").get("field").stringValue())
     }
@@ -70,9 +70,9 @@ class IndexBudgetCliTest {
         Files.writeString(input, """{"schema_version":1}""")
         val result = analyze(directory.resolve("report"), input)
         assertEquals(2, result.code)
-        assertTrue(result.stderr.startsWith("UNSUPPORTED_SCHEMA_VERSION:"))
-        assertTrue(result.stderr.contains("queries"))
-        assertTrue(result.stderr.contains("profiles"))
+        assertTrue(result.diagnosticStderr.startsWith("UNSUPPORTED_SCHEMA_VERSION:"))
+        assertTrue(result.diagnosticStderr.contains("queries"))
+        assertTrue(result.diagnosticStderr.contains("profiles"))
     }
 
     @Test
@@ -83,8 +83,8 @@ class IndexBudgetCliTest {
         val result = analyze(output)
 
         assertEquals(2, result.code)
-        assertTrue(result.stderr.startsWith("OUTPUT_DIRECTORY_NOT_EMPTY:"))
-        assertTrue(result.stderr.contains("output_dir"))
+        assertTrue(result.diagnosticStderr.startsWith("OUTPUT_DIRECTORY_NOT_EMPTY:"))
+        assertTrue(result.diagnosticStderr.contains("output_dir"))
         assertEquals("previous SQL", Files.readString(artifact))
         Files.list(output).use { assertEquals(listOf(artifact), it.toList()) }
     }
@@ -97,7 +97,7 @@ class IndexBudgetCliTest {
         for (output in listOf(empty, nested)) {
             val result = analyze(output)
             assertEquals(1, result.code)
-            assertTrue(result.stderr.startsWith("NOT_IMPLEMENTED:"))
+            assertTrue(result.diagnosticStderr.startsWith("NOT_IMPLEMENTED:"))
         }
         Files.list(empty).use { assertEquals(0L, it.count()) }
         assertFalse(Files.exists(nested.parent))
@@ -110,8 +110,8 @@ class IndexBudgetCliTest {
         for (output in listOf(file, file.resolve("run"))) {
             val result = analyze(output)
             assertEquals(2, result.code)
-            assertTrue(result.stderr.startsWith("INVALID_INPUT:"))
-            assertTrue(result.stderr.contains("output_dir"))
+            assertTrue(result.diagnosticStderr.startsWith("INVALID_INPUT:"))
+            assertTrue(result.diagnosticStderr.contains("output_dir"))
         }
         assertEquals("retain me", Files.readString(file))
     }
@@ -124,7 +124,7 @@ class IndexBudgetCliTest {
         val result = analyze(link)
 
         assertEquals(2, result.code)
-        assertTrue(result.stderr.startsWith("INVALID_INPUT:"))
+        assertTrue(result.diagnosticStderr.startsWith("INVALID_INPUT:"))
         assertTrue(Files.isSymbolicLink(link))
         assertFalse(Files.exists(target))
     }
@@ -139,7 +139,7 @@ class IndexBudgetCliTest {
         val result = analyze(output)
 
         assertEquals(2, result.code)
-        assertTrue(result.stderr.startsWith("INVALID_INPUT:"))
+        assertTrue(result.diagnosticStderr.startsWith("INVALID_INPUT:"))
         assertFalse(Files.exists(missing))
         assertEquals("previous report", Files.readString(artifact))
     }
@@ -157,7 +157,7 @@ class IndexBudgetCliTest {
         val result = analyze(link.resolve("../occupied"))
 
         assertEquals(2, result.code)
-        assertTrue(result.stderr.startsWith("OUTPUT_DIRECTORY_NOT_EMPTY:"))
+        assertTrue(result.diagnosticStderr.startsWith("OUTPUT_DIRECTORY_NOT_EMPTY:"))
         assertEquals("previous report", Files.readString(artifact))
     }
 
@@ -169,8 +169,8 @@ class IndexBudgetCliTest {
             val result = analyze(output)
 
             assertEquals(1, result.code)
-            assertTrue(result.stderr.startsWith("EXPORT_FAILED:"))
-            val diagnostic = JsonMapper.builder().build().readTree(result.stderr.substringAfter(": "))
+            assertTrue(result.diagnosticStderr.startsWith("EXPORT_FAILED:"))
+            val diagnostic = JsonMapper.builder().build().readTree(result.diagnosticStderr.substringAfter(": "))
             assertEquals("EXPORT_FAILED", diagnostic.get("code").stringValue())
             assertEquals("output_dir", diagnostic.get("details").get("field").stringValue())
             Files.list(output).use { assertEquals(0L, it.count()) }
@@ -186,8 +186,8 @@ class IndexBudgetCliTest {
             val result = analyze(output)
 
             assertEquals(1, result.code)
-            assertTrue(result.stderr.startsWith("EXPORT_FAILED:"))
-            val diagnostic = JsonMapper.builder().build().readTree(result.stderr.substringAfter(": "))
+            assertTrue(result.diagnosticStderr.startsWith("EXPORT_FAILED:"))
+            val diagnostic = JsonMapper.builder().build().readTree(result.diagnosticStderr.substringAfter(": "))
             assertEquals("EXPORT_FAILED", diagnostic.get("code").stringValue())
             assertEquals("output_dir", diagnostic.get("details").get("field").stringValue())
             assertFalse(Files.exists(output))
@@ -208,11 +208,11 @@ class IndexBudgetCliTest {
         val result = analyze(directory.resolve("run"), input)
 
         assertEquals(2, result.code)
-        assertTrue(result.stderr.startsWith("INVALID_INPUT:"))
-        assertEquals(1, result.stderr.lineSequence().count { it.isNotEmpty() })
-        assertFalse(result.stderr.contains('\u001b'))
-        assertFalse(result.stderr.contains("secret_literal"))
-        val diagnostic = JsonMapper.builder().build().readTree(result.stderr.substringAfter(": "))
+        assertTrue(result.diagnosticStderr.startsWith("INVALID_INPUT:"))
+        assertEquals(1, result.diagnosticStderr.lineSequence().count { it.isNotEmpty() })
+        assertFalse(result.diagnosticStderr.contains('\u001b'))
+        assertFalse(result.diagnosticStderr.contains("secret_literal"))
+        val diagnostic = JsonMapper.builder().build().readTree(result.diagnosticStderr.substringAfter(": "))
         assertEquals("INVALID_INPUT", diagnostic.get("code").stringValue())
         assertEquals("q\n\u001b[31m", diagnostic.get("query_id").stringValue())
         assertEquals("night\nmode", diagnostic.get("profile_id").stringValue())
@@ -233,12 +233,12 @@ class IndexBudgetCliTest {
         val result = analyze(directory.resolve("run"), input)
 
         assertEquals(2, result.code)
-        assertTrue(result.stderr.startsWith("INVALID_INPUT:"))
-        assertEquals(1, result.stderr.lineSequence().count { it.isNotEmpty() })
-        assertFalse(result.stderr.contains('\u001b'))
-        assertFalse(result.stderr.contains("private-frequency-and-password"))
-        assertFalse(result.stderr.contains("private-sql-literal"))
-        val diagnostic = JsonMapper.builder().build().readTree(result.stderr.substringAfter(": "))
+        assertTrue(result.diagnosticStderr.startsWith("INVALID_INPUT:"))
+        assertEquals(1, result.diagnosticStderr.lineSequence().count { it.isNotEmpty() })
+        assertFalse(result.diagnosticStderr.contains('\u001b'))
+        assertFalse(result.diagnosticStderr.contains("private-frequency-and-password"))
+        assertFalse(result.diagnosticStderr.contains("private-sql-literal"))
+        val diagnostic = JsonMapper.builder().build().readTree(result.diagnosticStderr.substringAfter(": "))
         assertEquals("INVALID_INPUT", diagnostic.get("code").stringValue())
         assertEquals("unknown\n\"quoted\"\u001b[31m", diagnostic.get("query_id").stringValue())
         assertEquals("night", diagnostic.get("profile_id").stringValue())
@@ -253,7 +253,7 @@ class IndexBudgetCliTest {
 
         for (result in listOf(invalidArguments, invalidPath)) {
             assertEquals(2, result.code)
-            assertFalse(result.stderr.contains("private-password"))
+            assertFalse(result.diagnosticStderr.contains("private-password"))
         }
     }
 
@@ -261,14 +261,14 @@ class IndexBudgetCliTest {
     fun `missing arguments are usage errors`() {
         val result = invoke("analyze", "--workload", "examples/workload-v2.json")
         assertEquals(2, result.code)
-        assertTrue(result.stderr.startsWith("INVALID_INPUT:"))
+        assertTrue(result.diagnosticStderr.startsWith("INVALID_INPUT:"))
     }
 
     @Test
     fun `blank paths are usage errors`() {
         val result = invoke("analyze", "--workload", "examples/workload-v2.json", "--output-dir", "")
         assertEquals(2, result.code)
-        assertTrue(result.stderr.startsWith("INVALID_INPUT:"))
+        assertTrue(result.diagnosticStderr.startsWith("INVALID_INPUT:"))
     }
 
     @Test
@@ -285,10 +285,9 @@ class IndexBudgetCliTest {
             context.recordCacheHit()
             ContractFixtures.completedResult()
         }
-        val result = invokeWith(IndexBudgetCli(WorkloadReader(), analysisRunner = runner),
-            "analyze", "--workload", "examples/workload-v2.json", "--output-dir", directory.resolve("run").toString())
+        val result = analyze(directory.resolve("run"), cli = IndexBudgetCli(WorkloadReader(), analysisRunner = runner))
         assertEquals(0, result.code)
-        assertEquals("", result.stderr)
+        assertEquals("", result.diagnosticStderr)
         assertTrue(result.progress.first().startsWith("stage=validation "))
         assertEquals("stage=baseline explain_attempts=2 completed_sets=1 cache_hits=1", result.progress.last())
         assertFalse(result.progress.any { '%' in it })
@@ -303,8 +302,7 @@ class IndexBudgetCliTest {
         )
         for ((searchResult, expectedCode) in results) {
             val runner = AnalysisRunner { _, _, _ -> searchResult }
-            val result = invokeWith(IndexBudgetCli(WorkloadReader(), analysisRunner = runner),
-                "analyze", "--workload", "examples/workload-v2.json", "--output-dir", directory.resolve("run").toString())
+            val result = analyze(directory.resolve("run"), cli = IndexBudgetCli(WorkloadReader(), analysisRunner = runner))
             assertEquals(expectedCode, result.code)
         }
     }
@@ -316,10 +314,9 @@ class IndexBudgetCliTest {
             IllegalStateException("postgresql://user:private-password@localhost/db"),
         )) {
             val runner = AnalysisRunner { _, _, _ -> throw failure }
-            val result = invokeWith(IndexBudgetCli(WorkloadReader(), analysisRunner = runner),
-                "analyze", "--workload", "examples/workload-v2.json", "--output-dir", directory.resolve("run").toString())
+            val result = analyze(directory.resolve("run"), cli = IndexBudgetCli(WorkloadReader(), analysisRunner = runner))
             assertEquals(1, result.code)
-            assertFalse(result.stderr.contains("private-password"))
+            assertFalse(result.diagnosticStderr.contains("private-password"))
         }
     }
 
@@ -338,8 +335,11 @@ class IndexBudgetCliTest {
         assertTrue(stderr.toString().contains("DEADLINE_EXCEEDED:"))
     }
 
-    private fun analyze(output: Path, workload: Path = Path.of("examples/workload-v2.json")): Result =
-        invoke("analyze", "--workload", workload.toString(), "--output-dir", output.toString())
+    private fun analyze(
+        output: Path,
+        workload: Path = Path.of("examples/workload-v2.json"),
+        cli: IndexBudgetCli = this.cli,
+    ): Result = invokeWith(cli, "analyze", "--workload", workload.toString(), "--output-dir", output.toString())
 
     private fun createSymbolicLinkOrSkip(link: Path, target: Path): Path = try {
         Files.createSymbolicLink(link, target)
@@ -375,10 +375,19 @@ class IndexBudgetCliTest {
         val stderr = StringWriter()
         val code = cli.execute(arrayOf(*args), PrintWriter(stdout, true), PrintWriter(stderr, true))
         val lines = stderr.toString().lineSequence().filter { it.isNotEmpty() }.toList()
-        val diagnostics = lines.filterNot { it.startsWith("stage=") }
-        return Result(code, stdout.toString(), diagnostics.joinToString("\n", postfix = if (diagnostics.isEmpty()) "" else "\n"),
-            lines.filter { it.startsWith("stage=") })
+        val (progress, diagnostics) = lines.partition { it.startsWith("stage=") }
+        return Result(
+            code = code,
+            stdout = stdout.toString(),
+            diagnosticStderr = diagnostics.joinToString("\n", postfix = if (diagnostics.isEmpty()) "" else "\n"),
+            progress = progress,
+        )
     }
 
-    private data class Result(val code: Int, val stdout: String, val stderr: String, val progress: List<String>)
+    private data class Result(
+        val code: Int,
+        val stdout: String,
+        val diagnosticStderr: String,
+        val progress: List<String>,
+    )
 }

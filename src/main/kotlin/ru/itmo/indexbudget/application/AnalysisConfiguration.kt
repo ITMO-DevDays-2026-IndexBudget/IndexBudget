@@ -17,10 +17,14 @@ import ru.itmo.indexbudget.sql.SqlAnalyzer
 class AnalysisConfiguration {
     @Bean
     fun analysisRunner(
-        sql: ObjectProvider<SqlAnalyzer>, sessions: ObjectProvider<AnalysisSessionFactory>,
-        candidates: ObjectProvider<CandidateGenerator>, metrics: ObjectProvider<MetricsCalculator>,
-        comparator: ObjectProvider<ObjectiveComparator>, optimizer: ObjectProvider<Optimizer>,
-        reports: ObjectProvider<ReportBuilder>, exporter: ObjectProvider<ReportExporter>,
+        sql: ObjectProvider<SqlAnalyzer>,
+        sessions: ObjectProvider<AnalysisSessionFactory>,
+        candidates: ObjectProvider<CandidateGenerator>,
+        metrics: ObjectProvider<MetricsCalculator>,
+        comparator: ObjectProvider<ObjectiveComparator>,
+        optimizer: ObjectProvider<Optimizer>,
+        reports: ObjectProvider<ReportBuilder>,
+        exporter: ObjectProvider<ReportExporter>,
     ): AnalysisRunner {
         val sqlPort = sql.ifAvailable
         val sessionPort = sessions.ifAvailable
@@ -31,14 +35,25 @@ class AnalysisConfiguration {
         val reportPort = reports.ifAvailable
         val exportPort = exporter.ifAvailable
         val missing = listOf(
-            "SqlAnalyzer" to sqlPort, "AnalysisSessionFactory" to sessionPort,
-            "CandidateGenerator" to candidatePort, "MetricsCalculator" to metricsPort,
-            "ObjectiveComparator" to comparatorPort, "Optimizer" to optimizerPort,
-            "ReportBuilder" to reportPort, "ReportExporter" to exportPort,
+            "SqlAnalyzer" to sqlPort,
+            "AnalysisSessionFactory" to sessionPort,
+            "CandidateGenerator" to candidatePort,
+            "MetricsCalculator" to metricsPort,
+            "ObjectiveComparator" to comparatorPort,
+            "Optimizer" to optimizerPort,
+            "ReportBuilder" to reportPort,
+            "ReportExporter" to exportPort,
         ).filter { it.second == null }.map { it.first }
         if (missing.isNotEmpty()) return UnavailableAnalysisRunner(missing)
-        return AnalysisPipeline(checkNotNull(sqlPort), checkNotNull(sessionPort), checkNotNull(candidatePort),
-            checkNotNull(metricsPort), checkNotNull(comparatorPort), checkNotNull(optimizerPort),
-            checkNotNull(reportPort), checkNotNull(exportPort))
+        return AnalysisPipeline(
+            sqlAnalyzer = checkNotNull(sqlPort),
+            sessionFactory = checkNotNull(sessionPort),
+            candidateGenerator = checkNotNull(candidatePort),
+            metrics = checkNotNull(metricsPort),
+            comparator = checkNotNull(comparatorPort),
+            optimizer = checkNotNull(optimizerPort),
+            reportBuilder = checkNotNull(reportPort),
+            reportExporter = checkNotNull(exportPort),
+        )
     }
 }

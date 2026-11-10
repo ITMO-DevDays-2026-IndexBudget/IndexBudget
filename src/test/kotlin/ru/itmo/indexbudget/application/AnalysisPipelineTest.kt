@@ -40,6 +40,7 @@ class AnalysisPipelineTest {
         assertTrue(run.events.indexOf("unregister") < run.events.indexOf("report"))
         assertEquals(listOf("report", "export"), run.events.takeLast(2))
         assertSame(result, run.report?.result)
+        assertEquals("a".repeat(64), run.report?.inputHash)
         assertEquals(ContractFixtures.baselineEvaluation().plansByQueryId, run.report?.result?.baseline?.plansByQueryId)
         assertEquals(ContractFixtures.robustEvaluation().plansByQueryId, result.bestRobust?.evaluation?.plansByQueryId)
         assertEquals(ContractFixtures.meanEvaluation().plansByQueryId, result.bestMean?.evaluation?.plansByQueryId)
@@ -172,6 +173,10 @@ class AnalysisPipelineTest {
         run.onSize = { candidate ->
             if (candidate.id == "records_created_at") problem(ErrorCode.HYPOTHETICAL_INDEX_ERROR)
         }
+        run.greedyConfigurationIds = listOf("records_group_created_at")
+        run.repairConfigurationIds = null
+        run.robustIncumbentIds = listOf("records_group_created_at")
+        run.meanIncumbentIds = listOf("records_group_created_at")
         val result = run.execute()
 
         assertEquals(RunStatus.COMPLETED, result.status)
@@ -180,6 +185,21 @@ class AnalysisPipelineTest {
         assertEquals(listOf(WarningCode.CANDIDATE_REJECTED), result.diagnostics.warnings.map { it.code })
         assertEquals("records_created_at", result.diagnostics.candidateDecisions.single().candidateId)
         assertEquals(CandidateReason.HYPOTHETICAL_INDEX_ERROR, result.diagnostics.candidateDecisions.single().reason)
+    }
+
+    @Test
+    fun `shortlist order does not determine scripted search stages or incumbents`() {
+        val run = Harness()
+        run.shortlist = run.shortlist.reversed()
+        val result = run.execute()
+
+        assertEquals(RunStatus.COMPLETED, result.status)
+        assertEquals(listOf(emptyList(), listOf("records_created_at"), listOf("records_group_created_at")),
+            run.evaluatedSets)
+        assertEquals(ContractFixtures.robustConfiguration(), result.bestRobust)
+        assertEquals(ContractFixtures.meanConfiguration(), result.bestMean)
+        assertEquals(AnalysisPhase.entries.toList(), run.progress.map { it.phase }.distinct())
+        assertEquals(RunStatistics(6, 3, 3, 1, 1), result.diagnostics.statistics)
     }
 
     @Test
@@ -323,6 +343,51 @@ class AnalysisPipelineTest {
     }
 
     @Test
+    fun `close failure after successful search exports both saved incumbents as partial`() {
+        val run = Harness()
+        run.failClose = true
+        val result = run.execute()
+
+        assertEquals(RunStatus.PARTIAL, result.status)
+        assertEquals(listOf(StopReason.SEARCH_COMPLETE, StopReason.CONNECTION_LOST), result.diagnostics.stopReasons)
+        assertEquals(ContractFixtures.robustConfiguration(), result.bestRobust)
+        assertEquals(ContractFixtures.meanConfiguration(), result.bestMean)
+        assertEquals(listOf(ErrorCode.DB_CONNECTION_ERROR), result.diagnostics.errors.map { it.code })
+        assertEquals("Analysis session cleanup failed.", result.diagnostics.errors.single().message)
+        assertEquals(1, run.closeCalls)
+        assertEquals(1, run.unregisterCalls)
+        assertEquals(listOf(emptyList(), listOf("records_created_at"), listOf("records_group_created_at")),
+            run.evaluatedSets)
+        assertEquals(6, result.diagnostics.statistics.explainAttempts)
+        assertEquals(3, result.diagnostics.statistics.completedEvaluations)
+        assertSame(result, run.report?.result)
+        assertEquals(listOf("close", "unregister", "report", "export"), run.events.takeLast(4))
+    }
+
+    @Test
+    fun `report inconsistent with this run is rejected before exporter is called`() {
+        val corruptions = listOf<Pair<String, (AnalysisReport) -> AnalysisReport>>(
+            "runId" to { report -> report.copy(runId = "different-run") },
+            "inputHash" to { report -> report.copy(inputHash = "b".repeat(64)) },
+            "input" to { report -> report.copy(input = checkNotNull(report.input).copy(objective = Objective.MEAN)) },
+            "result" to { report -> report.copy(result = SearchResult.Failed(
+                report.result.selectedObjective, AnalysisError(ErrorCode.EXPLAIN_FAILED, "Different saved result"),
+            )) },
+        )
+        for ((field, corrupt) in corruptions) {
+            val run = Harness()
+            run.transformReport = corrupt
+            val error = assertThrows(AnalysisException::class.java, { run.execute() }, field).error
+
+            assertEquals(ErrorCode.EXPORT_FAILED, error.code, field)
+            assertFalse("export" in run.events, field)
+            assertNull(run.report, field)
+            assertEquals(1, run.closeCalls, field)
+            assertFalse(AnalysisPhase.REPORT in run.context.completedPhases(), field)
+        }
+    }
+
+    @Test
     fun `expired overall budget still permits minimal export from the last full checkpoint`() {
         val run = Harness()
         run.afterCheckpoint = { run.advance(90) }
@@ -361,7 +426,9 @@ class AnalysisPipelineTest {
     private class Harness(val input: WorkloadInput = ContractFixtures.workload()) {
         private var now = 0L
         val progress = mutableListOf<RunProgress>()
-        val context = RunContext(clock = NanoClock { now }, onProgress = { progress += it })
+        val context = RunContext(clock = NanoClock { now }, onProgress = { progress += it }).apply {
+            recordInputHash("a".repeat(64))
+        }
         val events = mutableListOf<String>()
         val evaluatedSets = mutableListOf<List<String>>()
         var openCalls = 0
@@ -383,8 +450,22 @@ class AnalysisPipelineTest {
         var onSize: (IndexCandidate) -> Unit = {}
         var afterCheckpoint: () -> Unit = {}
         var exportFailure: Exception? = null
+        var transformReport: (AnalysisReport) -> AnalysisReport = { it }
+        var shortlist = ContractFixtures.candidates()
+        var greedyConfigurationIds = listOf("records_created_at")
+        var repairConfigurationIds: List<String>? = listOf("records_group_created_at")
+        var robustIncumbentIds = listOf("records_created_at")
+        var meanIncumbentIds = listOf("records_group_created_at")
         private var closed = false
-        private val fixtureCandidates = ContractFixtures.candidates()
+        private val expectedUsageByCandidateId = mapOf(
+            "records_created_at" to BudgetUsage(262_144L, 314_573L, 4100.0, 1),
+            "records_group_created_at" to BudgetUsage(524_288L, 629_146L, 8200.0, 1),
+        )
+        private val configurationsByIds = mapOf(
+            emptyList<String>() to ContractFixtures.baselineConfiguration(),
+            listOf("records_created_at") to ContractFixtures.robustConfiguration(),
+            listOf("records_group_created_at") to ContractFixtures.meanConfiguration(),
+        )
 
         fun advance(seconds: Long) { now += Duration.ofSeconds(seconds).toNanos() }
 
@@ -404,7 +485,7 @@ class AnalysisPipelineTest {
                 observe("size:${candidate.id}", context)
                 assertFalse(closed)
                 onSize(candidate)
-                return fixtureCandidates.single { it.id == candidate.id }.estimatedBytes!!
+                return expectedUsageByCandidateId.getValue(candidate.id).estimatedBytes
             }
 
             override fun evaluate(candidates: List<IndexCandidate>, workload: ResolvedWorkload,
@@ -412,18 +493,16 @@ class AnalysisPipelineTest {
                 observe("evaluate", context)
                 assertFalse(closed)
                 assertSame(input, workload.input)
-                evaluatedSets += candidates.map { it.id }
+                val configurationIds = candidates.map { it.id }.sorted()
+                evaluatedSets += configurationIds
                 context.reserveEvaluationAttempt()
                 input.queries.forEach { context.reserveExplainAttempt() }
+                val scriptedEvaluation = configurationsByIds.getValue(configurationIds).evaluation
                 val evaluation = if (candidates.isEmpty()) {
-                    baselineAction?.invoke() ?: ContractFixtures.baselineEvaluation().let { baseline ->
+                    baselineAction?.invoke() ?: scriptedEvaluation.let { baseline ->
                         if (zeroBaseline) baseline.copy(costByQueryId = baseline.costByQueryId.mapValues { 0.0 }) else baseline
                     }
-                } else if (candidates.single().id == "records_created_at") {
-                    ContractFixtures.robustEvaluation()
-                } else {
-                    ContractFixtures.meanEvaluation()
-                }
+                } else scriptedEvaluation
                 if (evaluation.costByQueryId.keys == input.queries.map { it.id }.toSet()) {
                     context.recordCompletedEvaluation()
                 }
@@ -444,8 +523,10 @@ class AnalysisPipelineTest {
             override fun assessBudget(candidates: List<IndexCandidate>, workload: WorkloadInput): BudgetAssessment {
                 assertSame(input, workload)
                 val usage = if (candidates.isEmpty()) BudgetUsage(0, 0, 0.0, 0) else {
-                    val candidate = fixtureCandidates.single { it.id == candidates.single().id }
-                    BudgetUsage(candidate.estimatedBytes!!, candidate.budgetedBytes!!, candidate.writeUnitsPerHour, 1)
+                    val candidate = candidates.single()
+                    val expected = expectedUsageByCandidateId.getValue(candidate.id)
+                    assertEquals(expected.estimatedBytes, candidate.estimatedBytes, candidate.id)
+                    expected
                 }
                 return BudgetAssessment(usage)
             }
@@ -478,21 +559,32 @@ class AnalysisPipelineTest {
                 assertSame(session, evaluator)
                 assertSame(this@Harness.metrics, metrics)
                 assertSame(this@Harness.comparator, comparator)
-                val saved = mutableListOf<EvaluatedConfiguration>()
-                candidates.candidates.forEachIndexed { index, candidate ->
-                    if (index == 1) {
-                        context.completePhase()
-                        context.enterPhase(AnalysisPhase.REPAIR)
-                        context.recordCacheHit()
-                        context.reserveRepairAttempt()
-                    }
-                    val evaluation = evaluator.evaluate(listOf(candidate), workload, context)
-                    saved += if (candidate.id == "records_created_at") ContractFixtures.robustConfiguration().copy(evaluation = evaluation)
-                        else ContractFixtures.meanConfiguration().copy(evaluation = evaluation)
+                for (candidate in candidates.candidates) {
+                    val expected = expectedUsageByCandidateId.getValue(candidate.id)
+                    assertEquals(expected.estimatedBytes, candidate.estimatedBytes, candidate.id)
+                    assertEquals(expected.budgetedBytes, candidate.budgetedBytes, candidate.id)
+                    assertEquals(expected.writeUnitsPerHour, candidate.writeUnitsPerHour, candidate.id)
                 }
+                val candidatesById = candidates.candidates.associateBy { it.id }
+                val saved = mutableMapOf<List<String>, EvaluatedConfiguration>()
+                fun evaluateScriptedConfiguration(ids: List<String>) {
+                    val expected = configurationsByIds.getValue(ids)
+                    val evaluation = evaluator.evaluate(ids.map { candidatesById.getValue(it) }, workload, context)
+                    saved[ids] = expected.copy(evaluation = evaluation)
+                }
+
+                assertEquals(AnalysisPhase.GREEDY, context.phase)
+                evaluateScriptedConfiguration(greedyConfigurationIds)
                 context.completePhase()
-                val robust = saved.first()
-                val mean = saved.last()
+                repairConfigurationIds?.let { ids ->
+                    context.enterPhase(AnalysisPhase.REPAIR)
+                    context.recordCacheHit()
+                    context.reserveRepairAttempt()
+                    evaluateScriptedConfiguration(ids)
+                    context.completePhase()
+                }
+                val robust = saved.getValue(robustIncumbentIds)
+                val mean = saved.getValue(meanIncumbentIds)
                 onCheckpoint(SearchCheckpoint(robust, mean))
                 if (publishInvalidCheckpoint) {
                     val invalid = mean.evaluation.copy(
@@ -541,7 +633,7 @@ class AnalysisPipelineTest {
                     override fun generate(workload: ResolvedWorkload, catalog: CatalogSnapshot, context: RunContext): CandidateBatch {
                         observe("generate", context)
                         onGenerate()
-                        return CandidateBatch(fixtureCandidates.map {
+                        return CandidateBatch(shortlist.map {
                             it.copy(estimatedBytes = null, budgetedBytes = null, writeUnitsPerHour = null)
                         })
                     }
@@ -550,8 +642,8 @@ class AnalysisPipelineTest {
                 reportBuilder = ReportBuilder { workload, candidates, result, reportContext ->
                     observe("report", reportContext)
                     assertTrue(closed || openCalls == 0)
-                    AnalysisReport(context.runId, null, context.elapsedTime().toMillis(),
-                        EnvironmentInfo("test", "test"), result, workload, candidates)
+                    transformReport(AnalysisReport(context.runId, context.inputHash, context.elapsedTime().toMillis(),
+                        EnvironmentInfo("test", "test"), result, workload, candidates))
                 },
                 reportExporter = ReportExporter { built, output, exportContext ->
                     observe("export", exportContext)
