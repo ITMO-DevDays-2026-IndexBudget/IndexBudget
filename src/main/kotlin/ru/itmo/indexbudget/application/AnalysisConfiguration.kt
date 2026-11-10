@@ -4,6 +4,7 @@ import org.springframework.beans.factory.ObjectProvider
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import ru.itmo.indexbudget.candidates.CandidateGenerator
+import ru.itmo.indexbudget.candidates.ProfileAwareCandidateGenerator
 import ru.itmo.indexbudget.domain.MetricsCalculator
 import ru.itmo.indexbudget.domain.MetricsCalculatorImpl
 import ru.itmo.indexbudget.domain.ObjectiveComparator
@@ -19,6 +20,9 @@ import ru.itmo.indexbudget.sql.SqlAnalyzer
 /** All production ports must be present; fixtures are never registered in the CLI. */
 @Configuration(proxyBeanMethods = false)
 class AnalysisConfiguration {
+    @Bean
+    fun candidateGenerator(): CandidateGenerator = ProfileAwareCandidateGenerator()
+
     @Bean
     fun metricsCalculator(): MetricsCalculator = MetricsCalculatorImpl()
 
