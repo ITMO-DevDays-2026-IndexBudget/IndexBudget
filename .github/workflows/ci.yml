@@ -59,4 +59,4 @@ jobs:
         env:
           INDEXBUDGET_CATALOG_TEST_URL: jdbc:postgresql://127.0.0.1:55434/catalog_test
           INDEXBUDGET_CATALOG_TEST_USER: postgres
-        run: ./gradlew --no-daemon test --tests '*JdbcCatalogReaderIntegrationTest'
+        run: ./gradlew --no-daemon test --tests '*JdbcCatalogReaderIntegrationTest' --tests '*SqlResolutionIntegrationTest'

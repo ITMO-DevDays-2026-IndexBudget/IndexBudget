@@ -34,9 +34,13 @@ class JSqlParserSqlAnalyzer : SqlAnalyzer {
         parsed: ParsedWorkload,
         catalog: CatalogSnapshot,
         context: RunContext,
-    ): ResolvedWorkload = throw AnalysisException(
-        AnalysisError(ErrorCode.NOT_IMPLEMENTED, "SQL name resolution is not implemented."),
-    )
+    ): ResolvedWorkload {
+        context.checkDeadline()
+        if (parsed !is JSqlParserParsedWorkload) {
+            throw AnalysisException(AnalysisError(ErrorCode.INVALID_INPUT, "Workload was not parsed by this SQL analyzer."))
+        }
+        return JSqlParserNameResolver(catalog, context).resolve(parsed)
+    }
 
     private fun parseAndValidateQuery(query: QueryInput, context: RunContext): Pair<PlainSelect, List<TableName>> =
         try {
