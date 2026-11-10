@@ -5,7 +5,7 @@
 ## Область
 Модуль `MetricsCalculator` + `ObjectiveComparator` в `domain/`. Чистые расчёты, без БД. Единственная реализация формул в проекте.
 
-Общий `ProfileWeights` принят в [PR #32](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/pull/32) и используется в CLI и расчётах. Отдельный PR #35 закрыт без merge. [PR #37](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/pull/37) реализует только `calculate(...)` для #40; `assessBudget(...)` до T3 возвращает `NOT_IMPLEMENTED`. Компаратор, проверка допустимости после оценки и цена устойчивости остаются отдельными задачами.
+Общий `ProfileWeights` принят в [PR #32](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/pull/32) и используется в CLI и расчётах. Отдельный PR #35 закрыт без merge. [PR #37](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/pull/37) реализует `calculate(...)` для #40; в #41 реализован `assessBudget(...)`. Компаратор, проверка допустимости после оценки и цена устойчивости остаются отдельными задачами.
 
 ## Формулы
 ```text
@@ -35,7 +35,13 @@ R(S)      = max_s (C_s/B_s) for s with B_s>0      # НЕВЗВЕШЕННЫЙ м�
 estimated_bytes(i) = hypopg_relation_size(i);  budgeted_bytes(i) = ceil(1.2 * estimated_bytes(i))
 row_changes(t) = inserts + updates + deletes в час;  write_units(i) = row_changes(table(i)) * key_columns(i)
 ```
-Два бюджета — раздельные ограничения допустимости, не складываются. Без полного write-профиля `writes` = null везде и пропускается из ключа. `size==null` → кандидат исключается с причиной.
+Storage, write и max_indexes проверяются раздельно; возвращаются все нарушения, равенство лимиту допустимо. Запас считается целочисленно для каждого нового индекса до суммирования; реальные индексы остаются в baseline. Неизвестный размер даёт `HYPOTHETICAL_INDEX_ERROR` с candidate ID, отрицательный размер или переполнение — `NUMERIC_ERROR`.
+
+Write units накапливаются точно в `BigDecimal` из представленных значений `Double`: сначала rates таблицы, затем умножение на число ключей и сумма набора. Сравнение с бюджетом выполняется до единственного округления результата в `Double`. Потребители используют готовую допустимость `BudgetAssessment`; округлённое поле расхода не заменяет проверку бюджета. Потеря малых слагаемых, например в `1e16 + 1 + 1`, не допускается.
+
+При отсутствии write-профиля `writes = null` даже для пустого набора; при полном профиле units рассчитываются независимо от включённости лимита. Неполный переданный профиль — `INVALID_WRITE_PROFILE`, не отключение модели. Покрытие всех разрешённых workload-таблиц проверяет pipeline #14 до baseline, наличие rates для кандидатов дополнительно проверяет `assessBudget`. Нулевые storage/max_indexes завершают pipeline с baseline-only; нулевой write budget допускает нулевой расход.
+
+Pipeline сохраняет исходный estimated size и рассчитанные расходы кандидата, а метрики набора сохраняют готовый `BudgetUsage` для отчёта. Кэшированные поля кандидата не используются как источник формул: запас повторно к `budgetedBytes` не применяется. Детали ошибок и границы проверки профиля — в [контрактах](contracts.md).
 
 ## Зафиксированные решения
 - Plateau-фикстура — через округление до 9 знаков HALF_EVEN.

@@ -25,6 +25,22 @@ import java.time.Duration
 
 class AnalysisPipelineTest {
     @Test
+    fun `real budget calculator supplies the same expenses to search and report`() {
+        val run = Harness(suppliedMetrics = MetricsCalculatorImpl())
+        val result = run.execute()
+
+        assertEquals(RunStatus.COMPLETED, result.status)
+        val reported = checkNotNull(run.report).candidates.candidates
+        assertEquals(listOf(262_144L, 524_288L), reported.map { it.estimatedBytes })
+        assertEquals(listOf(314_573L, 629_146L), reported.map { it.budgetedBytes })
+        assertEquals(listOf(4100.0, 8200.0), reported.map { it.writeUnitsPerHour })
+        assertEquals(BudgetUsage(262_144, 314_573, 4100.0, 1), result.bestRobust?.metrics?.budgetUsage)
+        assertEquals(BudgetUsage(524_288, 629_146, 8200.0, 1), result.bestMean?.metrics?.budgetUsage)
+        assertSame(result, run.report?.result)
+        assertEquals(3, run.evaluatedSets.size)
+    }
+
+    @Test
     fun `one session and context connect all stages and reports use only saved evaluations`() {
         val run = Harness()
         val result = run.execute()
@@ -85,7 +101,7 @@ class AnalysisPipelineTest {
                     maxIndexes = if (reason == StopReason.ZERO_MAX_INDEXES) 0 else it.constraints.maxIndexes,
                 ))
             }
-            val run = Harness(input)
+            val run = Harness(input, suppliedMetrics = MetricsCalculatorImpl())
             val result = run.execute()
 
             assertEquals(RunStatus.COMPLETED, result.status)
@@ -507,6 +523,7 @@ class AnalysisPipelineTest {
         val input: WorkloadInput = ContractFixtures.workload(),
         suppliedContext: RunContext? = null,
         private val outputDirectory: Path = Path.of("reports/test-run"),
+        private val suppliedMetrics: MetricsCalculator? = null,
     ) {
         private var now = 0L
         val progress = mutableListOf<RunProgress>()
@@ -605,7 +622,7 @@ class AnalysisPipelineTest {
             }
         }
 
-        private val metrics = object : MetricsCalculator {
+        private val metrics: MetricsCalculator = suppliedMetrics ?: object : MetricsCalculator {
             override fun assessBudget(candidates: List<IndexCandidate>, workload: WorkloadInput): BudgetAssessment {
                 assertSame(input, workload)
                 val usage = if (candidates.isEmpty()) BudgetUsage(0, 0, 0.0, 0) else {
@@ -656,8 +673,13 @@ class AnalysisPipelineTest {
                 val saved = mutableMapOf<List<String>, EvaluatedConfiguration>()
                 fun evaluateScriptedConfiguration(ids: List<String>) {
                     val expected = configurationsByIds.getValue(ids)
-                    val evaluation = evaluator.evaluate(ids.map { candidatesById.getValue(it) }, workload, context)
-                    saved[ids] = expected.copy(evaluation = evaluation)
+                    val selected = ids.map { candidatesById.getValue(it) }
+                    val budget = suppliedMetrics?.assessBudget(selected, workload.input)
+                    if (budget != null) assertTrue(budget.admissible)
+                    val evaluation = evaluator.evaluate(selected, workload, context)
+                    saved[ids] = if (budget == null) expected.copy(evaluation = evaluation) else {
+                        EvaluatedConfiguration(evaluation, metrics.calculate(workload.input, baseline, evaluation, budget.usage))
+                    }
                 }
 
                 assertEquals(AnalysisPhase.GREEDY, context.phase)

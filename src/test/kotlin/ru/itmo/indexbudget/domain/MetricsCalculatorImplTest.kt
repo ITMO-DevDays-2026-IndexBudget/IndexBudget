@@ -303,14 +303,6 @@ class MetricsCalculatorImplTest {
         assertEquals("big", exception.error.profileId)
     }
 
-    @Test
-    fun `assessBudget reports not implemented until the budget subtask`() {
-        val exception = assertThrows(AnalysisException::class.java) {
-            impl.assessBudget(emptyList(), workload(profile("p", 1.0, 1.0, 1.0)))
-        }
-        assertEquals(ErrorCode.NOT_IMPLEMENTED, exception.error.code)
-    }
-
     private fun workload(vararg profiles: Profile): WorkloadInput = WorkloadInput(
         schemaVersion = 2,
         queries = listOf(QueryInput("q1", "SELECT 1"), QueryInput("q2", "SELECT 2")),
