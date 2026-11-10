@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import tempfile
 import unittest
@@ -18,6 +19,8 @@ class DeploymentFailures(unittest.TestCase):
         self.base = Path(self.temp.name)
         self.repo = self.base / "repo"
         (self.repo / "demo/postgres").mkdir(parents=True)
+        (self.repo / "demo/postgres/init").mkdir()
+        (self.repo / "demo/postgres/init/001-seed.sql").write_text("SELECT 1;\n")
         (self.repo / "deploy/db").mkdir(parents=True)
         (self.repo / "demo/postgres/Dockerfile").write_text("FROM postgres:16.15-bookworm\n")
         shutil.copy(PROJECT / "deploy/db/compose.yaml", self.repo / "deploy/db/compose.yaml")
@@ -32,6 +35,8 @@ class DeploymentFailures(unittest.TestCase):
             (self.root / name).mkdir()
         subprocess.run(["git", "clone", "--bare", "-q", str(self.repo), str(self.root / "app.git")], check=True)
         (self.root / "db.env").write_text("# Mock only; no database connection\n")
+        (self.root / "db.env").chmod(0o600)
+        self.root.chmod(0o700)
         binaries = self.base / "bin"
         binaries.mkdir()
         docker = binaries / "docker"
@@ -78,6 +83,16 @@ elif 'pg_dump' in a and mode == 'backup':
         calls = self.assert_aborts_before_update("build")
         self.assertTrue(any("build" in call for call in calls))
         self.assertFalse(any("pg_dump" in call for call in calls))
+
+    def test_seed_is_readable_by_container_uid_but_secrets_remain_private(self):
+        self.assert_aborts_before_update("build")
+        releases = list((self.root / "releases").iterdir())
+        self.assertEqual(len(releases), 1)
+        seed = releases[0] / "source/demo/postgres/init"
+        self.assertEqual(stat.S_IMODE(seed.stat().st_mode), 0o755)
+        self.assertEqual(stat.S_IMODE((seed / "001-seed.sql").stat().st_mode), 0o644)
+        self.assertEqual(stat.S_IMODE((self.root / "db.env").stat().st_mode), 0o600)
+        self.assertEqual(stat.S_IMODE(self.root.stat().st_mode), 0o700)
 
     def test_backup_failure_does_not_replace_database(self):
         calls = self.assert_aborts_before_update("backup")

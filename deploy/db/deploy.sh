@@ -19,6 +19,10 @@ free_kib=$(df -Pk "$root" | awk 'END {print $4}')
 (( free_kib >= minimum_free_gib * 1024 * 1024 )) || { echo 'Not enough free disk space; deployment skipped.' >&2; exit 1; }
 mkdir -p "$release/source"
 git --git-dir="$root/app.git" archive "$app_revision" demo/postgres | tar -x -C "$release/source"
+# tar respects umask 077, but the bind-mounted init directory is read by the
+# container's postgres UID. Only public seed sources get cross-UID read access.
+find "$release/source/demo/postgres/init" -type d -exec chmod 755 {} +
+find "$release/source/demo/postgres/init" -type f -exec chmod 644 {} +
 cp "$snapshot/deploy/db/compose.yaml" "$release/compose.yaml"
 printf '%s\n' "$app_revision" > "$release/APP_REVISION"
 printf '%s\n' "$source_revision" > "$release/CONFIG_REVISION"
