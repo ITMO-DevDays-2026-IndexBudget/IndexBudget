@@ -157,6 +157,72 @@ class SqlResolutionIntegrationTest {
     }
 
     @ParameterizedTest
+    @ValueSource(strings = ["date", "timestamptz"])
+    fun `generic datetime literals respect domain shadowing`(typeName: String) {
+        sql("CREATE TABLE dates (value pg_catalog.$typeName)")
+        sql("CREATE DOMAIN $schema.$typeName AS pg_catalog.$typeName")
+        val literal = "$typeName '2026-01-01'"
+        connection.createStatement().use { statement ->
+            statement.executeQuery("""
+                SELECT n.nspname FROM pg_catalog.pg_type t
+                JOIN pg_catalog.pg_namespace n ON n.oid OPERATOR(pg_catalog.=) t.typnamespace
+                WHERE t.oid OPERATOR(pg_catalog.=) pg_catalog.pg_typeof($literal)::pg_catalog.oid
+            """.trimIndent()).use {
+                assertTrue(it.next())
+                assertEquals(schema, it.getString(1))
+            }
+        }
+        failure("SELECT value FROM dates WHERE value = $literal", ErrorCode.UNSUPPORTED_SQL)
+        resolve("SELECT value FROM dates WHERE value = CAST('2026-01-01' AS pg_catalog.$typeName)")
+        resolve("SELECT value FROM dates WHERE value = TIMESTAMP WITH TIME ZONE '2026-01-01'")
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = ["varchar", "text", "nested_varchar"])
+    fun `implicit coercion to a domain preserves the custom operator candidate`(baseType: String) {
+        sql("CREATE TABLE pairs (id integer, a varchar, b varchar)")
+        sql("INSERT INTO pairs VALUES (1, 'left', 'right')")
+        if (baseType == "nested_varchar") sql("CREATE DOMAIN $schema.nested_varchar AS pg_catalog.varchar")
+        val qualifiedBase = if (baseType == "nested_varchar") "$schema.$baseType" else "pg_catalog.$baseType"
+        sql("CREATE DOMAIN $schema.target_domain AS $qualifiedBase")
+        sql("CREATE FUNCTION $schema.compare(pg_catalog.varchar, $schema.target_domain) RETURNS pg_catalog.bool LANGUAGE sql IMMUTABLE AS 'SELECT true'")
+        sql("CREATE OPERATOR $schema.= (LEFTARG = pg_catalog.varchar, RIGHTARG = $schema.target_domain, FUNCTION = $schema.compare)")
+        val text = "SELECT id FROM pairs WHERE a = b"
+        assertEquals(listOf(1), queryIds(text)) // Built-in equality would reject these unequal strings.
+        failure(text, ErrorCode.UNSUPPORTED_SQL)
+    }
+
+    @Test
+    fun `binary bit strings cannot hide a custom text bit operator`() {
+        sql("INSERT INTO groups VALUES (1, '1'), (2, '2')")
+        sql("CREATE FUNCTION $schema.compare(pg_catalog.text, pg_catalog.bit) RETURNS pg_catalog.bool LANGUAGE sql IMMUTABLE AS 'SELECT true'")
+        sql("CREATE OPERATOR $schema.= (LEFTARG = pg_catalog.text, RIGHTARG = pg_catalog.bit, FUNCTION = $schema.compare)")
+        assertEquals(listOf(1560), queryIds("SELECT pg_catalog.pg_typeof(B'1')::pg_catalog.oid"))
+        val text = "SELECT id FROM groups WHERE label = B'1'"
+        assertEquals(listOf(1, 2), queryIds("$text ORDER BY id"))
+        failure(text, ErrorCode.UNSUPPORTED_SQL)
+        val ordinaryString = "SELECT id FROM groups WHERE label = '1'"
+        assertEquals(listOf(1), queryIds(ordinaryString))
+        resolve(ordinaryString)
+    }
+
+    @Test
+    fun `hexadecimal integer ranges select the same operator signatures as PostgreSQL`() {
+        val types = mapOf("0x7fffffff" to 23, "0x80000000" to 20,
+            "0x7fffffffffffffff" to 20, "0x8000000000000000" to 1700)
+        types.forEach { (literal, oid) ->
+            assertEquals(listOf(oid), queryIds("SELECT pg_catalog.pg_typeof($literal)::pg_catalog.oid"))
+        }
+        sql("CREATE OPERATOR $schema.= (LEFTARG = integer, RIGHTARG = bigint, FUNCTION = pg_catalog.int48ne)")
+        sql("CREATE FUNCTION $schema.compare(pg_catalog.int4, pg_catalog.numeric) RETURNS pg_catalog.bool LANGUAGE sql IMMUTABLE AS 'SELECT true'")
+        sql("CREATE OPERATOR $schema.= (LEFTARG = integer, RIGHTARG = numeric, FUNCTION = $schema.compare)")
+        resolve("SELECT id FROM records WHERE value = 0x7fffffff")
+        types.keys.drop(1).forEach { literal ->
+            failure("SELECT id FROM records WHERE value = $literal", ErrorCode.UNSUPPORTED_SQL)
+        }
+    }
+
+    @ParameterizedTest
     @ValueSource(strings = ["WITH  TIME ZONE", "WITH\tTIME ZONE", "WITH\nTIME ZONE"])
     fun `formatting of composed builtin types does not affect resolution`(zone: String) {
         val text = "SELECT id FROM records WHERE created_at > CAST('2026-01-01' AS timestamp $zone)"
@@ -227,4 +293,10 @@ class SqlResolutionIntegrationTest {
     }
 
     private fun sql(text: String) = connection.createStatement().use { it.execute(text) }
+
+    private fun queryIds(text: String): List<Int> = connection.createStatement().use { statement ->
+        statement.executeQuery(text).use { rows -> buildList {
+            while (rows.next()) add(rows.getInt(1))
+        } }
+    }
 }

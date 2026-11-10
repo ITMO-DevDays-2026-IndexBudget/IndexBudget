@@ -27,12 +27,17 @@ internal class PostgresOperatorResolver(private val catalog: CatalogSnapshot, pr
         fun arguments(op: CatalogOperator) = listOf(op.leftTypeOid, op.rightTypeOid)
         fun canCoerce(input: CatalogType?, target: Long): Boolean {
             if (input == null || input.oid == target) return true
-            if (input.oid to target in casts) return true
-            return when (types[target]?.name) {
-                "anyarray", "anycompatiblearray" -> input.category == "A"
-                "anyrange", "anycompatiblerange" -> input.kind == "r"
-                "anymultirange", "anycompatiblemultirange" -> input.kind == "m"
-                "anyenum" -> input.kind == "e"
+            // PostgreSQL find_coercion_pathway unwraps domains before consulting pg_cast.
+            // Keep the declared operator types unchanged for exact-match ranking below.
+            val sourceType = baseType(input)
+            val targetType = baseType(types[target]
+                ?: fail(ErrorCode.CATALOG_ERROR, "Catalog is missing an operator argument type."))
+            if (sourceType.oid == targetType.oid || sourceType.oid to targetType.oid in casts) return true
+            return when (targetType.name) {
+                "anyarray", "anycompatiblearray" -> sourceType.category == "A"
+                "anyrange", "anycompatiblerange" -> sourceType.kind == "r"
+                "anymultirange", "anycompatiblemultirange" -> sourceType.kind == "m"
+                "anyenum" -> sourceType.kind == "e"
                 else -> false
             }
         }
@@ -70,6 +75,18 @@ internal class PostgresOperatorResolver(private val catalog: CatalogSnapshot, pr
         val chosen = candidates.singleOrNull()
             ?: fail(ErrorCode.UNSUPPORTED_SQL, "Comparison operator is missing or ambiguous in PostgreSQL.")
         accept(chosen)
+    }
+
+    private fun baseType(type: CatalogType): CatalogType {
+        var current = type
+        val visited = hashSetOf<Long>()
+        while (current.kind == "d") {
+            context.checkDeadline()
+            if (!visited.add(current.oid)) fail(ErrorCode.CATALOG_ERROR, "Catalog contains a cyclic domain type chain.")
+            current = types[current.baseTypeOid]
+                ?: fail(ErrorCode.CATALOG_ERROR, "Catalog is missing a domain base type.")
+        }
+        return current
     }
 
     private fun accept(operator: CatalogOperator) {

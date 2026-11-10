@@ -39,7 +39,8 @@ class JdbcCatalogReader(private val connection: Connection) {
             val identifierLength = query("SELECT pg_catalog.current_setting('max_identifier_length')::integer", context) { getInt(1) }.single()
             val types = query(TYPES, context) {
                 CatalogType(getLong("oid"), getString("schema_name"), getString("typname"), getString("typcategory"),
-                    getBoolean("typispreferred"), getBoolean("builtin"), getString("typtype"), getLong("typelem"))
+                    getBoolean("typispreferred"), getBoolean("builtin"), getString("typtype"), getLong("typelem"),
+                    getLong("typbasetype"))
             }
             val operators = query(OPERATORS, context) {
                 CatalogOperator(getLong("oid"), getString("schema_name"), getString("oprname"),
@@ -169,7 +170,7 @@ class JdbcCatalogReader(private val connection: Connection) {
     private companion object {
         val TYPES = """
             SELECT t.oid, n.nspname AS schema_name, t.typname, t.typcategory, t.typispreferred,
-                   t.typtype, t.typelem, n.nspname OPERATOR(pg_catalog.=) 'pg_catalog'
+                   t.typtype, t.typelem, t.typbasetype, n.nspname OPERATOR(pg_catalog.=) 'pg_catalog'
                    AND t.oid OPERATOR(pg_catalog.<) 16384 AS builtin
             FROM pg_catalog.pg_type t JOIN pg_catalog.pg_namespace n ON n.oid OPERATOR(pg_catalog.=) t.typnamespace
             ORDER BY t.oid

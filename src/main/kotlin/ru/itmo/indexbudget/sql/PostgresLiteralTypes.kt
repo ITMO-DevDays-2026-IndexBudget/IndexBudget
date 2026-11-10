@@ -22,7 +22,8 @@ internal class PostgresLiteralTypes(private val catalog: CatalogSnapshot, privat
                 infer(expression.leftExpression)
                 castType(expression.colDataType)
             }
-            is StringValue, is NullValue -> null // PostgreSQL unknown, not text.
+            is StringValue -> if (expression.prefix.equals("B", ignoreCase = true)) builtin("bit") else null
+            is NullValue -> null // PostgreSQL unknown, not text.
             is BooleanValue -> builtin("bool")
             is LongValue -> integerType(expression.bigIntegerValue)
             is DoubleValue -> builtin("numeric")
@@ -35,8 +36,12 @@ internal class PostgresLiteralTypes(private val catalog: CatalogSnapshot, privat
             is DateValue -> builtin("date")
             is TimeValue -> builtin("time")
             is TimestampValue -> builtin("timestamp")
-            is DateTimeLiteralExpression -> builtin(expression.type.toString().lowercase())
-            is HexValue -> builtin("bit")
+            is DateTimeLiteralExpression -> castType(ColDataType(expression.type.name))
+            is HexValue -> if (expression.value.startsWith("0x", ignoreCase = true)) {
+                integerType(BigInteger(expression.value.substring(2), 16))
+            } else {
+                builtin("bit")
+            }
             else -> unsupported("Unsupported comparison literal.")
         }
     }

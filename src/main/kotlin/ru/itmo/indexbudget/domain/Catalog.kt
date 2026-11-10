@@ -50,6 +50,8 @@ data class CatalogType(
     val isBuiltin: Boolean = true,
     val kind: String = "b",
     val elementTypeOid: Long = 0,
+    /** Immediate base type of a domain (pg_type.typbasetype); zero for other types. */
+    val baseTypeOid: Long = 0,
 )
 
 /** Only binary comparison operators visible according to PostgreSQL are included. */
