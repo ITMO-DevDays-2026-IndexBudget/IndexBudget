@@ -106,6 +106,14 @@ data class EnvironmentInfo(
 
 enum class ComparisonScope { EVALUATED_SETS }
 
+/** Regression describes planner cost only; unknown comparisons stay null. */
+data class QueryCostComparison(
+    val queryId: String,
+    val baselineCost: Double?,
+    val selectedCost: Double?,
+    val regression: Boolean?,
+)
+
 /** JSON and HTML use the same immutable report; SQL is rendered only for [SearchResult.selected]. */
 data class AnalysisReport(
     val runId: String,
@@ -119,4 +127,8 @@ data class AnalysisReport(
     val schemaVersion: Int = 2,
     val specVersion: String = "0.2",
     val comparisonScope: ComparisonScope = ComparisonScope.EVALUATED_SETS,
+    val baselineMetrics: SetMetrics? = null,
+    val normalizedProfileWeights: Map<String, Double> = emptyMap(),
+    val queryComparisons: List<QueryCostComparison> = emptyList(),
+    val incumbentsCoincide: Boolean? = null,
 )

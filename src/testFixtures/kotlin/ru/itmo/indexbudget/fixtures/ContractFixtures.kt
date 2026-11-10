@@ -119,7 +119,8 @@ object ContractFixtures {
             id = "records_created_at",
             definition = IndexDefinition(
                 recordsTable,
-                listOf(IndexKey(ColumnRef(recordsTable, "created_at"), SortDirection.DESC, NullsOrder.FIRST)),
+                listOf(IndexKey(ColumnRef(recordsTable, "created_at"), SortDirection.DESC, NullsOrder.FIRST,
+                    operatorClass = "pg_catalog.timestamp_ops")),
             ),
             sourceQueryIds = setOf("records_by_group", "records_by_value"),
             generationReasons = setOf(GenerationReason.SINGLE_COLUMN),
@@ -132,8 +133,9 @@ object ContractFixtures {
             definition = IndexDefinition(
                 recordsTable,
                 listOf(
-                    IndexKey(ColumnRef(recordsTable, "group_id")),
-                    IndexKey(ColumnRef(recordsTable, "created_at"), SortDirection.DESC, NullsOrder.FIRST),
+                    IndexKey(ColumnRef(recordsTable, "group_id"), operatorClass = "pg_catalog.int4_ops"),
+                    IndexKey(ColumnRef(recordsTable, "created_at"), SortDirection.DESC, NullsOrder.FIRST,
+                        operatorClass = "pg_catalog.timestamp_ops"),
                 ),
             ),
             sourceQueryIds = setOf("records_by_group"),
@@ -296,11 +298,17 @@ object ContractFixtures {
                     shortlistedCandidates = reportCandidates.size,
                 ),
             ),
-            priceOfRobustness = when {
-                status == RunStatus.FAILED -> null
-                status == RunStatus.PARTIAL || sameIncumbents -> 0.0
-                else -> 88_900.0
+            priceOfRobustness = PriceOfRobustness.calculate(result),
+            baselineMetrics = if (status == RunStatus.FAILED) null else baselineConfiguration(withWriteProfile).metrics,
+            normalizedProfileWeights = ProfileWeights.normalize(input.profiles),
+            queryComparisons = input.queries.map { query ->
+                val before = result.baseline?.costByQueryId?.get(query.id)
+                val after = result.selected?.evaluation?.costByQueryId?.get(query.id)
+                QueryCostComparison(query.id, before, after,
+                    if (before != null && after != null) after > before else null)
             },
+            incumbentsCoincide = if (status == RunStatus.FAILED) null else
+                result.bestRobust?.evaluation?.candidateIds == result.bestMean?.evaluation?.candidateIds,
         )
     }
 

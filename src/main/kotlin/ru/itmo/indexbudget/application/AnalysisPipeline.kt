@@ -45,6 +45,7 @@ class AnalysisPipeline(
             val parsed = checked(context) { sqlAnalyzer.parse(input, context) }
             val session = sessionFactory.open(context)
             activeSession.set(session)
+            context.recordDatabaseVersions(session.databaseVersions)
             context.checkDeadline()
             val catalog = checked(context) { session.readCatalog(parsed.referencedTables, context) }
             catalogWarnings += catalog.warnings
