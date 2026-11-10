@@ -21,6 +21,9 @@ class CandidateShortlistPipelineTest {
         ApplicationContextRunner().withUserConfiguration(AnalysisConfiguration::class.java).run { context ->
             assertInstanceOf(ProfileAwareCandidateGenerator::class.java, context.getBean(CandidateGenerator::class.java))
             assertInstanceOf(JdbcAnalysisSessionFactory::class.java, context.getBean(AnalysisSessionFactory::class.java))
+            assertInstanceOf(MetricsCalculatorImpl::class.java, context.getBean(MetricsCalculator::class.java))
+            assertInstanceOf(ObjectiveComparatorImpl::class.java, context.getBean(ObjectiveComparator::class.java))
+            assertInstanceOf(GreedyOptimizer::class.java, context.getBean(Optimizer::class.java))
             assertInstanceOf(UnavailableAnalysisRunner::class.java, context.getBean(AnalysisRunner::class.java))
         }
     }

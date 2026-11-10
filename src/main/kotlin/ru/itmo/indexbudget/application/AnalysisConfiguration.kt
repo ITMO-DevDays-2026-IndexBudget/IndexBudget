@@ -6,7 +6,10 @@ import org.springframework.context.annotation.Configuration
 import ru.itmo.indexbudget.candidates.CandidateGenerator
 import ru.itmo.indexbudget.candidates.ProfileAwareCandidateGenerator
 import ru.itmo.indexbudget.domain.MetricsCalculator
+import ru.itmo.indexbudget.domain.MetricsCalculatorImpl
 import ru.itmo.indexbudget.domain.ObjectiveComparator
+import ru.itmo.indexbudget.domain.ObjectiveComparatorImpl
+import ru.itmo.indexbudget.optimizer.GreedyOptimizer
 import ru.itmo.indexbudget.optimizer.Optimizer
 import ru.itmo.indexbudget.postgres.AnalysisSessionFactory
 import ru.itmo.indexbudget.postgres.JdbcAnalysisSessionFactory
@@ -19,6 +22,16 @@ import ru.itmo.indexbudget.sql.SqlAnalyzer
 class AnalysisConfiguration {
     @Bean
     fun candidateGenerator(): CandidateGenerator = ProfileAwareCandidateGenerator()
+
+    @Bean
+    fun metricsCalculator(): MetricsCalculator = MetricsCalculatorImpl()
+
+    @Bean
+    fun objectiveComparator(): ObjectiveComparator = ObjectiveComparatorImpl()
+
+    /** PoC strategy; fixed-S0 repair and its complete stop handling are added in #18. */
+    @Bean
+    fun optimizer(): Optimizer = GreedyOptimizer()
 
     @Bean
     fun analysisSessionFactory(): AnalysisSessionFactory = JdbcAnalysisSessionFactory()
