@@ -288,6 +288,59 @@ class AnalysisPipelineTest {
         assertEquals(CandidateReason.HYPOTHETICAL_INDEX_ERROR, result.diagnostics.candidateDecisions.single().reason)
     }
 
+    @ParameterizedTest
+    @EnumSource(value = ErrorCode::class, names = ["DB_CONNECTION_ERROR", "DEADLINE_EXCEEDED"])
+    fun `last hypothesis rejection with failed cleanup preserves baseline as partial`(cleanupCode: ErrorCode) {
+        val run = Harness()
+        val candidate = run.shortlist.first()
+        run.shortlist = listOf(candidate)
+        val primary = AnalysisError(ErrorCode.HYPOTHETICAL_INDEX_ERROR, "Hypothetical index creation failed.")
+        val cleanup = AnalysisError(cleanupCode, "Hypothesis cleanup failed.")
+        run.onSize = {
+            throw AnalysisException(primary).apply { addSuppressed(AnalysisException(cleanup)) }
+        }
+
+        val result = run.execute()
+
+        assertInstanceOf(SearchResult.Partial::class.java, result)
+        assertEquals(ContractFixtures.baselineEvaluation(), result.baseline)
+        assertEquals(ContractFixtures.baselineEvaluation(), result.selected?.evaluation)
+        assertEquals(listOf(primary, cleanup), result.diagnostics.errors)
+        assertEquals(listOf(if (cleanupCode == ErrorCode.DB_CONNECTION_ERROR)
+            StopReason.CONNECTION_LOST else StopReason.DEADLINE_EXCEEDED), result.diagnostics.stopReasons)
+        assertEquals(listOf(CandidateDecision(CandidateReason.HYPOTHETICAL_INDEX_ERROR,
+            candidateId = candidate.id, phase = AnalysisPhase.CANDIDATES)), result.diagnostics.candidateDecisions)
+        assertEquals(listOf(WarningCode.CANDIDATE_REJECTED), result.diagnostics.warnings.map { it.code })
+        assertEquals(listOf(candidate.copy(estimatedBytes = null, budgetedBytes = null, writeUnitsPerHour = null)),
+            run.report?.candidates?.candidates)
+        assertFalse("optimize" in run.events)
+        assertFalse(AnalysisPhase.CANDIDATES in result.diagnostics.completedPhases)
+        assertEquals(listOf(emptyList<String>()), run.evaluatedSets)
+        assertEquals(1, run.closeCalls)
+        assertSame(result, run.report?.result)
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = ErrorCode::class, names = ["NUMERIC_ERROR", "INVALID_INPUT"])
+    fun `cleanup connection error does not turn invalid input or numbers into partial`(primaryCode: ErrorCode) {
+        val run = Harness()
+        val primary = AnalysisError(primaryCode, "Invalid analysis input or numeric value.")
+        val cleanup = AnalysisError(ErrorCode.DB_CONNECTION_ERROR, "Hypothesis cleanup failed.")
+        run.onSize = {
+            throw AnalysisException(primary).apply { addSuppressed(AnalysisException(cleanup)) }
+        }
+
+        val result = run.execute()
+
+        assertInstanceOf(SearchResult.Failed::class.java, result)
+        assertEquals(primary, (result as SearchResult.Failed).error)
+        assertEquals(listOf(primary, cleanup), result.diagnostics.errors)
+        assertEquals(ContractFixtures.baselineEvaluation(), result.baseline)
+        assertFalse("optimize" in run.events)
+        assertEquals(1, run.closeCalls)
+        assertSame(result, run.report?.result)
+    }
+
     @Test
     fun `all rejected hypotheses remain reportable and skip search`() {
         val run = Harness()
