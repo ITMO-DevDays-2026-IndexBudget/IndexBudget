@@ -144,7 +144,8 @@ class WorkloadReader {
         val keys = node.properties().map { it.key }.toSet()
         val missing = queryIds.firstOrNull { it !in keys }
         if (missing != null) invalid(location.copy(queryId = missing), "Missing query ID in calls_per_hour.")
-        if (keys.any { it !in queryIds }) invalid(location, "Unknown query ID in calls_per_hour.")
+        val unknown = keys.firstOrNull { it !in queryIds }
+        if (unknown != null) invalid(location.copy(queryId = unknown), "Unknown query ID in calls_per_hour.")
         val frequencies = queries.associate { query ->
             query.id to number(node.get(query.id), location.copy(queryId = query.id))
         }

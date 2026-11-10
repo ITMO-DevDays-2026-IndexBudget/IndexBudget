@@ -113,8 +113,14 @@ class WorkloadReaderTest {
         val missing = failure(json(profiles = listOf(profile(calls = """{"q1":1}"""))))
         assertEquals("normal", missing.profileId)
         assertEquals("q2", missing.queryId)
-        val unknown = failure(json(profiles = listOf(profile(calls = """{"q1":1,"q2":1,"extra":1}"""))))
-        assertEquals("normal", unknown.profileId)
+        assertEquals("profiles[0].calls_per_hour", missing.details["field"])
+        val unknown = failure(json(profiles = listOf(
+            profile(),
+            profile("campaign", calls = """{"q1":1,"q2":1,"extra":1,"another":1}"""),
+        )))
+        assertEquals("campaign", unknown.profileId)
+        assertEquals("extra", unknown.queryId)
+        assertEquals("profiles[1].calls_per_hour", unknown.details["field"])
         assertTrue(unknown.message.contains("Unknown query ID"))
         failure(json(profiles = listOf(profile(calls = "null"))))
     }

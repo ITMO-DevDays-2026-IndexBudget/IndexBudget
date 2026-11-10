@@ -46,11 +46,19 @@ class IndexBudgetCliTest {
     @Test
     fun `invalid workload does not leak its content into diagnostics`() {
         val input = directory.resolve("invalid.json")
-        Files.writeString(input, """{"schema_version":2,"queries":"private-sql-and-password"}""")
+        Files.writeString(input, """
+            {"schema_version":2,
+             "queries":"private-sql-and-password",
+             "profiles":[{"id":"normal","weight":1,"calls_per_hour":{"q1":1}}],
+             "constraints":{"storage_budget_bytes":10,"write_budget_units_per_hour":null}}
+        """.trimIndent())
         val result = analyze(directory.resolve("report"), input)
         assertEquals(2, result.code)
         assertTrue(result.stderr.startsWith("INVALID_INPUT:"))
         assertFalse(result.stderr.contains("private-sql-and-password"))
+        val diagnostic = JsonMapper.builder().build().readTree(result.stderr.substringAfter(": "))
+        assertEquals("INVALID_INPUT", diagnostic.get("code").stringValue())
+        assertEquals("queries", diagnostic.get("details").get("field").stringValue())
     }
 
     @Test
@@ -206,6 +214,32 @@ class IndexBudgetCliTest {
         assertEquals("q\n\u001b[31m", diagnostic.get("query_id").stringValue())
         assertEquals("night\nmode", diagnostic.get("profile_id").stringValue())
         assertTrue(diagnostic.get("details").get("field").stringValue().contains("calls_per_hour"))
+    }
+
+    @Test
+    fun `unknown frequency key retains escaped query ID without exposing values`() {
+        val input = directory.resolve("unknown-query-frequency.json")
+        Files.writeString(input, """
+            {"schema_version":2,
+             "queries":[{"id":"q1","sql":"SELECT 'private-sql-literal' FROM public.orders"}],
+             "profiles":[{"id":"night","weight":1,"calls_per_hour":{
+               "q1":1,"unknown\n\"quoted\"\u001b[31m":"private-frequency-and-password"}}],
+             "constraints":{"storage_budget_bytes":10,"write_budget_units_per_hour":null}}
+        """.trimIndent())
+
+        val result = analyze(directory.resolve("run"), input)
+
+        assertEquals(2, result.code)
+        assertTrue(result.stderr.startsWith("INVALID_INPUT:"))
+        assertEquals(1, result.stderr.lineSequence().count { it.isNotEmpty() })
+        assertFalse(result.stderr.contains('\u001b'))
+        assertFalse(result.stderr.contains("private-frequency-and-password"))
+        assertFalse(result.stderr.contains("private-sql-literal"))
+        val diagnostic = JsonMapper.builder().build().readTree(result.stderr.substringAfter(": "))
+        assertEquals("INVALID_INPUT", diagnostic.get("code").stringValue())
+        assertEquals("unknown\n\"quoted\"\u001b[31m", diagnostic.get("query_id").stringValue())
+        assertEquals("night", diagnostic.get("profile_id").stringValue())
+        assertEquals("profiles[0].calls_per_hour", diagnostic.get("details").get("field").stringValue())
     }
 
     @Test
