@@ -10,6 +10,7 @@ import java.time.Duration
 import java.util.UUID
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
@@ -230,24 +231,158 @@ class JdbcAnalysisSessionIntegrationTest {
     }
 
     @Test
-    fun `EXPLAIN lock timeout rejects whole result and clears hypotheses`() {
+    fun `baseline EXPLAIN timeout rolls back and permits a complete retry`() {
         connect().use { blocker ->
             blocker.autoCommit = false
             sql(blocker, "LOCK TABLE $schema.records IN ACCESS EXCLUSIVE MODE")
+            connection.autoCommit = false
             try {
                 val context = RunContext(limits = RunLimits(explainTimeout = Duration.ofMillis(150)))
                 val failure = assertThrows(AnalysisException::class.java) {
                     session.evaluate(emptyList(), workload, context)
                 }
                 assertEquals(ErrorCode.EXPLAIN_FAILED, failure.error.code)
+                assertEquals("q_a", failure.error.queryId)
+                assertEquals("57014", failure.error.details["sql_state"])
                 assertEquals(1, context.statistics().explainAttempts)
                 assertEquals(0, context.statistics().completedEvaluations)
+                assertFalse(context.remainingTime().isZero)
+                assertFalse(connection.isClosed)
                 assertEquals(0, hypothesisCount(connection))
             } finally {
                 blocker.rollback()
             }
         }
         assertEquals(3, session.evaluate(emptyList(), workload, RunContext()).costByQueryId.size)
+    }
+
+    @Test
+    fun `timeout in the middle rejects the configuration and preserves the complete baseline`() {
+        sql(admin, "CREATE TABLE $schema.blocked_records (b integer, payload text)")
+        sql(admin, "GRANT SELECT ON $schema.blocked_records TO $role")
+        val input = workload.input.copy(queries = workload.input.queries.map { query ->
+            if (query.id == "q_b") query.copy(sql = "SELECT payload FROM blocked_records WHERE b = 314") else query
+        })
+        val analyzer = JSqlParserSqlAnalyzer()
+        val context = RunContext(limits = RunLimits(explainTimeout = Duration.ofMillis(150)))
+        val parsed = analyzer.parse(input, context)
+        val changed = analyzer.resolve(parsed, session.readCatalog(parsed.referencedTables, context), context)
+        val baseline = session.evaluate(emptyList(), changed, context)
+        val savedCosts = baseline.costByQueryId.toMap()
+        val observed = mutableListOf<ExplainObservation>()
+        session = JdbcAnalysisSession(observingConnection(observed))
+        connect().use { blocker ->
+            blocker.autoCommit = false
+            sql(blocker, "LOCK TABLE $schema.blocked_records IN ACCESS EXCLUSIVE MODE")
+            connection.autoCommit = false
+            try {
+                val failure = assertThrows(AnalysisException::class.java) {
+                    session.evaluate(candidates, changed, context)
+                }
+                assertEquals(ErrorCode.EXPLAIN_FAILED, failure.error.code)
+                assertEquals("q_b", failure.error.queryId)
+                assertEquals("57014", failure.error.details["sql_state"])
+                assertEquals(2, observed.size)
+                assertEquals(5, context.statistics().explainAttempts)
+                assertEquals(1, context.statistics().completedEvaluations)
+                assertEquals(savedCosts, baseline.costByQueryId)
+                assertEquals(0, hypothesisCount(connection))
+                assertFalse(connection.isClosed)
+            } finally {
+                blocker.rollback()
+            }
+        }
+        assertEquals(3, session.evaluate(candidates, changed, context).costByQueryId.size)
+        assertEquals(8, context.statistics().explainAttempts)
+        assertEquals(2, context.statistics().completedEvaluations)
+        assertEquals(0, hypothesisCount(connection))
+    }
+
+    @Test
+    fun `shared EXPLAIN limit includes baseline and prevents an incomplete set becoming successful`() {
+        val observed = mutableListOf<ExplainObservation>()
+        session = JdbcAnalysisSession(observingConnection(observed))
+        val context = RunContext(limits = RunLimits(maxExplainAttempts = 4))
+        val baseline = session.evaluate(emptyList(), workload, context)
+        val failure = assertThrows(AnalysisException::class.java) {
+            session.evaluate(candidates, workload, context)
+        }
+        assertEquals(ErrorCode.EXPLAIN_LIMIT, failure.error.code)
+        assertEquals(4, observed.size)
+        assertEquals(4, context.statistics().explainAttempts)
+        assertEquals(2, context.statistics().evaluationAttempts)
+        assertEquals(1, context.statistics().completedEvaluations)
+        assertEquals(3, baseline.costByQueryId.size)
+        assertEquals(0, hypothesisCount(connection))
+        assertEquals(ErrorCode.EXPLAIN_LIMIT, assertThrows(AnalysisException::class.java) {
+            session.evaluate(emptyList(), workload, context)
+        }.error.code)
+        assertEquals(4, observed.size)
+        assertEquals(3, session.evaluate(emptyList(), workload, RunContext()).costByQueryId.size)
+    }
+
+    @Test
+    fun `terminated backend is a session failure and a fresh run remains isolated`() {
+        val pid = scalar(connection, "SELECT pg_backend_pid()")
+        val observed = mutableListOf<ExplainObservation>()
+        session = JdbcAnalysisSession(observingConnection(observed, beforeExplain = {
+            if (observed.size == 2) {
+                assertEquals(1, scalar(admin, "SELECT pg_catalog.pg_terminate_backend($pid)::integer"))
+            }
+        }))
+        val context = RunContext()
+        val failure = assertThrows(AnalysisException::class.java) {
+            session.evaluate(candidates, workload, context)
+        }
+        assertEquals(ErrorCode.DB_CONNECTION_ERROR, failure.error.code)
+        assertEquals("q_b", failure.error.queryId)
+        assertEquals(2, context.statistics().explainAttempts)
+        assertEquals(0, context.statistics().completedEvaluations)
+        assertTrue(connection.isClosed)
+        assertNull(failure.cause)
+        connect().use { fresh ->
+            sql(fresh, "SET search_path TO $schema, pg_catalog")
+            sql(fresh, "SET ROLE $role")
+            assertEquals(0, hypothesisCount(fresh))
+            JdbcAnalysisSession(fresh).use { restarted ->
+                assertEquals(3, restarted.evaluate(emptyList(), workload, RunContext()).costByQueryId.size)
+            }
+        }
+    }
+
+    @Test
+    fun `effective search deadline closes blocked SQL without starting rollback or reset`() {
+        val now = AtomicLong()
+        val context = RunContext(
+            limits = RunLimits(searchTimeout = Duration.ofMillis(150)),
+            clock = NanoClock(now::get),
+        ).apply { startSearch() }
+        val observed = mutableListOf<ExplainObservation>()
+        val events = mutableListOf<String>()
+        session = JdbcAnalysisSession(observingConnection(observed,
+            beforeExplain = { now.set(Duration.ofMillis(150).toNanos()) },
+            onSql = { events += it },
+        ))
+        connect().use { blocker ->
+            blocker.autoCommit = false
+            sql(blocker, "LOCK TABLE $schema.records IN ACCESS EXCLUSIVE MODE")
+            connection.autoCommit = false
+            try {
+                val failure = assertThrows(AnalysisException::class.java) {
+                    session.evaluate(emptyList(), workload, context)
+                }
+                assertEquals(ErrorCode.DEADLINE_EXCEEDED, failure.error.code)
+                assertFalse(context.remainingCommandTime().isZero)
+                assertEquals(1, context.statistics().explainAttempts)
+                assertEquals(0, context.statistics().completedEvaluations)
+                assertTrue(connection.isClosed)
+                val explain = events.indexOfFirst { it.startsWith("EXPLAIN ") }
+                assertTrue(explain >= 0)
+                assertTrue(events.drop(explain + 1).isEmpty(), "No cleanup SQL may start after deadline")
+            } finally {
+                blocker.rollback()
+            }
+        }
     }
 
     @Test
@@ -320,14 +455,20 @@ class JdbcAnalysisSessionIntegrationTest {
     private data class ExplainObservation(val sql: String, val keys: List<String>, val pid: Int)
 
     /** Delegates to real JDBC; observes HypoPG on that same backend immediately before EXPLAIN. */
-    private fun observingConnection(observed: MutableList<ExplainObservation>): Connection =
+    private fun observingConnection(
+        observed: MutableList<ExplainObservation>,
+        beforeExplain: (String) -> Unit = {},
+        onSql: (String) -> Unit = {},
+    ): Connection =
         Proxy.newProxyInstance(javaClass.classLoader, arrayOf(Connection::class.java)) { _, method, args ->
+            if (method.name == "rollback") onSql("ROLLBACK")
             val value = invoke(connection, method, args)
             if (value is Statement && method.name in setOf("createStatement", "prepareStatement")) {
                 val preparedSql = args?.firstOrNull() as? String
                 val type = if (value is PreparedStatement) PreparedStatement::class.java else Statement::class.java
                 Proxy.newProxyInstance(javaClass.classLoader, arrayOf(type)) { _, statementMethod, statementArgs ->
                     val sql = statementArgs?.firstOrNull() as? String ?: preparedSql
+                    if (statementMethod.name in setOf("execute", "executeQuery") && sql != null) onSql(sql)
                     if (statementMethod.name in setOf("execute", "executeQuery") && sql?.startsWith("EXPLAIN ") == true) {
                         val keys = connection.createStatement().use { query ->
                             query.executeQuery("SELECT indkey::text FROM public.hypopg() ORDER BY indkey::text").use { rows ->
@@ -335,6 +476,7 @@ class JdbcAnalysisSessionIntegrationTest {
                             }
                         }
                         observed += ExplainObservation(sql, keys, scalar(connection, "SELECT pg_backend_pid()"))
+                        beforeExplain(sql)
                     }
                     invoke(value, statementMethod, statementArgs)
                 }
