@@ -19,19 +19,32 @@ class MetricsCalculatorImpl : MetricsCalculator {
         evaluation: EvaluationResult,
         usage: BudgetUsage,
     ): SetMetrics {
-        val normalizedWeights = WeightNormalizer.normalize(workload.profiles)
-        val profiles = workload.profiles.map { profile ->
-            val baselineCost = profileCost(profile, baseline.costByQueryId)
-            val cost = profileCost(profile, evaluation.costByQueryId)
+        val queryIds = workload.queries.map { it.id }.sorted()
+        val expectedQueryIds = queryIds.toSet()
+        baseline.requireQueryCoverage(expectedQueryIds)
+        evaluation.requireQueryCoverage(expectedQueryIds)
+
+        val normalizedWeights = ProfileWeights.normalize(workload.profiles)
+        val profiles = workload.profiles.sortedBy { it.id }.map { profile ->
+            val baselineCost = profileCost(profile, baseline.costByQueryId, queryIds)
+            val cost = profileCost(profile, evaluation.costByQueryId, queryIds)
             val gain = baselineCost - cost
+            val ratio = if (baselineCost > 0.0) cost / baselineCost else null
+            val gainPercent = if (baselineCost > 0.0) 100.0 * gain / baselineCost else null
+            if (ratio != null && !ratio.isFinite()) {
+                throw numericError("Profile ratio is not finite", profile.id)
+            }
+            if (gainPercent != null && !gainPercent.isFinite()) {
+                throw numericError("Profile gain percent is not finite", profile.id)
+            }
             ProfileMetrics(
                 profileId = profile.id,
                 normalizedWeight = normalizedWeights.getValue(profile.id),
                 baselineCost = baselineCost,
                 cost = cost,
                 gain = gain,
-                ratio = if (baselineCost > 0.0) cost / baselineCost else null,
-                gainPercent = if (baselineCost > 0.0) 100.0 * gain / baselineCost else null,
+                ratio = ratio,
+                gainPercent = gainPercent,
             )
         }
 
@@ -54,8 +67,7 @@ class MetricsCalculatorImpl : MetricsCalculator {
             else -> null
         }
         val worstRatio = profiles
-            .filter { it.baselineCost > 0.0 }
-            .map { it.cost / it.baselineCost }
+            .mapNotNull { it.ratio }
             .maxOrNull()
 
         return SetMetrics(
@@ -68,10 +80,10 @@ class MetricsCalculatorImpl : MetricsCalculator {
         )
     }
 
-    private fun profileCost(profile: Profile, costs: Map<String, Double>): Double {
+    private fun profileCost(profile: Profile, costs: Map<String, Double>, queryIds: List<String>): Double {
         var total = 0.0
-        for ((queryId, cost) in costs) {
-            val term = profile.callsPerHour.getValue(queryId) * cost
+        for (queryId in queryIds) {
+            val term = profile.callsPerHour.getValue(queryId) * costs.getValue(queryId)
             if (!term.isFinite()) throw numericError("Profile '${profile.id}' cost term is not finite", profile.id)
             total += term
         }

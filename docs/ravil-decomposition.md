@@ -1,34 +1,37 @@
 # Декомпозиция: метрики, бюджеты и компаратор (Равиль)
 
-> Рабочая заметка. **НИКОГДА не коммитить.**
-> Статус: **T5 ✅**, **T1 ✅** (ветка `feat/weight-normalization`), дальше T2.
-> Майлстоун: формулы + фикстуры к 10.11; PoC-стыки к 11.11; проверка на реальных оценках — MVP.
+> Рабочая заметка по [трекеру #16](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/issues/16), не альтернативная спецификация.
+> Статус на 10.11.2026: T5 принята в [PR #34](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/pull/34); общий helper T1 — в [PR #32](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/pull/32); T2 проходит исправления в [PR #37](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/pull/37).
+> Формулы и фикстуры нужны к 10.11; PoC-стыки и минимальная сверка на настоящих costs — к 11.11. Полная проверка относится к MVP #21.
 
 ## Подзадачи (порядок исполнения)
 
 | ID | Подзадача | Ветка | Выход | Статус |
 |----|-----------|-------|-------|--------|
-| **T5** | Fake `ConfigurationEvaluator` + cost-фикстуры (mean-vs-robust, plateau, 0→2, 1→2) | `feat/metrics-fixtures` | seam для поиска Марата | ✅ (PR #…) |
-| **T1** | Нормализация весов + инварианты (underflow, sum, конечность) | `feat/weight-normalization` | `WeightNormalizer` (`p_s = w/sum`, ошибки NUMERIC_ERROR) | ✅ |
-| **T2** | Метрики профилей и агрегаты `M`/`R` | `feat/profile-metrics` (поверх T1) | `MetricsCalculatorImpl.calculate(...)` → `SetMetrics`; `assessBudget` — заглушка NOT_IMPLEMENTED (закроет T3) | ✅ |
+| **T5** | Fake `ConfigurationEvaluator` + cost-фикстуры (mean-vs-robust, plateau, 0→2, 1→2), #38 | `feat/metrics-fixtures` | Тестовый evaluator и полные векторы для поиска | PR #34 принят |
+| **T1** | Нормирование весов + инварианты (underflow, sum, конечность) | `main` | Общий `ProfileWeights` для CLI и метрик (`p_s = w/sum`, ошибки NUMERIC_ERROR) | PR #32 принят |
+| **T2** | Метрики профилей и агрегаты `M`/`R`, #40 | `feat/profile-metrics` с актуальным `main` | `MetricsCalculatorImpl.calculate(...)` → `SetMetrics`; `assessBudget` — NOT_IMPLEMENTED до T3 | Исправления PR #37 |
 | **T3** | Бюджеты: storage (1.2/ceil) + write units | `feat/budget-assessment` | `assessBudget(...)` → `BudgetAssessment` (заменить заглушку) | ⏳ |
 | **T4** | Компаратор: `compare` + `improvesPrimaryMetrics` | `feat/objective-comparator` | детерминированный ключ; гейт greedy | ⏳ |
-| **T6** | Zero-baseline регрессия (расширить `BudgetViolation`) | `feat/zero-baseline-regression` | набор с регрессией недопустим | ⏳ |
+| **T6** | Zero-baseline регрессия и baseline-only, #43 | `feat/zero-baseline-regression` | Проверка допустимости после EXPLAIN и сигнал остановки поиска | ⏳ |
 | **T7** | `priceOfRobustness` из одного пула | `feat/price-of-robustness` | `C_mean(best_robust) − C_mean(best_mean)` | ⏳ |
 | **T8** | Кросс-проверка на реальных оценках (Егор/Марат) | интеграционная | числовая сверка, общий пул, консистентность отчёта | ⏳ |
 
-## Git-протокол
+Общий `ProfileWeights` уже доступен в `main`. [PR #35](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/pull/35) закрыт без merge; отдельный `WeightNormalizer` удалён из PR #37. Зависимость T2 от нормирования обеспечивается PR #32.
+
+## Работа с ветками и заметками
 
 - Ветка на подзадачу: `feat/<короткое-название>`. Коммит: `feat: краткое описание`.
-- `main` держим синхронным с `origin/main` (`git pull --ff-only`). Новую ветку базируем на свежем `main`; если `main` ушёл вперёд после создания ветки — rebase на `main`.
-- `docs/ravil-*.md` — рабочие заметки, НЕ коммитятся (при этом вне `.gitignore`; просто не добавляем в коммит).
-- Незакоммиченные чужие правки (например, `settings.gradle.kts` с foojay-плагином) сохраняем через `git stash`, не трогаем и не коммитим.
+- Новую ветку базируем на свежем `main`; существующую ветку PR синхронизируем с ним, сохраняя чужие изменения и опубликованную историю.
+- `docs/ravil-*.md` уже входят в репозиторий. Их статусы и ссылки обновляются вместе с затронутым кодом; источники требований — спецификация и issues.
+- Чужие незакоммиченные правки не включаем в задачу. Для независимой работы можно использовать отдельный worktree.
 
 ## Эвристики сокращения перебора
 
 Границы владения: greedy/repair/кэш — Марат (#17/#18), генерация и shortlist-капы — Арсений (#10–#12). В зоне Равиля (#16):
 1. `improvesPrimaryMetrics` — строгий детерминированный гейт жадного шага (первые два компонента `(r,m)`/`(m,r)`, округлённые).
-2. Value-function ранжирования соседей repair (одиночный gain на метрике) — эффективность лимита 28 слотов.
-3. Консистентность `compare` (полный ключ) и `improvesPrimaryMetrics` (первые два компонента).
+2. Консистентность `compare` (полный ключ) и `improvesPrimaryMetrics` (первые два компонента).
+
+Ранжирование соседей repair относится к #18 и следует §7 спецификации. Новая value-function в декомпозиции метрик не вводится.
 
 Запрещено/вне MVP: суммирование одиночных gain в эффект набора, аддитивный per-query кэш, вымышленные размеры/cost без HypoPG, недетерминизм, beam/A*/обучаемый поиск.
