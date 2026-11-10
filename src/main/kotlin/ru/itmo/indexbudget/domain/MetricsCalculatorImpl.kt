@@ -1,17 +1,83 @@
 package ru.itmo.indexbudget.domain
 
+import java.math.BigDecimal
+
 /**
  * Single implementation of profile metrics and budgets; callers must not duplicate these formulas.
- * [calculate] is implemented here; [assessBudget] lands in the budget subtask and reports
- * NOT_IMPLEMENTED until then.
  */
 class MetricsCalculatorImpl : MetricsCalculator {
 
     override fun assessBudget(candidates: List<IndexCandidate>, workload: WorkloadInput): BudgetAssessment {
-        throw AnalysisException(
-            AnalysisError(ErrorCode.NOT_IMPLEMENTED, "assessBudget is implemented in the budget subtask"),
+        require(candidates.map { it.id }.distinct().size == candidates.size) { "Candidate IDs must be unique" }
+        val rates = workload.tableWriteRates
+        if (rates == null && workload.constraints.writeBudgetUnitsPerHour != null) {
+            throw invalidWriteProfile("An enabled write budget requires a complete write profile")
+        }
+        if (rates != null) {
+            if (rates.isEmpty()) throw invalidWriteProfile("A supplied write profile must not be empty")
+            for (rate in rates.values) {
+                if (listOf(rate.insertsPerHour, rate.updatesPerHour, rate.deletesPerHour)
+                        .any { !it.isFinite() || it < 0.0 }) {
+                    throw invalidWriteProfile("Write rates must be finite and nonnegative")
+                }
+            }
+        }
+
+        var estimatedBytes = 0L
+        var budgetedBytes = 0L
+        var exactWriteUnits: BigDecimal? = if (rates == null) null else BigDecimal.ZERO
+        for (candidate in candidates.sortedBy { it.id }) {
+            require(candidate.definition.keys.size in 1..2) { "Candidates must have one or two key columns" }
+            val bytes = candidate.estimatedBytes ?: throw AnalysisException(
+                AnalysisError(ErrorCode.HYPOTHETICAL_INDEX_ERROR, "Candidate size estimate is unavailable",
+                    details = mapOf("candidate_id" to candidate.id)),
+            )
+            if (bytes < 0) throw numericError("Estimated index size must be nonnegative")
+            // ceil(6*n/5) = n + ceil(n/5), without floating-point rounding or overflowing 6*n.
+            val reserve = bytes / 5 + if (bytes % 5 == 0L) 0 else 1
+            val budgeted = addBytes(bytes, reserve)
+            estimatedBytes = addBytes(estimatedBytes, bytes)
+            budgetedBytes = addBytes(budgetedBytes, budgeted)
+            if (rates != null) {
+                val table = candidate.definition.table
+                // Same physical, case-sensitive schema.name keys as ResolvedWorkloadValidator (#14).
+                val rate = rates["${table.schema}.${table.name}"]
+                    ?: throw invalidWriteProfile("Write profile must cover every candidate table")
+                // The constructor preserves the exact input Double, unlike a decimal-string conversion.
+                // Keep both accumulation stages exact, including multiplication and the budget comparison.
+                val rowChanges = BigDecimal(rate.insertsPerHour) + BigDecimal(rate.updatesPerHour) +
+                    BigDecimal(rate.deletesPerHour)
+                val units = rowChanges * BigDecimal(candidate.definition.keys.size)
+                val total = checkNotNull(exactWriteUnits) + units
+                // All terms are nonnegative: bounding the total also bounds every intermediate value.
+                if (total > BigDecimal(Double.MAX_VALUE)) {
+                    throw numericError("Write units exceed the supported numeric range")
+                }
+                exactWriteUnits = total
+            }
+        }
+        val constraints = workload.constraints
+        val violations = buildSet {
+            if (budgetedBytes > constraints.storageBudgetBytes) add(BudgetViolation.STORAGE_BUDGET)
+            if (constraints.writeBudgetUnitsPerHour != null &&
+                checkNotNull(exactWriteUnits) > BigDecimal(constraints.writeBudgetUnitsPerHour)) {
+                add(BudgetViolation.WRITE_BUDGET)
+            }
+            if (candidates.size > constraints.maxIndexes) add(BudgetViolation.MAX_INDEXES)
+        }
+        return BudgetAssessment(
+            BudgetUsage(estimatedBytes, budgetedBytes, exactWriteUnits?.toDouble(), candidates.size), violations,
         )
     }
+
+    private fun addBytes(left: Long, right: Long): Long {
+        if (left > Long.MAX_VALUE - right) throw numericError("Index size exceeds the supported numeric range")
+        return left + right
+    }
+
+    private fun invalidWriteProfile(message: String) = AnalysisException(
+        AnalysisError(ErrorCode.INVALID_WRITE_PROFILE, message, details = mapOf("field" to "table_write_rates")),
+    )
 
     override fun calculate(
         workload: WorkloadInput,

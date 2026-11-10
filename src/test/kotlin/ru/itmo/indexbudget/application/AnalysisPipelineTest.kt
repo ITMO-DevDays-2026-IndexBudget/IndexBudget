@@ -27,6 +27,22 @@ import java.time.Duration
 
 class AnalysisPipelineTest {
     @Test
+    fun `real budget calculator supplies the same expenses to search and report`() {
+        val run = Harness(suppliedMetrics = MetricsCalculatorImpl())
+        val result = run.execute()
+
+        assertEquals(RunStatus.COMPLETED, result.status)
+        val reported = checkNotNull(run.report).candidates.candidates
+        assertEquals(listOf(262_144L, 524_288L), reported.map { it.estimatedBytes })
+        assertEquals(listOf(314_573L, 629_146L), reported.map { it.budgetedBytes })
+        assertEquals(listOf(4100.0, 8200.0), reported.map { it.writeUnitsPerHour })
+        assertEquals(BudgetUsage(262_144, 314_573, 4100.0, 1), result.bestRobust?.metrics?.budgetUsage)
+        assertEquals(BudgetUsage(524_288, 629_146, 8200.0, 1), result.bestMean?.metrics?.budgetUsage)
+        assertSame(result, run.report?.result)
+        assertEquals(3, run.evaluatedSets.size)
+    }
+
+    @Test
     fun `one session and context connect all stages and reports use only saved evaluations`() {
         val run = Harness()
         val result = run.execute()
@@ -87,7 +103,7 @@ class AnalysisPipelineTest {
                     maxIndexes = if (reason == StopReason.ZERO_MAX_INDEXES) 0 else it.constraints.maxIndexes,
                 ))
             }
-            val run = Harness(input)
+            val run = Harness(input, suppliedMetrics = MetricsCalculatorImpl())
             val result = run.execute()
 
             assertEquals(RunStatus.COMPLETED, result.status)
@@ -106,7 +122,7 @@ class AnalysisPipelineTest {
             for (withWriteProfile in listOf(false, true)) {
                 val run = Harness(
                     ContractFixtures.workload(objective, withWriteProfile),
-                    calculateMetrics = MetricsCalculatorImpl()::calculate,
+                    suppliedMetrics = MetricsCalculatorImpl(),
                 )
                 run.baselineAction = {
                     val baseline = ContractFixtures.baselineEvaluation()
@@ -149,7 +165,7 @@ class AnalysisPipelineTest {
                 Profile("zero", 1.0, mapOf("records_by_group" to 1.0, "records_by_value" to 0.0)),
                 Profile("positive", 1.0, mapOf("records_by_group" to 0.0, "records_by_value" to 1.0)),
             ))
-            val run = Harness(input, calculateMetrics = MetricsCalculatorImpl()::calculate)
+            val run = Harness(input, suppliedMetrics = MetricsCalculatorImpl())
             run.baselineAction = {
                 ContractFixtures.baselineEvaluation().copy(costByQueryId = mapOf(
                     "records_by_group" to 0.0, "records_by_value" to 100.0,
@@ -578,7 +594,7 @@ class AnalysisPipelineTest {
         val input: WorkloadInput = ContractFixtures.workload(),
         suppliedContext: RunContext? = null,
         private val outputDirectory: Path = Path.of("reports/test-run"),
-        private val calculateMetrics: ((WorkloadInput, EvaluationResult, EvaluationResult, BudgetUsage) -> SetMetrics)? = null,
+        private val suppliedMetrics: MetricsCalculator? = null,
     ) {
         private var now = 0L
         val progress = mutableListOf<RunProgress>()
@@ -675,7 +691,7 @@ class AnalysisPipelineTest {
             }
         }
 
-        private val metrics = object : MetricsCalculator {
+        private val metrics: MetricsCalculator = suppliedMetrics ?: object : MetricsCalculator {
             override fun assessBudget(candidates: List<IndexCandidate>, workload: WorkloadInput): BudgetAssessment {
                 assertSame(input, workload)
                 val usage = if (candidates.isEmpty()) {
@@ -692,7 +708,6 @@ class AnalysisPipelineTest {
             override fun calculate(workload: WorkloadInput, baseline: EvaluationResult,
                                    evaluation: EvaluationResult, usage: BudgetUsage): SetMetrics {
                 assertSame(input, workload)
-                calculateMetrics?.let { return it(workload, baseline, evaluation, usage) }
                 val metrics = configurationsByIds.getValue(evaluation.candidateIds).metrics
                 return metrics.copy(budgetUsage = usage)
             }
