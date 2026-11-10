@@ -48,7 +48,8 @@ interface Optimizer {
      * searchRequired=false returns the empty set before generation/search; the application handles
      * this early exit. Only accepted configurations may be compared or published in checkpoints.
      * Publish both incumbents through onCheckpoint after every accepted full evaluation, before
-     * starting the next operation. Enter/complete GREEDY and REPAIR phases on the shared context.
+     * starting the next operation. Enter/complete the implemented phases on the shared context:
+     * GreedyOptimizer completes GREEDY only; the full strategy in #18 also runs REPAIR.
      */
     fun optimize(
         workload: ResolvedWorkload,

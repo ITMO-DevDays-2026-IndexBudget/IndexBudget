@@ -31,6 +31,7 @@ data class SearchDiagnostics(
 
 /** Completed and partial states always preserve both fully evaluated incumbents from the same pool. */
 sealed interface SearchResult {
+    val comparisonScope: ComparisonScope get() = ComparisonScope.EVALUATED_SETS
     val status: RunStatus
     val selectedObjective: Objective
     val baseline: EvaluationResult?
