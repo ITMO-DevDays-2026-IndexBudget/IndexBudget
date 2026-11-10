@@ -25,40 +25,19 @@ class BtreeCandidateEnumerator : CandidateEnumerator {
             for (table in query.tables.sortedWith(tableOrder)) {
                 context.checkDeadline()
                 val features = featuresByQuery.getValue(query.id).filterKeys { it.table == table }
-                val sortedColumns = query.orderBy.map { it.column }.filter { it.table == table }.distinct()
-                val otherColumns = features.keys.filter { it !in sortedColumns }.sortedWith(
-                    compareByDescending<ColumnRef> { support.getValue(it) }
-                        .thenByDescending { features.getValue(it).equality }
-                        .then(columnOrder),
-                )
-                val retained = (sortedColumns + otherColumns).take(COLUMN_LIMIT)
-                val excluded = (features.keys - retained.toSet()).sortedWith(columnOrder)
-                val details = mapOf(
-                    "schema" to table.schema,
-                    "table" to table.name,
-                    "discovered_columns" to features.size.toString(),
-                    "retained_columns" to retained.size.toString(),
-                )
-                val decisions = if (excluded.isEmpty()) emptyList() else listOf(
-                    CandidateDecision(
-                        CandidateReason.COLUMN_SHORTLIST_TRUNCATED,
-                        queryId = query.id,
-                        table = table,
-                        phase = AnalysisPhase.CANDIDATES,
-                        details = details,
-                    ),
-                )
-                val warnings = if (excluded.isEmpty()) emptyList() else listOf(
-                    AnalysisWarning(
-                        WarningCode.COLUMN_SHORTLIST_TRUNCATED,
-                        "Column shortlist truncated before pair generation; see excludedColumns in scope statistics",
-                        queryId = query.id,
-                        details = details,
-                    ),
-                )
-                val variants = variants(query, table, retained, features, context)
+                val shortlist = shortlistColumns(query, table, features, support)
+                val variants = variants(query, table, shortlist.retainedColumns, features, context)
                 context.checkDeadline()
-                consume(CandidateScope(query.id, table, features.size, retained, excluded, variants, decisions, warnings))
+                consume(CandidateScope(
+                    queryId = query.id,
+                    table = table,
+                    discoveredColumns = features.size,
+                    retainedColumns = shortlist.retainedColumns,
+                    excludedColumns = shortlist.excludedColumns,
+                    variants = variants,
+                    decisions = shortlist.decisions,
+                    warnings = shortlist.warnings,
+                ))
                 // The synchronous consumer may also spend the remaining analysis budget.
                 context.checkDeadline()
             }
@@ -70,6 +49,58 @@ class BtreeCandidateEnumerator : CandidateEnumerator {
         var range: Boolean = false,
         val directions: MutableSet<SortDirection> = linkedSetOf(),
     )
+
+    private data class ColumnShortlist(
+        val retainedColumns: List<ColumnRef>,
+        val excludedColumns: List<ColumnRef>,
+        val decisions: List<CandidateDecision>,
+        val warnings: List<AnalysisWarning>,
+    )
+
+    private fun shortlistColumns(
+        query: ResolvedQuery,
+        table: TableRef,
+        features: Map<ColumnRef, Features>,
+        support: Map<ColumnRef, Double>,
+    ): ColumnShortlist {
+        val orderByColumns = query.orderBy.map { it.column }.filter { it.table == table }.distinct()
+        val otherColumns = features.keys.filter { it !in orderByColumns }.sortedWith(
+            compareByDescending<ColumnRef> { support.getValue(it) }
+                .thenByDescending { features.getValue(it).equality }
+                .then(columnOrder),
+        )
+        val retained = (orderByColumns + otherColumns).take(COLUMN_LIMIT)
+        val excluded = (features.keys - retained.toSet()).sortedWith(columnOrder)
+        val details = mapOf(
+            "schema" to table.schema,
+            "table" to table.name,
+            "discovered_columns" to features.size.toString(),
+            "retained_columns" to retained.size.toString(),
+        )
+        val decisions = if (excluded.isEmpty()) emptyList() else listOf(
+            CandidateDecision(
+                reason = CandidateReason.COLUMN_SHORTLIST_TRUNCATED,
+                queryId = query.id,
+                table = table,
+                phase = AnalysisPhase.CANDIDATES,
+                details = details,
+            ),
+        )
+        val warnings = if (excluded.isEmpty()) emptyList() else listOf(
+            AnalysisWarning(
+                code = WarningCode.COLUMN_SHORTLIST_TRUNCATED,
+                message = "Column shortlist truncated before pair generation; see excludedColumns in scope statistics",
+                queryId = query.id,
+                details = details,
+            ),
+        )
+        return ColumnShortlist(
+            retainedColumns = retained,
+            excludedColumns = excluded,
+            decisions = decisions,
+            warnings = warnings,
+        )
+    }
 
     private fun features(query: ResolvedQuery, context: RunContext): Map<ColumnRef, Features> {
         val result = linkedMapOf<ColumnRef, Features>()
@@ -100,28 +131,37 @@ class BtreeCandidateEnumerator : CandidateEnumerator {
         val maximum = mutableMapOf<ColumnRef, Double>()
         for (profile in profiles.sortedBy { it.id }) {
             context.checkDeadline()
-            require(profile.callsPerHour.keys == features.keys) { "Profile must cover exactly the resolved queries" }
-            val frequencies = features.keys.map { profile.callsPerHour.getValue(it) }
-            require(frequencies.all { it.isFinite() && it >= 0.0 } && frequencies.any { it > 0.0 }) {
-                "Expected finite nonnegative frequencies with a positive total"
-            }
-            val total = frequencies.sum()
-            if (!total.isFinite()) numericError(profile.id, "Frequency sum is not finite")
-            val support = mutableMapOf<ColumnRef, Double>()
-            for ((queryId, columns) in features) {
-                context.checkDeadline()
-                val frequency = profile.callsPerHour.getValue(queryId)
-                val normalized = frequency / total
-                if (frequency > 0.0 && normalized == 0.0) numericError(profile.id, "Normalized frequency underflow")
-                for (column in columns.keys) {
-                    val sum = (support[column] ?: 0.0) + normalized
-                    if (!sum.isFinite()) numericError(profile.id, "Column support is not finite")
-                    support[column] = sum
-                }
-            }
+            val support = columnSupportForProfile(profile, features, context)
             for ((column, value) in support) maximum[column] = maxOf(maximum[column] ?: 0.0, value)
         }
         return maximum
+    }
+
+    private fun columnSupportForProfile(
+        profile: Profile,
+        features: Map<String, Map<ColumnRef, Features>>,
+        context: RunContext,
+    ): Map<ColumnRef, Double> {
+        require(profile.callsPerHour.keys == features.keys) { "Profile must cover exactly the resolved queries" }
+        val frequencies = features.keys.map { profile.callsPerHour.getValue(it) }
+        require(frequencies.all { it.isFinite() && it >= 0.0 } && frequencies.any { it > 0.0 }) {
+            "Expected finite nonnegative frequencies with a positive total"
+        }
+        val total = frequencies.sum()
+        if (!total.isFinite()) numericError(profile.id, "Frequency sum is not finite")
+        val support = mutableMapOf<ColumnRef, Double>()
+        for ((queryId, columns) in features) {
+            context.checkDeadline()
+            val frequency = profile.callsPerHour.getValue(queryId)
+            val normalized = frequency / total
+            if (frequency > 0.0 && normalized == 0.0) numericError(profile.id, "Normalized frequency underflow")
+            for (column in columns.keys) {
+                val sum = (support[column] ?: 0.0) + normalized
+                if (!sum.isFinite()) numericError(profile.id, "Column support is not finite")
+                support[column] = sum
+            }
+        }
+        return support
     }
 
     private fun variants(
@@ -142,18 +182,10 @@ class BtreeCandidateEnumerator : CandidateEnumerator {
             for (second in columns) {
                 context.checkDeadline()
                 if (first == second) continue
+                val reasons = generationReasonsForPair(query, first, second, features)
+                if (reasons.isEmpty()) continue
                 val firstFeatures = features.getValue(first)
                 val secondFeatures = features.getValue(second)
-                val reasons = linkedSetOf<GenerationReason>()
-                if (query.orderBy.size == 2 && query.orderBy[0].column == first && query.orderBy[1].column == second) {
-                    reasons += GenerationReason.ORDER_BY_PAIR
-                }
-                if (firstFeatures.equality) {
-                    if (secondFeatures.directions.isNotEmpty()) reasons += GenerationReason.EQUALITY_AND_ORDER
-                    if (secondFeatures.range) reasons += GenerationReason.EQUALITY_AND_RANGE
-                    if (secondFeatures.equality) reasons += GenerationReason.TWO_EQUALITIES
-                }
-                if (reasons.isEmpty()) continue
                 val firstDirections = firstFeatures.directions.ifEmpty { setOf(SortDirection.ASC) }.sortedBy { it.ordinal }
                 val secondDirections = secondFeatures.directions.ifEmpty { setOf(SortDirection.ASC) }.sortedBy { it.ordinal }
                 for (firstDirection in firstDirections) {
@@ -164,6 +196,24 @@ class BtreeCandidateEnumerator : CandidateEnumerator {
             }
         }
         return result
+    }
+
+    private fun generationReasonsForPair(
+        query: ResolvedQuery,
+        first: ColumnRef,
+        second: ColumnRef,
+        features: Map<ColumnRef, Features>,
+    ): Set<GenerationReason> = buildSet {
+        val firstFeatures = features.getValue(first)
+        val secondFeatures = features.getValue(second)
+        if (query.orderBy.size == 2 && query.orderBy[0].column == first && query.orderBy[1].column == second) {
+            add(GenerationReason.ORDER_BY_PAIR)
+        }
+        if (firstFeatures.equality) {
+            if (secondFeatures.directions.isNotEmpty()) add(GenerationReason.EQUALITY_AND_ORDER)
+            if (secondFeatures.range) add(GenerationReason.EQUALITY_AND_RANGE)
+            if (secondFeatures.equality) add(GenerationReason.TWO_EQUALITIES)
+        }
     }
 
     private fun numericError(profileId: String, message: String): Nothing = throw AnalysisException(

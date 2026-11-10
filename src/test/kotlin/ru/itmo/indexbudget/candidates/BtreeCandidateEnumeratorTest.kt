@@ -78,6 +78,40 @@ class BtreeCandidateEnumeratorTest {
     }
 
     @Test
+    fun `range with higher support precedes equality in the column shortlist`() {
+        val table = ContractFixtures.wideTable
+        val equalityColumns = (1..16).map { ColumnRef(table, "c$it") }
+        val rangeColumn = ColumnRef(table, "c17")
+        val rangePredicate = ResolvedPredicate(rangeColumn, ComparisonOperator.GREATER_THAN, PredicateSource.WHERE)
+        val wideQuery = ResolvedQuery(
+            id = "wide",
+            sql = "SELECT * FROM public.wide_records WHERE " +
+                equalityColumns.joinToString(" AND ") { "${it.name} = 1" } + " AND c17 > 0",
+            tables = setOf(table),
+            referencedColumns = equalityColumns.toSet() + rangeColumn,
+            predicates = equalityColumns.map {
+                ResolvedPredicate(it, ComparisonOperator.EQUAL, PredicateSource.WHERE)
+            } + rangePredicate,
+            orderBy = emptyList(),
+            selectsAllColumns = true,
+        )
+        val frequentQuery = wideQuery.copy(
+            id = "frequent",
+            sql = "SELECT * FROM public.wide_records WHERE c17 > 0",
+            referencedColumns = setOf(rangeColumn),
+            predicates = listOf(rangePredicate),
+        )
+        val profiles = listOf(Profile("normal", 1.0, mapOf("wide" to 1.0, "frequent" to 99.0)))
+        val workload = CandidateGenerationFixtures.workload(listOf(wideQuery, frequentQuery), profiles)
+
+        val scope = collect(workload).single { it.queryId == "wide" }
+
+        assertEquals(rangeColumn, scope.retainedColumns.first())
+        assertEquals(16, scope.retainedColumns.size)
+        assertEquals(listOf(ColumnRef(table, "c9")), scope.excludedColumns)
+    }
+
+    @Test
     fun `rare profile participates regardless of absolute traffic or weight`() {
         val workload = CandidateGenerationFixtures.profileSupport().workload
         val scope = collect(workload).single { it.queryId == "wide" }
@@ -116,16 +150,30 @@ class BtreeCandidateEnumeratorTest {
     @Test
     fun `query profile table and predicate iteration order does not change results`() {
         val workload = CandidateGenerationFixtures.profileSupport().workload
+        val reversedQueries = workload.queries.reversed().map { query ->
+            query.copy(predicates = query.predicates.reversed())
+        }
+        val reversedProfiles = workload.input.profiles.reversed().map { profile ->
+            val reversedCallsPerHour = profile.callsPerHour.entries.reversed().associate { it.toPair() }
+            profile.copy(callsPerHour = reversedCallsPerHour)
+        }
+        val reversedInput = workload.input.copy(
+            queries = workload.input.queries.reversed(),
+            profiles = reversedProfiles,
+        )
         val shuffled = workload.copy(
-            queries = workload.queries.reversed().map { it.copy(predicates = it.predicates.reversed()) },
-            input = workload.input.copy(
-                queries = workload.input.queries.reversed(),
-                profiles = workload.input.profiles.reversed().map { it.copy(callsPerHour = it.callsPerHour.entries.reversed().associate { entry -> entry.toPair() }) },
-            ),
+            queries = reversedQueries,
+            input = reversedInput,
         )
         assertEquals(collect(workload), collect(shuffled))
+
         val join = CandidateGenerationFixtures.join().workload
-        assertEquals(collect(join), collect(join.copy(queries = join.queries.map { it.copy(tables = it.tables.reversed().toSet()) })))
+        val queriesWithReversedTables = join.queries.map { query ->
+            val reversedTables = query.tables.reversed().toSet()
+            query.copy(tables = reversedTables)
+        }
+        val shuffledJoin = join.copy(queries = queriesWithReversedTables)
+        assertEquals(collect(join), collect(shuffledJoin))
     }
 
     @Test
@@ -204,6 +252,28 @@ class BtreeCandidateEnumeratorTest {
         val query = base.copy(predicates = base.predicates.take(16))
         assertEquals(ErrorCode.DEADLINE_EXCEEDED, assertThrows(AnalysisException::class.java) {
             enumerator.forEachScope(CandidateGenerationFixtures.workload(listOf(query)), context) { fail<Unit>("Unfinished scope delivered") }
+        }.error.code)
+    }
+
+    @Test
+    fun `deadline is checked while considering pairs that emit no variants`() {
+        var now = 0L
+        val context = RunContext(limits = RunLimits(commandTimeout = Duration.ofNanos(150)), clock = NanoClock { now++ })
+        val base = CandidateGenerationFixtures.wideAllFilters().workload.queries.single()
+        val predicates = base.predicates.take(16).map { it.copy(operator = ComparisonOperator.GREATER_THAN) }
+        val query = base.copy(
+            sql = "SELECT * FROM public.wide_records WHERE " + predicates.joinToString(" AND ") { "${it.leftColumn.name} > 0" },
+            referencedColumns = predicates.map { it.leftColumn }.toSet(),
+            predicates = predicates,
+        )
+        val workload = CandidateGenerationFixtures.workload(listOf(query))
+        // With enough time there are only singles: no pair reaches emit's deadline check.
+        val variants = collect(workload).single().variants
+        assertEquals(16, variants.size)
+        assertTrue(variants.all { it.definition.keys.size == 1 })
+
+        assertEquals(ErrorCode.DEADLINE_EXCEEDED, assertThrows(AnalysisException::class.java) {
+            enumerator.forEachScope(workload, context) { fail<Unit>("Unfinished scope delivered") }
         }.error.code)
     }
 
