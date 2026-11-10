@@ -11,6 +11,24 @@ class HtmlReportRendererTest {
     private val renderer = HtmlReportRenderer()
 
     @Test
+    fun `candidate index limit and failed evaluations retain distinct diagnostics`() {
+        val report = HtmlReportFixtures.completed()
+        val html = renderer.render(report.copy(candidates = report.candidates.copy(
+            diagnostics = report.candidates.diagnostics.copy(decisions = listOf(
+                CandidateDecision(CandidateReason.MAX_INDEXES, candidateId = "limited-index"),
+                CandidateDecision(CandidateReason.EVALUATION_FAILED, candidateId = "failed-index"),
+            )),
+        )))
+        val decisions = capture(section(html, "search"),
+            "<summary>Причины решений по кандидатам</summary>(.*?)</details>", stripTags = false)
+        val rows = tableRows(decisions)
+        assertEquals("Достигнут лимит индексов (MAX_INDEXES)", rows[1][0])
+        assertEquals("limited-index", rows[1][1])
+        assertEquals("Ошибка оценки (EVALUATION_FAILED)", rows[2][0])
+        assertEquals("failed-index", rows[2][1])
+    }
+
+    @Test
     fun `objective selects the same indices and costs as the shared report`() {
         for (objective in Objective.entries) {
             val report = HtmlReportFixtures.completed(objective = objective)
