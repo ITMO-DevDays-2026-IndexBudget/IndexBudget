@@ -133,8 +133,8 @@ class HtmlReportRendererTest {
         ))
         val html = renderer.render(report.copy(result = result.copy(bestRobust = supplied), priceOfRobustness = 9876.5))
         val overview = section(html, "overview")
-        assertEquals("0,654", metricValue(overview, "Худшая нормированная стоимость"))
-        assertEquals("0,321", metricValue(overview, "Средняя нормированная стоимость"))
+        assertEquals("0,654", entryValue(overview, "Худшая нормированная стоимость"))
+        assertEquals("0,321", entryValue(overview, "Средняя нормированная стоимость"))
         val robust = configuration(html, "best_robust")
         assertEquals("0,654", entryValue(robust, "Худшее отношение R"))
         assertEquals("0,321", entryValue(robust, "Среднее отношение M"))
@@ -145,7 +145,7 @@ class HtmlReportRendererTest {
         assertEquals("333", entryValue(robust, "Write units/час"))
         assertEquals(listOf("normal", "3\u202f333", "0,111", "17,25"), rowByKey(robust, "normal"))
         assertEquals(listOf("campaign", "4\u202f444", "0,222", "27,5"), rowByKey(robust, "campaign"))
-        val profiles = section(html, "profiles").substringBefore("<details>")
+        val profiles = section(html, "profiles").substringBefore("<summary>Сравнение всех сохранённых наборов")
         assertEquals(listOf("Профиль", "Вес", "Baseline cost", "Final cost", "Отношение", "Выигрыш, cost", "Выигрыш, %"), tableRows(profiles).first())
         assertEquals(listOf("normal", "0,123", "1\u202f111", "3\u202f333", "0,111", "4\u202f321", "17,25"), rowByKey(profiles, "normal"))
         assertEquals(listOf("campaign", "0,456", "2\u202f222", "4\u202f444", "0,222", "8\u202f765", "27,5"), rowByKey(profiles, "campaign"))
@@ -265,7 +265,7 @@ class HtmlReportRendererTest {
             rowByKey(queries, "records_by_value"))
         assertEquals(listOf("records_by_group", "100", "20", "Нет данных", "Снижение cost"),
             rowByKey(queries, "records_by_group"))
-        assertTrue(queries.contains("<tr class=\"regression\">"))
+        assertTrue(queries.contains("class=\"regression\""))
         assertTrue(queries.contains("Исходный SQL отсутствует в модели."))
 
         val failed = ContractFixtures.report(status = RunStatus.FAILED)
@@ -298,7 +298,7 @@ class HtmlReportRendererTest {
     @Test
     fun `per-query regressions have visible labels independent of chosen objective`() {
         val html = renderer.render(HtmlReportFixtures.regression())
-        val row = html.substringAfter("<tr class=\"regression\">").substringBefore("</tr>")
+        val row = html.substringAfter("class=\"regression\">").substringBefore("</tr>")
         assertTrue(row.contains("records_by_value"))
         assertTrue(row.contains("<td>100</td>"))
         assertTrue(row.contains("<td>120</td>"))
@@ -327,7 +327,7 @@ class HtmlReportRendererTest {
                     errors = listOf(AnalysisError(ErrorCode.EXPLAIN_FAILED, payload, payload, payload, mapOf(payload to payload))))))
         val html = renderer.render(report)
         assertFalse(html.contains(payload))
-        assertFalse(html.contains("<script"))
+        assertSafeScript(html)
         assertFalse(html.contains("<img"))
         val escaped = "&lt;/style&gt;&lt;/script&gt;&lt;img src=x onerror=alert(1)&gt;&lt;script&gt;alert(2)&lt;/script&gt;&amp;&quot;&#39;"
         assertTrue(html.contains("data-selected-index=\"$escaped\""))
@@ -377,7 +377,7 @@ class HtmlReportRendererTest {
                 val output = renderer.render(fixture)
                 assertTrue(output.startsWith("<!doctype html>"))
                 assertTrue(output.endsWith("</body></html>"))
-                assertFalse(output.contains("<script"))
+                assertSafeScript(output)
                 assertFalse(output.contains("<link"))
                 assertFalse(output.contains("src="))
                 assertFalse(output.contains("@import"))
@@ -400,6 +400,17 @@ class HtmlReportRendererTest {
         })
         val html = renderer.render(report.copy(result = result.copy(bestRobust = config)))
         assertTrue(html.contains("1E-15"))
+    }
+
+    private fun assertSafeScript(html: String) {
+        val scripts = Regex("<script>(.*?)</script>", RegexOption.DOT_MATCHES_ALL).findAll(html).toList()
+        assertEquals(1, scripts.size)
+        val source = checkNotNull(javaClass.getResource("/report/report.js")).readText()
+        assertEquals(source, scripts.single().groupValues[1])
+        val hash = java.util.Base64.getEncoder().encodeToString(
+            java.security.MessageDigest.getInstance("SHA-256").digest(source.toByteArray(Charsets.UTF_8)))
+        assertTrue(html.contains("script-src 'sha256-$hash'"))
+        assertFalse(html.contains("script-src 'unsafe-inline'"))
     }
 
     private fun selectedIds(html: String) = Regex("data-selected-index=\"([^\"]*)\"").findAll(html).map { it.groupValues[1] }.toList()

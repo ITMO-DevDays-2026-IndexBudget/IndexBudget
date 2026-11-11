@@ -70,7 +70,9 @@ jobs:
           java-version: '25'
       - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
       - name: Build and test
-        run: ./gradlew --no-daemon build installDist
+        run: ./gradlew --no-daemon build installDist reportPreview
+      - name: Verify report JavaScript and offline Chromium chart geometry
+        run: bash demo/check-report-ui.sh
       - name: Smoke-test packaged CLI without a database
         run: |
           build/install/indexbudget/bin/indexbudget --help
