@@ -43,6 +43,9 @@ build/install/indexbudget/bin/indexbudget stats pair --source-id d0d60c19-eb9d-4
 зарезервированы для ограниченной metadata. SQL сверх max-query-bytes не передаётся
 клиенту: сохраняются counters и `text_status=size_limit`, сам текст — null, без обрезки.
 Лимиты клиента не гарантируют такой же объём памяти внутри расширения PostgreSQL.
+Перед каждым ResultSet.next() проверяется отмена/deadline и обновляется socket timeout
+по текущему остатку. Deadline guard действует до закрытия всего курсора и физически
+прерывает соединение при отмене/исчерпании времени, включая заблокированный FETCH.
 SQL/socket timeouts ограничиваются остатком; задержки драйвера и диска не являются SLA.
 
 ## Формат
@@ -110,3 +113,10 @@ byte cap/JSON escaping, reset во время чтения, deadline в prepareS
 
 [Пример snapshot v1](../examples/statistics-snapshot-v1.json) содержит **синтетические**
 OID/queryid/counters для демонстрации формата, не результат измерения PostgreSQL.
+
+CI job `postgres-statistics-integration` вызывает `demo/check-statistics.sh` на
+одноразовом runner и сохраняет XML/HTML результаты. Скрипт дополнительно проверяет,
+что PostgreSQL integration suite действительно выполнен и не содержит skipped-тестов.
+В domain `QueryTextStatus` и `SnapshotReason` — enum; wire-значения JSON v1 сохранены
+(статусы lower-case, причины upper-case). Restricted-записи не расходуют лимит текста:
+длина заглушки не является длиной недоступного SQL.

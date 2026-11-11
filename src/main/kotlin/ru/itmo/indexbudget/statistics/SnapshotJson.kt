@@ -1,6 +1,7 @@
 package ru.itmo.indexbudget.statistics
 
 import tools.jackson.databind.json.JsonMapper
+import java.util.Locale
 
 /** Versioned snapshot format, independent of workload/report v2. Bigint query IDs are decimal strings. */
 class SnapshotJson {
@@ -8,7 +9,7 @@ class SnapshotJson {
 
     fun entry(value: StatisticsEntry): Map<String, Any?> = linkedMapOf(
         "dbid" to value.dbid, "userid" to value.userid, "queryid" to value.queryid?.toString(),
-        "toplevel" to value.toplevel, "query" to value.query, "text_status" to value.textStatus,
+        "toplevel" to value.toplevel, "query" to value.query, "text_status" to value.textStatus.name.lowercase(Locale.ROOT),
         "calls" to value.calls, "total_exec_time" to value.totalExecTime, "rows" to value.rows,
     )
 
@@ -29,7 +30,7 @@ class SnapshotJson {
             "started_at" to value.startedAt, "finished_at" to value.finishedAt,
             "before" to epoch(value.before), "after" to epoch(value.after),
             "status" to if (value.complete) "completed" else "partial",
-            "reasons" to value.reasons, "row_count" to value.entries.size,
+            "reasons" to value.reasons.map { it.name }, "row_count" to value.entries.size,
             "unavailable_text_count" to value.entries.count { it.query == null },
             "limits" to mapOf("max_rows" to value.limits.maxRows, "max_bytes" to value.limits.maxBytes,
                 "max_query_bytes" to value.limits.maxQueryBytes, "timeout_millis" to value.limits.timeout.toMillis()),

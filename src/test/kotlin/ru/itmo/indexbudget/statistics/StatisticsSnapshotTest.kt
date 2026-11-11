@@ -17,6 +17,9 @@ import java.sql.PreparedStatement
 import java.sql.ResultSet
 import java.sql.SQLException
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 
 class StatisticsSnapshotTest {
     @TempDir lateinit var directory: Path
@@ -26,7 +29,7 @@ class StatisticsSnapshotTest {
         val db = FakeDatabase(List(3) { row(it.toLong()) })
         val result = JdbcStatisticsCollector({ db.connection }).collect(source, SnapshotLimits(maxRows = 2), RunContext())
         assertEquals(2, result.entries.size)
-        assertEquals(listOf("ROW_LIMIT"), result.reasons)
+        assertEquals(listOf(SnapshotReason.ROW_LIMIT), result.reasons)
         assertFalse(result.complete)
         assertTrue(db.closed)
         assertTrue(db.readOnly)
@@ -40,16 +43,16 @@ class StatisticsSnapshotTest {
         val result = JdbcStatisticsCollector({ db.connection }).collect(source, SnapshotLimits(), RunContext())
         assertNull(result.entries[0].queryid)
         assertNull(result.entries[0].query)
-        assertEquals("restricted", result.entries[0].textStatus)
-        assertEquals("size_limit", result.entries[1].textStatus)
-        assertTrue("QUERY_TEXT_LIMIT" in result.reasons)
+        assertEquals(QueryTextStatus.RESTRICTED, result.entries[0].textStatus)
+        assertEquals(QueryTextStatus.SIZE_LIMIT, result.entries[1].textStatus)
+        assertTrue(SnapshotReason.QUERY_TEXT_LIMIT in result.reasons)
     }
 
     @Test fun `byte cap counts JSON escaped UTF8 and keeps bounded valid output`() {
         val text = "\"\\\n😀".repeat(1000)
         val db = FakeDatabase(List(10) { row(it.toLong()).plus("query" to text) })
         val result = JdbcStatisticsCollector({ db.connection }).collect(source, SnapshotLimits(maxBytes = 32768), RunContext())
-        assertTrue("BYTE_LIMIT" in result.reasons)
+        assertTrue(SnapshotReason.BYTE_LIMIT in result.reasons)
         val bytes = SnapshotJson().render(result)
         assertTrue(bytes.size <= 32768)
         val json = JsonMapper().readTree(bytes)
@@ -60,7 +63,7 @@ class StatisticsSnapshotTest {
     @Test fun `reset during capture is visible and bigint query ID is lossless`() {
         val db = FakeDatabase(listOf(row(Long.MIN_VALUE)), changedEpoch = true)
         val result = JdbcStatisticsCollector({ db.connection }).collect(source, SnapshotLimits(), RunContext())
-        assertTrue("STATS_RESET_DURING_READ" in result.reasons)
+        assertTrue(SnapshotReason.STATS_RESET_DURING_READ in result.reasons)
         val json = JsonMapper().readTree(SnapshotJson().render(result))
         assertEquals(Long.MIN_VALUE.toString(), json["entries"][0]["queryid"].stringValue())
         assertEquals(source.toString(), json["source_id"].stringValue())
@@ -88,6 +91,74 @@ class StatisticsSnapshotTest {
         assertEquals(0, db.executions)
         assertTrue(db.statementClosed)
         assertTrue(db.closed)
+    }
+
+    @Test fun `expired budget after processing row 128 never requests the next page`() {
+        val now = AtomicLong()
+        val context = RunContext(clock = NanoClock(now::get))
+        val db = FakeDatabase(List(129) { row(it.toLong()) }, onEntryRead = { index ->
+            if (index == 127) now.set(100_000_000_000L)
+        })
+        val result = JdbcStatisticsCollector({ db.connection }).collect(source, SnapshotLimits(), context)
+        assertEquals(128, result.entries.size)
+        assertEquals(128, db.dataNextCalls)
+        assertTrue(SnapshotReason.DEADLINE_EXCEEDED in result.reasons)
+        assertTrue(db.closed)
+    }
+
+    @Test fun `each next uses a network timeout bounded by the remaining budget`() {
+        val now = AtomicLong()
+        val context = RunContext(clock = NanoClock(now::get))
+        val db = FakeDatabase(List(129) { row(it.toLong()) }, onEntryRead = {
+            now.addAndGet(100_000_000L)
+        })
+        JdbcStatisticsCollector({ db.connection }).collect(source, SnapshotLimits(), context)
+        assertEquals(130, db.dataNextCalls)
+        assertEquals(90_000, db.dataTimeouts.first())
+        assertEquals(77_100, db.dataTimeouts.last())
+        assertTrue(db.dataTimeouts.zipWithNext().all { (a, b) -> b <= a })
+    }
+
+    @Test fun `absolute deadline aborts an already blocked cursor fetch`() {
+        val now = AtomicLong()
+        val context = RunContext(clock = NanoClock(now::get))
+        val db = FakeDatabase(List(129) { row(it.toLong()) }, onDataNext = { index, aborted ->
+            if (index == 128) {
+                now.set(100_000_000_000L)
+                assertTrue(aborted.await(5, TimeUnit.SECONDS), "Deadline guard must release a blocked FETCH")
+                throw SQLException("Synthetic closed cursor", "08006")
+            }
+        })
+        val result = JdbcStatisticsCollector({ db.connection }).collect(source, SnapshotLimits(), context)
+        assertEquals(128, result.entries.size)
+        assertTrue(SnapshotReason.DEADLINE_EXCEEDED in result.reasons)
+        assertTrue(db.closed)
+    }
+
+    @Test fun `cancellation aborts a blocked cursor without waiting for its old timeout`() {
+        val context = RunContext()
+        val db = FakeDatabase(listOf(row(1)), onDataNext = { _, aborted ->
+            context.cancel()
+            assertTrue(aborted.await(5, TimeUnit.SECONDS), "Cancellation guard must abort the blocked read")
+            throw SQLException("Synthetic cancelled read", "08006")
+        })
+        val result = JdbcStatisticsCollector({ db.connection }).collect(source, SnapshotLimits(), context)
+        assertTrue(result.entries.isEmpty())
+        assertTrue(SnapshotReason.CANCELLED in result.reasons)
+        assertTrue(db.closed)
+    }
+
+    @Test fun `a hidden placeholder never consumes the SQL text limit`() {
+        val db = FakeDatabase(listOf(row(1).plus(mapOf("queryid" to null,
+            "query" to "<insufficient privilege>", "text_too_large" to true))))
+        val result = JdbcStatisticsCollector({ db.connection }).collect(source, SnapshotLimits(maxQueryBytes = 1), RunContext())
+        assertEquals(QueryTextStatus.RESTRICTED, result.entries.single().textStatus)
+        assertNull(result.entries.single().query)
+        assertTrue(result.complete)
+        assertFalse(SnapshotReason.QUERY_TEXT_LIMIT in result.reasons)
+        val json = JsonMapper().readTree(SnapshotJson().render(result))
+        assertEquals("restricted", json["entries"][0]["text_status"].stringValue())
+        assertEquals("completed", json["status"].stringValue())
     }
 
     @Test fun `pair interruption preserves first artifact and uses a separate collection context`() {
@@ -148,8 +219,14 @@ class StatisticsSnapshotTest {
         "calls" to 2L, "total_exec_time" to 1.25, "rows" to 2L)
 
     private class FakeDatabase(val rows: List<Map<String, Any?>>, val changedEpoch: Boolean = false,
-        val failure: SQLException? = null, val onPrepare: () -> Unit = {}) {
-        var closed = false
+        val failure: SQLException? = null, val onPrepare: () -> Unit = {},
+        val onEntryRead: (Int) -> Unit = {},
+        val onDataNext: (Int, CountDownLatch) -> Unit = { _, _ -> }) {
+        @Volatile var closed = false
+        val aborted = CountDownLatch(1)
+        var networkTimeout = 0
+        var dataNextCalls = 0
+        val dataTimeouts = mutableListOf<Int>()
         var readOnly = false
         var commits = 0
         var executions = 0
@@ -158,7 +235,8 @@ class StatisticsSnapshotTest {
         val sql = mutableListOf<String>()
         val connection = proxy(Connection::class.java) { name, args -> when (name) {
             "setReadOnly" -> { readOnly = args!![0] as Boolean; null }
-            "close", "abort" -> { closed = true; null }
+            "close", "abort" -> { closed = true; aborted.countDown(); null }
+            "setNetworkTimeout" -> { networkTimeout = args!![1] as Int; null }
             "commit" -> { commits++; null }
             "prepareStatement" -> {
                 val query = args!![0] as String
@@ -180,7 +258,14 @@ class StatisticsSnapshotTest {
                             }
                             else -> rows
                         }
-                        result(values)
+                        val data = !query.contains("FROM pg_catalog.pg_extension") && !query.contains("pg_stat_statements_info")
+                        result(values, onRead = { if (data) onEntryRead(it) }, onNext = { index ->
+                            if (data) {
+                                dataNextCalls++
+                                dataTimeouts += networkTimeout
+                                onDataNext(index, aborted)
+                            }
+                        })
                     }
                     else -> null
                 } }
@@ -189,11 +274,11 @@ class StatisticsSnapshotTest {
         } }
 
         companion object {
-            private fun result(rows: List<Map<String, Any?>>): ResultSet {
+            private fun result(rows: List<Map<String, Any?>>, onRead: (Int) -> Unit, onNext: (Int) -> Unit): ResultSet {
                 var index = -1
                 var wasNull = false
                 return proxy(ResultSet::class.java) { name, args -> when (name) {
-                    "next" -> { index++; index < rows.size }
+                    "next" -> { onNext(index + 1); index++; index < rows.size }
                     "wasNull" -> wasNull
                     "close" -> null
                     else -> {
@@ -202,7 +287,7 @@ class StatisticsSnapshotTest {
                         when (name) {
                             "getLong" -> (value as? Number)?.toLong() ?: 0L
                             "getInt" -> (value as? Number)?.toInt() ?: 0
-                            "getDouble" -> (value as? Number)?.toDouble() ?: 0.0
+                            "getDouble" -> { onRead(index); (value as? Number)?.toDouble() ?: 0.0 }
                             "getBoolean" -> value as? Boolean ?: false
                             else -> value
                         }

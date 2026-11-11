@@ -8,6 +8,8 @@ import java.sql.SQLException
 import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.Executor
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 /** Read-only PostgreSQL 16 collector. No reset, DDL, ANALYZE, ranking or index session initialization. */
 class JdbcStatisticsCollector(
@@ -22,7 +24,7 @@ class JdbcStatisticsCollector(
             connection.isReadOnly = true
             connection.autoCommit = false
             val metadata = query(connection, context, METADATA) { rows ->
-                if (!rows.next()) fail(ErrorCode.STATISTICS_UNAVAILABLE, "Install pg_stat_statements in the current database first.")
+                if (!next(connection, context, rows)) fail(ErrorCode.STATISTICS_UNAVAILABLE, "Install pg_stat_statements in the current database first.")
                 val versionNumber = rows.getInt("version_number")
                 if (versionNumber !in 160000..169999) fail(ErrorCode.STATISTICS_UNAVAILABLE, "Statistics snapshots currently support PostgreSQL 16.")
                 rows.getString("extension_schema") to StatisticsSource(sourceId, rows.getLong("dbid"),
@@ -32,7 +34,7 @@ class JdbcStatisticsCollector(
             val schema = "\"" + metadata.first.replace("\"", "\"\"") + "\""
             val before = epoch(connection, context, schema)
             val entries = mutableListOf<StatisticsEntry>()
-            val reasons = linkedSetOf<String>()
+            val reasons = linkedSetOf<SnapshotReason>()
             var after: StatisticsEpoch? = null
             // Reserve a fixed upper bound for bounded metadata; account for escaped UTF-8, not characters.
             var bytes = 16_384
@@ -41,47 +43,49 @@ class JdbcStatisticsCollector(
                 val sql = """
                     SELECT dbid, userid, queryid, toplevel, calls, total_exec_time, rows,
                         CASE WHEN pg_catalog.octet_length(query) <= ${limits.maxQueryBytes} THEN query END AS query,
-                        pg_catalog.octet_length(query) > ${limits.maxQueryBytes} AS text_too_large
+                        queryid IS NOT NULL AND pg_catalog.octet_length(query) > ${limits.maxQueryBytes} AS text_too_large
                     FROM $schema.pg_stat_statements
                     WHERE dbid = (SELECT oid FROM pg_catalog.pg_database WHERE datname = pg_catalog.current_database())
                     LIMIT ${limits.maxRows + 1}
                 """.trimIndent()
                 query(connection, context, sql) { rows ->
-                    while (rows.next()) {
+                    while (next(connection, context, rows)) {
                         context.checkDeadline()
-                        if (entries.size == limits.maxRows) { reasons += "ROW_LIMIT"; break }
+                        if (entries.size == limits.maxRows) { reasons += SnapshotReason.ROW_LIMIT; break }
                         val queryId = rows.getLong("queryid").let { if (rows.wasNull()) null else it }
-                        val tooLarge = rows.getBoolean("text_too_large")
+                        val tooLarge = queryId != null && rows.getBoolean("text_too_large")
                         val query = if (queryId == null) null else rows.getString("query")
-                        val status = when { tooLarge -> "size_limit"; queryId == null -> "restricted";
-                            query == null -> "unavailable"; else -> "available" }
+                        val status = when { queryId == null -> QueryTextStatus.RESTRICTED; tooLarge -> QueryTextStatus.SIZE_LIMIT;
+                            query == null -> QueryTextStatus.UNAVAILABLE; else -> QueryTextStatus.AVAILABLE }
                         val entry = StatisticsEntry(rows.getLong("dbid"), rows.getLong("userid"), queryId,
                             rows.getBoolean("toplevel"), query, status, rows.getLong("calls"),
                             rows.getDouble("total_exec_time"), rows.getLong("rows"))
                         if (entry.calls < 0 || entry.rows < 0 || !entry.totalExecTime.isFinite() || entry.totalExecTime < 0)
                             fail(ErrorCode.STATISTICS_READ_FAILED, "Statistics contain invalid counters.")
                         val size = json.entryBytes(entry) + 1
-                        if (bytes.toLong() + size > limits.maxBytes) { reasons += "BYTE_LIMIT"; break }
+                        if (bytes.toLong() + size > limits.maxBytes) { reasons += SnapshotReason.BYTE_LIMIT; break }
                         bytes += size
                         entries += entry
-                        if (tooLarge) reasons += "QUERY_TEXT_LIMIT"
+                        if (tooLarge) reasons += SnapshotReason.QUERY_TEXT_LIMIT
                     }
                 }
                 after = epoch(connection, context, schema)
-                if (before.statsReset != after.statsReset) reasons += "STATS_RESET_DURING_READ"
-                if (before.dealloc != after.dealloc) reasons += "DEALLOC_DURING_READ"
+                if (before.statsReset != after.statsReset) reasons += SnapshotReason.STATS_RESET_DURING_READ
+                if (before.dealloc != after.dealloc) reasons += SnapshotReason.DEALLOC_DURING_READ
                 context.checkDeadline()
             } catch (error: AnalysisException) {
                 if (error.error.code !in setOf(ErrorCode.DEADLINE_EXCEEDED, ErrorCode.CANCELLED)) throw error
-                reasons += error.error.code.name
+                reasons += if (error.error.code == ErrorCode.CANCELLED) SnapshotReason.CANCELLED else SnapshotReason.DEADLINE_EXCEEDED
             } catch (error: SQLException) {
                 // Preserve the already read prefix, but never label a failed cursor as a complete snapshot.
-                reasons += if (context.isCancelled) "CANCELLED" else if (context.remainingTime().isZero)
-                    "DEADLINE_EXCEEDED" else if (error.sqlState == "42501") "STATISTICS_PERMISSION_DENIED" else "READ_FAILED"
+                reasons += if (context.isCancelled) SnapshotReason.CANCELLED else if (context.remainingTime().isZero)
+                    SnapshotReason.DEADLINE_EXCEEDED else if (error.sqlState == "42501") SnapshotReason.STATISTICS_PERMISSION_DENIED else SnapshotReason.READ_FAILED
             }
             return StatisticsSnapshot(UUID.randomUUID(), metadata.second, started, now().toString(), before,
                 after, entries.toList(), reasons.toList(), limits)
         } catch (error: SQLException) {
+            // An aborted metadata read must preserve cancellation/deadline as the primary cause.
+            context.checkDeadline()
             val code = when (error.sqlState) {
                 "42501" -> ErrorCode.STATISTICS_PERMISSION_DENIED
                 "55000", "42P01", "42883" -> ErrorCode.STATISTICS_UNAVAILABLE
@@ -103,7 +107,7 @@ class JdbcStatisticsCollector(
 
     private fun epoch(connection: Connection, context: RunContext, schema: String): StatisticsEpoch =
         query(connection, context, "SELECT stats_reset, dealloc FROM $schema.pg_stat_statements_info") {
-            if (!it.next()) fail(ErrorCode.STATISTICS_UNAVAILABLE, "pg_stat_statements metadata is unavailable.")
+            if (!next(connection, context, it)) fail(ErrorCode.STATISTICS_UNAVAILABLE, "pg_stat_statements metadata is unavailable.")
             StatisticsEpoch(it.getTimestamp("stats_reset").toInstant().toString(), it.getLong("dealloc"))
         }
 
@@ -116,7 +120,41 @@ class JdbcStatisticsCollector(
             statement.queryTimeout = ((millis + 999) / 1000).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
             statement.fetchSize = 128
             context.checkDeadline()
-            return statement.executeQuery().use(read)
+            // queryTimeout covers execute, not later cursor FETCH operations in pgJDBC.
+            // Keep an absolute deadline guard alive until the entire ResultSet has closed.
+            CursorDeadlineGuard(connection, context).use {
+                return statement.executeQuery().use(read)
+            }
+        }
+    }
+
+    private fun next(connection: Connection, context: RunContext, rows: ResultSet): Boolean {
+        context.checkDeadline()
+        // Refresh before every next(): the driver can fetch a new page here, not just in execute.
+        val millis = context.remainingTime().toMillis().coerceIn(1, Int.MAX_VALUE.toLong()).toInt()
+        connection.setNetworkTimeout(Executor { it.run() }, millis)
+        context.checkDeadline()
+        val hasNext = rows.next()
+        context.checkDeadline()
+        return hasNext
+    }
+
+    /** Absolute bound across execute, all FETCHes and row processing, including a stalled read. */
+    private class CursorDeadlineGuard(connection: Connection, context: RunContext) : AutoCloseable {
+        private val scheduler = Executors.newSingleThreadScheduledExecutor { task ->
+            Thread(task, "indexbudget-statistics-deadline").apply { isDaemon = true }
+        }
+        private val pending = scheduler.scheduleAtFixedRate({
+            if (context.isCancelled || context.remainingTime().isZero) {
+                try { connection.abort(Executor { it.run() }) } catch (_: Exception) {
+                    try { connection.close() } catch (_: Exception) { /* Owner closes again in finally. */ }
+                }
+            }
+        }, 0, 10, TimeUnit.MILLISECONDS)
+
+        override fun close() {
+            pending.cancel(false)
+            scheduler.shutdownNow()
         }
     }
 

@@ -29,3 +29,12 @@ port=${address##*:}
 [[ "$port" =~ ^[0-9]+$ ]] || { echo 'Cannot determine test database port.' >&2; exit 1; }
 export INDEXBUDGET_STATS_TEST_URL="jdbc:postgresql://127.0.0.1:$port/stats_test"
 ./gradlew --no-daemon test --rerun-tasks --tests 'ru.itmo.indexbudget.statistics.*'
+python3 - <<'PY'
+from pathlib import Path
+import xml.etree.ElementTree as ET
+path = Path('build/test-results/test/TEST-ru.itmo.indexbudget.statistics.StatisticsIntegrationTest.xml')
+root = ET.parse(path).getroot()
+if int(root.attrib['tests']) == 0 or any(int(root.attrib[name]) != 0 for name in ('skipped', 'failures', 'errors')):
+    raise SystemExit('Statistics integration suite must run without skips or failures.')
+print('Statistics PostgreSQL integration suite executed without skips.')
+PY

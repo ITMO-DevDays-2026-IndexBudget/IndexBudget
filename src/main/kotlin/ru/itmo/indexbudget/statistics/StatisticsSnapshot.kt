@@ -19,13 +19,20 @@ data class SnapshotLimits(
     }
 }
 
+enum class QueryTextStatus { AVAILABLE, RESTRICTED, UNAVAILABLE, SIZE_LIMIT }
+
+enum class SnapshotReason {
+    ROW_LIMIT, BYTE_LIMIT, QUERY_TEXT_LIMIT, DEADLINE_EXCEEDED, CANCELLED,
+    READ_FAILED, STATISTICS_PERMISSION_DENIED, STATS_RESET_DURING_READ, DEALLOC_DURING_READ,
+}
+
 data class StatisticsEntry(
     val dbid: Long,
     val userid: Long,
     val queryid: Long?,
     val toplevel: Boolean,
     val query: String?,
-    val textStatus: String,
+    val textStatus: QueryTextStatus,
     val calls: Long,
     val totalExecTime: Double,
     val rows: Long,
@@ -52,7 +59,7 @@ data class StatisticsSnapshot(
     val before: StatisticsEpoch,
     val after: StatisticsEpoch?,
     val entries: List<StatisticsEntry>,
-    val reasons: List<String>,
+    val reasons: List<SnapshotReason>,
     val limits: SnapshotLimits,
 ) {
     val complete: Boolean get() = reasons.isEmpty()

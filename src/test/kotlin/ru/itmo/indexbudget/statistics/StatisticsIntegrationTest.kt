@@ -50,7 +50,17 @@ class StatisticsIntegrationTest {
         assertFalse(result.source.allQueryTextsVisible)
         val hidden = result.entries.filter { it.userid != result.source.readerUserid }
         assertTrue(hidden.isNotEmpty())
-        assertTrue(hidden.all { it.queryid == null && it.query == null && it.textStatus == "restricted" })
+        assertTrue(hidden.all { it.queryid == null && it.query == null && it.textStatus == QueryTextStatus.RESTRICTED })
+    }
+
+    @Test fun `restricted entries stay restricted with a one byte text cap`() {
+        connection().use { c -> c.createStatement().use { it.executeQuery("SELECT count(*) FROM public.snapshot_probe").close() } }
+        val result = JdbcStatisticsCollector({ connection("stats_reader") }).collect(source,
+            SnapshotLimits(maxQueryBytes = 1), RunContext())
+        val hidden = result.entries.filter { it.userid != result.source.readerUserid }
+        assertTrue(hidden.isNotEmpty())
+        assertTrue(hidden.all { it.queryid == null && it.query == null && it.textStatus == QueryTextStatus.RESTRICTED })
+        // Own visible queries may legitimately exceed one byte; no assertion hides their truncation.
     }
 
     @Test fun `missing extension produces explicit error and releases connection`() {
@@ -65,7 +75,7 @@ class StatisticsIntegrationTest {
         connection().use { c -> c.createStatement().use { it.executeQuery("SELECT count(*) FROM public.snapshot_probe").close() } }
         val result = JdbcStatisticsCollector({ connection() }).collect(source, SnapshotLimits(maxRows = 1), RunContext())
         assertEquals(1, result.entries.size)
-        assertTrue("ROW_LIMIT" in result.reasons)
+        assertTrue(SnapshotReason.ROW_LIMIT in result.reasons)
     }
 
     private fun connection(user: String = "postgres") = DriverManager.getConnection(url, user, "")
