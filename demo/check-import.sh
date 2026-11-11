@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Full #67 acceptance route on an owned disposable PostgreSQL/HypoPG, never the shared stand.
+# Full #67/#68 acceptance route on an owned disposable PostgreSQL/HypoPG, never the shared stand.
 set -Eeuo pipefail
 cd "$(dirname "$0")/.."
 container=''
@@ -27,12 +27,18 @@ port=${address##*:}
 [[ "$port" =~ ^[0-9]+$ ]] || { echo 'Cannot determine test database port.' >&2; exit 1; }
 export INDEXBUDGET_STATS_TEST_URL="jdbc:postgresql://127.0.0.1:$port/stats_test"
 export INDEXBUDGET_IMPORT_HYPOPG_TEST=true
-./gradlew --no-daemon test --tests 'ru.itmo.indexbudget.statistics.*'
+./gradlew --no-daemon test --rerun-tasks --tests 'ru.itmo.indexbudget.statistics.*' \
+    --tests '*ReportImportIntegrationTest' --tests '*ReportSummaryTest'
 python3 - <<'PY'
 from pathlib import Path
 import xml.etree.ElementTree as ET
-root = ET.parse(Path('build/test-results/test/TEST-ru.itmo.indexbudget.statistics.ObservedImportIntegrationTest.xml')).getroot()
-if int(root.attrib['tests']) != 3 or any(int(root.attrib[name]) != 0 for name in ('skipped', 'failures', 'errors')):
-    raise SystemExit('All actual importer scenarios must execute without skips or failures.')
-print('Snapshots -> import -> analyze -> HTML/JSON/SQL executed on disposable PostgreSQL/HypoPG.')
+for suite, count in (
+    ('statistics.ObservedImportIntegrationTest', 3),
+    ('report.ReportImportIntegrationTest', 1),
+):
+    root = ET.parse(Path(f'build/test-results/test/TEST-ru.itmo.indexbudget.{suite}.xml')).getroot()
+    if int(root.attrib['tests']) != count or any(int(root.attrib[name]) != 0 for name in ('skipped', 'failures', 'errors')):
+        raise SystemExit(f'{suite}: all actual importer/report scenarios must execute without skips or failures.')
+print('Snapshots -> import -> analyze -> summary/HTML/JSON/SQL verified against the real import manifest.')
+print('Evidence: build/report-import-verification/')
 PY

@@ -34,6 +34,7 @@ jobs:
           path: |
             build/test-results/test/
             build/reports/tests/test/
+            build/report-import-verification/
           if-no-files-found: warn
   metrics-integration:
     name: postgres-hypopg-metrics
