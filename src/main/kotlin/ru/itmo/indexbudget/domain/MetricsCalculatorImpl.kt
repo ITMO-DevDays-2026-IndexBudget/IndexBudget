@@ -53,23 +53,18 @@ class MetricsCalculatorImpl : MetricsCalculator {
         val profiles = workload.profiles.sortedBy { it.id }.map { profile ->
             val baselineCost = profileCost(profile, baseline.costByQueryId, queryIds)
             val cost = profileCost(profile, evaluation.costByQueryId, queryIds)
-            val gain = baselineCost - cost
-            val ratio = if (baselineCost > 0.0) cost / baselineCost else null
-            val gainPercent = if (baselineCost > 0.0) 100.0 * gain / baselineCost else null
-            if (ratio != null && !ratio.isFinite()) {
-                throw numericError("Profile ratio is not finite", profile.id)
-            }
-            if (gainPercent != null && !gainPercent.isFinite()) {
-                throw numericError("Profile gain percent is not finite", profile.id)
+            val effect = CostEffect.calculate(baselineCost, cost)
+            if (effect.relativeStatus == RelativeValueStatus.OUT_OF_RANGE) {
+                throw numericError("Profile ratio or gain percent is outside the supported numeric range", profile.id)
             }
             ProfileMetrics(
                 profileId = profile.id,
                 normalizedWeight = normalizedWeights.getValue(profile.id),
                 baselineCost = baselineCost,
                 cost = cost,
-                gain = gain,
-                ratio = ratio,
-                gainPercent = gainPercent,
+                gain = checkNotNull(effect.gain),
+                ratio = effect.ratio,
+                gainPercent = effect.gainPercent,
             )
         }
 
@@ -86,6 +81,7 @@ class MetricsCalculatorImpl : MetricsCalculator {
             baselineMeanCost > 0.0 -> {
                 val ratio = meanCost / baselineMeanCost
                 if (!ratio.isFinite()) throw numericError("Mean ratio is not finite")
+                if (meanCost > 0.0 && ratio == 0.0) throw numericError("Positive mean ratio underflows to zero")
                 ratio
             }
             hasPositiveBaseline -> throw numericError("B_mean is zero while a positive baseline exists")

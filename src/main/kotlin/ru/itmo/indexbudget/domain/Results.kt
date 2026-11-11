@@ -138,4 +138,10 @@ data class AnalysisReport(
     val analysisMode: AnalysisMode = AnalysisMode.NORMAL,
     /** Effective shortlist strategy, including baseline-only and interrupted runs. */
     val candidateRanking: CandidateRanking = input?.candidateRanking ?: CandidateRanking.FREQUENCY,
-)
+) {
+    // Derived once per immutable report, including copies used by render fixtures.
+    val summary: RecommendationSummary = ReportSummary.recommendation(this)
+    val profileComparisons: List<CostComparisonSeries> = ReportSummary.profiles(this)
+    val queryEffects: List<CostComparisonSeries> = ReportSummary.queries(this)
+    val workloadProvenance: WorkloadProvenance? = input?.provenance
+}

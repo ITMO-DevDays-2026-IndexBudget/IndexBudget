@@ -30,6 +30,10 @@ class JsonReportWriter {
             "comparison_scope" to report.comparisonScope.name.lowercase(),
             "incumbents_coincide" to report.incumbentsCoincide,
             "price_of_robustness" to report.priceOfRobustness,
+            "summary" to summary(report.summary),
+            "profile_comparisons" to report.profileComparisons.map(::series),
+            "query_effects" to report.queryEffects.map(::series),
+            "workload_provenance" to report.workloadProvenance?.let(::provenance),
             "profiles" to input?.profiles?.map { profile -> linkedMapOf(
                 "id" to profile.id,
                 "weight" to profile.weight,
@@ -124,13 +128,72 @@ class JsonReportWriter {
         "mean_cost" to value.meanCost,
         "mean_ratio" to value.meanRatio,
         "worst_ratio" to value.worstRatio,
-        "budget_usage" to linkedMapOf(
-            "estimated_bytes" to value.budgetUsage.estimatedBytes,
-            "budgeted_bytes" to value.budgetUsage.budgetedBytes,
-            "write_units_per_hour" to value.budgetUsage.writeUnitsPerHour,
-            "index_count" to value.budgetUsage.indexCount,
-            "size_safety_factor" to value.budgetUsage.sizeSafetyFactor,
-        ),
+        "budget_usage" to budgetUsage(value.budgetUsage),
+    )
+
+    private fun budgetUsage(value: BudgetUsage) = linkedMapOf(
+        "estimated_bytes" to value.estimatedBytes,
+        "budgeted_bytes" to value.budgetedBytes,
+        "write_units_per_hour" to value.writeUnitsPerHour,
+        "index_count" to value.indexCount,
+        "size_safety_factor" to value.sizeSafetyFactor,
+    )
+
+    private fun effect(value: CostEffect) = linkedMapOf(
+        "baseline_cost" to value.baselineCost,
+        "cost" to value.cost,
+        "gain" to value.gain,
+        "ratio" to value.ratio,
+        "gain_percent" to value.gainPercent,
+        "relative_status" to value.relativeStatus.name.lowercase(),
+    )
+
+    private fun series(value: CostComparisonSeries) = linkedMapOf(
+        "id" to value.id,
+        "baseline" to effect(value.baseline),
+        "selected" to effect(value.selected),
+        "best_robust" to effect(value.bestRobust),
+        "best_mean" to effect(value.bestMean),
+    )
+
+    private fun summary(value: RecommendationSummary) = linkedMapOf(
+        "status" to value.status.name.lowercase(),
+        "selected_index_ids" to value.selectedIndexIds,
+        "mean_effect" to effect(value.meanEffect),
+        "worst_ratio" to value.worstRatio,
+        "budget_usage" to value.budgetUsage?.let(::budgetUsage),
+        "budget_limits" to value.budgetLimits?.let(::budgets),
+        "write_limit_enabled" to value.writeLimitEnabled,
+        "regressed_query_count" to value.regressedQueryCount,
+        "comparison_scope" to value.comparisonScope.name.lowercase(),
+        "incumbents_coincide" to value.incumbentsCoincide,
+        "price_of_robustness" to value.priceOfRobustness,
+        "stop_reasons" to value.stopReasons.map { it.name },
+        "errors" to value.errors.map(::error),
+    )
+
+    private fun provenance(value: WorkloadProvenance) = linkedMapOf(
+        "schema_version" to value.schemaVersion,
+        "source" to "pg_stat_statements",
+        "source_id" to value.sourceId.toString(),
+        "selection_rule" to value.selectionRule,
+        "windows" to value.windows.map { window -> linkedMapOf(
+            "profile_id" to window.profileId,
+            "started_at" to window.startedAt.toString(),
+            "finished_at" to window.finishedAt.toString(),
+            "complete" to window.complete,
+            "coverage" to linkedMapOf(
+                "denominator" to "available_complete_entries",
+                "selected_calls" to window.coverage.selectedCalls,
+                "available_calls" to window.coverage.availableCalls,
+                "selected_exec_time_millis" to window.coverage.selectedExecTimeMillis,
+                "available_exec_time_millis" to window.coverage.availableExecTimeMillis,
+            ),
+        ) },
+        "query_examples" to value.queryExamples.map { example -> linkedMapOf(
+            "query_id" to example.queryId,
+            "source" to example.source.name.lowercase(),
+        ) },
     )
 
     private fun candidate(value: IndexCandidate) = linkedMapOf(

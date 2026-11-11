@@ -2,7 +2,10 @@ package ru.itmo.indexbudget.fixtures
 
 import ru.itmo.indexbudget.candidates.PostgresDdlRenderer
 import ru.itmo.indexbudget.domain.*
+import ru.itmo.indexbudget.report.DefaultReportBuilder
 import ru.itmo.indexbudget.report.HtmlReportRenderer
+import ru.itmo.indexbudget.report.JsonReportWriter
+import ru.itmo.indexbudget.application.WorkloadReader
 import java.nio.file.Files
 import java.nio.file.Path
 
@@ -39,7 +42,7 @@ object HtmlReportFixtures {
         }
         return report.copy(candidates = report.candidates.copy(candidates = annotated),
             result = SearchResult.Completed(Objective.ROBUST, requireNotNull(report.result.baseline),
-                configuration, configuration, report.result.diagnostics))
+                configuration, configuration, report.result.diagnostics)).rebuild()
     }
 
     fun zeroBaseline(): AnalysisReport {
@@ -52,7 +55,8 @@ object HtmlReportFixtures {
         return report.copy(result = SearchResult.Completed(Objective.ROBUST, baseline, configuration, configuration,
             SearchDiagnostics(completedPhases = listOf(AnalysisPhase.VALIDATION, AnalysisPhase.INTROSPECTION, AnalysisPhase.BASELINE),
                 stopReasons = listOf(StopReason.ZERO_BASELINE), statistics = RunStatistics(explainAttempts = 2, evaluationAttempts = 1, completedEvaluations = 1))),
-            candidates = CandidateBatch(emptyList()), priceOfRobustness = 0.0)
+            candidates = CandidateBatch(emptyList()), priceOfRobustness = 0.0,
+            baselineMetrics = configuration.metrics, incumbentsCoincide = true).rebuild()
     }
 
     fun wide(): AnalysisReport {
@@ -96,13 +100,15 @@ object HtmlReportFixtures {
                 SearchDiagnostics(stopReasons = listOf(StopReason.REPAIR_LIMIT), candidateDecisions = decisions,
                     statistics = RunStatistics(explainAttempts = 30, evaluationAttempts = 30, completedEvaluations = 30, repairAttempts = 28),
                     completedPhases = listOf(AnalysisPhase.VALIDATION, AnalysisPhase.INTROSPECTION, AnalysisPhase.BASELINE, AnalysisPhase.CANDIDATES, AnalysisPhase.GREEDY))),
-            priceOfRobustness = 0.0,
+            priceOfRobustness = 0.0, incumbentsCoincide = true,
+            baselineMetrics = calculator.calculate(input, baseline, baseline, calculator.assessBudget(emptyList(), input).usage),
+            normalizedProfileWeights = ProfileWeights.normalize(input.profiles),
             candidates = CandidateBatch(candidates, CandidateDiagnostics(
                 localScopes = listOf(LocalGenerationStatistics(queryId, table, 100, 16, 256, 256, 32, (17..100).map { ColumnRef(table, "c$it") })),
                 candidatesBeforeGlobalDeduplication = 32, candidatesAfterGlobalDeduplication = 32, shortlistedCandidates = 16,
                 decisions = decisions, warnings = listOf(AnalysisWarning(WarningCode.COLUMN_SHORTLIST_TRUNCATED,
                     "Синтетический широкий workload: SQL сохранён целиком, колонки ограничены до генерации пар.", queryId = queryId)),
-            )))
+            ))).rebuild()
     }
 
     fun regression(): AnalysisReport {
@@ -120,12 +126,23 @@ object HtmlReportFixtures {
         val baselineConfig = EvaluatedConfiguration(baseline, calculator.calculate(input, baseline, baseline, calculator.assessBudget(emptyList(), input).usage))
         return report.copy(input = input.copy(objective = Objective.MEAN), result = SearchResult.Completed(Objective.MEAN, baseline, baselineConfig, chosen,
             report.result.diagnostics.copy(statistics = RunStatistics(explainAttempts = 4, evaluationAttempts = 2, completedEvaluations = 2))),
-            priceOfRobustness = baselineConfig.metrics.meanCost - chosen.metrics.meanCost)
+            priceOfRobustness = baselineConfig.metrics.meanCost - chosen.metrics.meanCost).rebuild()
     }
+
+    fun imported(): AnalysisReport {
+        val input = WorkloadReader().read(Path.of("examples/workload-v2-provenance.json"))
+        return completed().copy(input = input).rebuild()
+    }
+
+    /** Rebuild every derived field after changing the input/result, preserving synthetic run metadata. */
+    private fun AnalysisReport.rebuild(): AnalysisReport = DefaultReportBuilder(environment = environment)
+        .build(requireNotNull(input), candidates, result, RunContext(runId = runId))
+        .copy(inputHash = inputHash, durationMillis = durationMillis)
 
     fun all(): Map<String, AnalysisReport> = linkedMapOf(
         "different" to completed(),
         "include" to covering(),
+        "imported" to imported(),
         "same" to completed(sameIncumbents = true),
         "mean" to completed(objective = Objective.MEAN),
         "partial" to ContractFixtures.report(status = RunStatus.PARTIAL),
@@ -147,7 +164,10 @@ object ReportPreview {
         val reports = HtmlReportFixtures.all()
         Files.writeString(Path.of(args[0]), renderer.render(reports.getValue("different")))
         val directory = Files.createDirectories(Path.of(args[1]))
-        reports.forEach { (name, report) -> Files.writeString(directory.resolve("$name.html"), renderer.render(report)) }
+        reports.forEach { (name, report) ->
+            Files.writeString(directory.resolve("$name.html"), renderer.render(report))
+            Files.writeString(directory.resolve("$name.json"), JsonReportWriter().render(report))
+        }
         println("Синтетический отчёт: ${Path.of(args[0]).toAbsolutePath()}")
         println("Варианты для проверки: ${directory.toAbsolutePath()}")
     }

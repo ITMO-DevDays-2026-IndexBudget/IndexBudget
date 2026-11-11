@@ -73,11 +73,13 @@ class HtmlReportRendererTest {
             assertTrue(html.contains("Лучшие наборы различаются"))
             assertEquals("88\u202f900", capture(section(html, "comparison"), "<strong class=\"price-value\">(.*?)</strong>"))
             val queryTable = section(html, "queries")
-            assertEquals(listOf("SQL", "normal, вызовов/час", "campaign, вызовов/час", "Baseline cost", "Final cost", "Изменение"), tableRows(queryTable).first())
+            assertEquals(listOf("SQL", "normal, вызовов/час", "campaign, вызовов/час", "Baseline cost", "Final cost", "Снижение cost, %", "Изменение"), tableRows(queryTable).first())
             assertEquals(listOf("records_by_group", "3\u202f000", "100", "100",
-                if (objective == Objective.ROBUST) "50" else "10", "Снижение cost"), rowByKey(queryTable, "records_by_group"))
+                if (objective == Objective.ROBUST) "50" else "10",
+                if (objective == Objective.ROBUST) "50 %" else "90 %", "Снижение cost"), rowByKey(queryTable, "records_by_group"))
             assertEquals(listOf("records_by_value", "100", "3\u202f000", "100",
                 if (objective == Objective.ROBUST) "50" else "100",
+                if (objective == Objective.ROBUST) "50 %" else "0 %",
                 if (objective == Objective.ROBUST) "Снижение cost" else "Без изменений"), rowByKey(queryTable, "records_by_value"))
             assertTrue(html.contains("Демонстрационные данные"))
         }
@@ -111,7 +113,7 @@ class HtmlReportRendererTest {
         assertEquals("333", entryValue(robust, "Write units/час"))
         assertEquals(listOf("normal", "3\u202f333", "0,111", "17,25"), rowByKey(robust, "normal"))
         assertEquals(listOf("campaign", "4\u202f444", "0,222", "27,5"), rowByKey(robust, "campaign"))
-        val profiles = section(html, "profiles")
+        val profiles = section(html, "profiles").substringBefore("<details>")
         assertEquals(listOf("Профиль", "Вес", "Baseline cost", "Final cost", "Отношение", "Выигрыш, cost", "Выигрыш, %"), tableRows(profiles).first())
         assertEquals(listOf("normal", "0,123", "1\u202f111", "3\u202f333", "0,111", "4\u202f321", "17,25"), rowByKey(profiles, "normal"))
         assertEquals(listOf("campaign", "0,456", "2\u202f222", "4\u202f444", "0,222", "8\u202f765", "27,5"), rowByKey(profiles, "campaign"))
@@ -219,6 +221,27 @@ class HtmlReportRendererTest {
         assertTrue(missing.contains("Нет данных"))
         assertTrue(missing.contains("Профили отсутствуют"))
         assertFalse(missing.contains("Выбран пустой набор"))
+    }
+
+    @Test
+    fun `saved query costs and regressions remain visible without the input workload`() {
+        val report = HtmlReportFixtures.regression().copy(input = null)
+        assertTrue(report.queryEffects.isEmpty())
+        val html = renderer.render(report)
+        val queries = section(html, "queries")
+        assertEquals(listOf("records_by_value", "100", "120", "Нет данных", "Регрессия"),
+            rowByKey(queries, "records_by_value"))
+        assertEquals(listOf("records_by_group", "100", "20", "Нет данных", "Снижение cost"),
+            rowByKey(queries, "records_by_group"))
+        assertTrue(queries.contains("<tr class=\"regression\">"))
+        assertTrue(queries.contains("Исходный SQL отсутствует в модели."))
+
+        val failed = ContractFixtures.report(status = RunStatus.FAILED)
+        val baselineOnly = failed.copy(input = null, result = (failed.result as SearchResult.Failed).copy(
+            baseline = ContractFixtures.baselineEvaluation(),
+        ))
+        assertEquals(listOf("records_by_value", "100", "Нет данных", "Нет данных", "Нет данных"),
+            rowByKey(section(renderer.render(baselineOnly), "queries"), "records_by_value"))
     }
 
     @Test

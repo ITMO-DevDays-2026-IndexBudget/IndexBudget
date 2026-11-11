@@ -321,6 +321,23 @@ when (val assessment = metrics.assessEvaluation(workload.input, baseline, evalua
 
 Wire-схема `report.json` реализована явным отображением в `JsonReportWriter` и описана в [контракте отчёта v3](report-v3.md); sealed `SearchResult` напрямую не сериализуется. `DefaultReportBuilder` добавляет baseline-метрики через общий calculator, нормированные веса, сравнение costs каждого SQL, совпадение наборов и цену устойчивости через `PriceOfRobustness` (тот же доменный helper, что в #44 / PR #52). Сохранённые метрики incumbents не пересчитываются. При failed исходные costs/plans сохраняются, baseline-метрики могут отсутствовать: экспорт не повторяет уже неудавшийся численный расчёт.
 
+### Общая сводка и происхождение (#68)
+
+`AnalysisReport` при создании вычисляет через domain `summary: RecommendationSummary`,
+`profileComparisons` и `queryEffects` (по четыре `CostEffect` на ID), а также переносит
+`input.provenance` в `workloadProvenance`. Свойства обновляются и при `copy`, не принимают
+отдельных несовместимых данных от renderer. `ReportSummary` не имеет evaluator/JDBC.
+`CostEffect.calculate` — общий расчёт gain/ratio/процента для `MetricsCalculatorImpl` и
+новых показателей сводки; профильные значения и M/R берутся из сохранённых метрик.
+При переполнении дополнительного per-query процента экспорт сохраняет абсолютные costs
+с `OUT_OF_RANGE`; ошибка профильных расчётов по-прежнему фатальна.
+
+`WorkloadInput.provenance` по умолчанию `null`. `WorkloadReader` читает необязательный
+вложенный объект v1, проверяет UUID источника, даты, покрытие query/profile IDs, диапазоны
+счётчиков и явную неизвестность. Он не заменяет статистический импорт #66/#67.
+Метаданные входят в исходный hash; источник не содержит DSN. Полная аддитивная схема,
+единицы и примеры — в [контракте v3](report-v3.md#сводка-и-данные-сравнений-68).
+
 ### Цена устойчивости (#44)
 
 `domain.PriceOfRobustness.calculate(result: SearchResult): Double?` — единый чистый расчёт по готовым метрикам: `bestRobust.metrics.meanCost - bestMean.metrics.meanCost`. Для `Completed` и `Partial` оба incumbent должны быть полностью оценены и допустимы, принадлежать одному запуску и одному исследованному пулу с общими workload, baseline и весами профилей. Эти предусловия обеспечивает Optimizer; калькулятор не управляет пулом, не запускает поиск или EXPLAIN и не пересчитывает профильные метрики.
