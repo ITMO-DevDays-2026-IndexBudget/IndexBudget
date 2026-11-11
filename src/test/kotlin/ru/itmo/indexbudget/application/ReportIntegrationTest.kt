@@ -141,7 +141,7 @@ class ReportIntegrationTest {
         assertEquals(report.workloadProvenance?.sourceId.toString(), json["workload_provenance"]["source_id"].stringValue())
         val html = Files.readString(run.output.resolve("report.html"))
         assertTrue(html.contains("pg_stat_statements"))
-        assertTrue(html.contains("50 %"))
+        assertTrue(html.contains("Снижение на 50%"))
         assertTrue(html.contains("Историческое время выполнения"))
     }
 

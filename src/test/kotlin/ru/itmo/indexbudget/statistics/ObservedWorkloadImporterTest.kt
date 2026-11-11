@@ -153,8 +153,10 @@ class ObservedWorkloadImporterTest {
         val json = ImportJson.mapper.readTree(JsonReportWriter().render(report))
         assertEquals(provenance, json["workload_provenance"])
         assertEquals(10.0, json["baseline"]["cost_by_query_id"][workload.queries.single().id].doubleValue())
-        assertTrue(HtmlReportRenderer().render(report).contains("Происхождение нагрузки"))
-        assertTrue(HtmlReportRenderer().render(report).contains("import-manifest.json"))
+        val provenanceHtml = HtmlReportRenderer().render(report).substringAfter("<section id=\"provenance\"").substringBefore("</section>")
+        assertTrue(provenanceHtml.contains("Исходные запросы и частоты"))
+        assertTrue(provenanceHtml.contains("import-manifest.json"))
+        assertTrue(provenanceHtml.contains("pg_stat_statements"))
     }
 
     @ParameterizedTest

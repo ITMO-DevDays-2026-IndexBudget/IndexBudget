@@ -104,15 +104,12 @@ class HtmlReportRendererTest {
             assertTrue(html.contains("best_mean"))
             assertTrue(html.contains("Лучшие наборы различаются"))
             assertEquals("88\u202f900", capture(section(html, "comparison"), "<strong class=\"price-value\">(.*?)</strong>"))
-            val queryTable = section(html, "queries")
-            assertEquals(listOf("SQL", "normal, вызовов/час", "campaign, вызовов/час", "Baseline cost", "Final cost", "Снижение cost, %", "Изменение"), tableRows(queryTable).first())
-            assertEquals(listOf("records_by_group", "3\u202f000", "100", "100",
-                if (objective == Objective.ROBUST) "50" else "10",
-                if (objective == Objective.ROBUST) "50 %" else "90 %", "Снижение cost"), rowByKey(queryTable, "records_by_group"))
-            assertEquals(listOf("records_by_value", "100", "3\u202f000", "100",
-                if (objective == Objective.ROBUST) "50" else "100",
-                if (objective == Objective.ROBUST) "50 %" else "0 %",
-                if (objective == Objective.ROBUST) "Снижение cost" else "Без изменений"), rowByKey(queryTable, "records_by_value"))
+            val queryTable = queryTable(html)
+            assertEquals(listOf("SQL", "До", "С набором", "Изменение"), tableRows(queryTable).first())
+            assertEquals(listOf("SQL 1", "100", if (objective == Objective.ROBUST) "50" else "10",
+                if (objective == Objective.ROBUST) "Снижение на 50%" else "Снижение на 90%"), rowByKey(queryTable, "SQL 1"))
+            assertEquals(listOf("SQL 2", "100", if (objective == Objective.ROBUST) "50" else "100",
+                if (objective == Objective.ROBUST) "Снижение на 50%" else "Без изменения"), rowByKey(queryTable, "SQL 2"))
             assertTrue(html.contains("Демонстрационные данные"))
         }
     }
@@ -131,29 +128,30 @@ class HtmlReportRendererTest {
             ),
             budgetUsage = BudgetUsage(111L, 222L, 333.0, 1, sizeSafetyFactor = 1.3),
         ))
-        val html = renderer.render(report.copy(result = result.copy(bestRobust = supplied), priceOfRobustness = 9876.5))
-        val overview = section(html, "overview")
-        assertEquals("0,654", entryValue(overview, "Худшая нормированная стоимость"))
-        assertEquals("0,321", entryValue(overview, "Средняя нормированная стоимость"))
+        val html = renderer.render(report.copy(result = result.copy(bestRobust = supplied), priceOfRobustness = 9876.5,
+            normalizedProfileWeights = mapOf("normal" to 0.123, "campaign" to 0.456)))
+        assertEquals("0,654", entryValue(renderer.renderSection(report.copy(result = result.copy(bestRobust = supplied)), HtmlReportSection.METHOD), "Худшее отношение R"))
+        assertTrue(section(html, "indexes").contains("222\u00a0байт"))
         val robust = configuration(html, "best_robust")
         assertEquals("0,654", entryValue(robust, "Худшее отношение R"))
         assertEquals("0,321", entryValue(robust, "Среднее отношение M"))
         assertEquals("12\u202f345", entryValue(robust, "Ожидаемая стоимость C_mean"))
         assertEquals("54\u202f321", entryValue(robust, "Baseline B_mean"))
-        assertEquals("111 байт (< 0,001 MiB)", entryValue(robust, "Оценка размера"))
-        assertEquals("222 байт (< 0,001 MiB)", entryValue(robust, "С запасом"))
+        assertEquals("111\u00a0байт (< 0,001 MiB)", entryValue(robust, "Оценка размера"))
+        assertEquals("222\u00a0байт (< 0,001 MiB)", entryValue(robust, "С запасом"))
         assertEquals("333", entryValue(robust, "Write units/час"))
         assertEquals(listOf("normal", "3\u202f333", "0,111", "17,25"), rowByKey(robust, "normal"))
         assertEquals(listOf("campaign", "4\u202f444", "0,222", "27,5"), rowByKey(robust, "campaign"))
-        val profiles = section(html, "profiles").substringBefore("<summary>Сравнение всех сохранённых наборов")
-        assertEquals(listOf("Профиль", "Вес", "Baseline cost", "Final cost", "Отношение", "Выигрыш, cost", "Выигрыш, %"), tableRows(profiles).first())
+        val profiles = section(html, "profiles").substringAfter("<summary>Точные стоимости и веса</summary>")
+        assertEquals(listOf("Профиль", "Вес", "Baseline cost", "Selected cost", "Отношение", "Выигрыш, cost", "Выигрыш, %"), tableRows(profiles).first())
         assertEquals(listOf("normal", "0,123", "1\u202f111", "3\u202f333", "0,111", "4\u202f321", "17,25"), rowByKey(profiles, "normal"))
         assertEquals(listOf("campaign", "0,456", "2\u202f222", "4\u202f444", "0,222", "8\u202f765", "27,5"), rowByKey(profiles, "campaign"))
         val mean = configuration(html, "best_mean")
         assertEquals("66\u202f100", entryValue(mean, "Ожидаемая стоимость C_mean"))
         val storage = storageCard(html)
-        assertEquals("222 / 67\u202f108\u202f864 байт", capture(storage, "<p class=\"budget-number\">(.*?)</p>"))
-        assertTrue(storage.contains("Коэффициент запаса: 1,3"))
+        assertTrue(storage.contains("222\u00a0байт"))
+        assertTrue(storage.contains("64\u00a0MiB"))
+        assertTrue(section(html, "indexes").contains("с запасом ×1,3"))
         assertEquals("9\u202f876,5", capture(section(html, "comparison"), "<strong class=\"price-value\">(.*?)</strong>"))
     }
 
@@ -186,55 +184,62 @@ class HtmlReportRendererTest {
     }
 
     @Test
-    fun `storage shows exact bytes and MiB in budgets comparisons and candidate lists`() {
+    fun `storage uses readable summary units and preserves exact bytes in details`() {
         val html = renderer.render(HtmlReportFixtures.completed())
         val storage = storageCard(html)
-        assertEquals("314\u202f573 / 67\u202f108\u202f864 байт", capture(storage, "<p class=\"budget-number\">(.*?)</p>"))
-        assertEquals("≈0,3 MiB / 64 MiB", capture(storage, "<p class=\"budget-mib\">(.*?)</p>"))
-        assertTrue(storage.contains("Оценка HypoPG: 262\u202f144 байт (0,25 MiB)"))
+        assertTrue(storage.contains("307,2\u00a0KiB"))
+        assertTrue(storage.contains("64\u00a0MiB"))
+        assertTrue(storage.contains("HypoPG: 256\u00a0KiB"))
+        assertEquals("67\u202f108\u202f864\u00a0байт (64\u00a0MiB)", entryValue(section(html, "indexes"), "Бюджет места"))
         val robust = configuration(html, "best_robust")
-        assertEquals("262\u202f144 байт (0,25 MiB)", entryValue(robust, "Оценка размера"))
-        assertEquals("314\u202f573 байт (≈0,3 MiB)", entryValue(robust, "С запасом"))
+        assertEquals("262\u202f144\u00a0байт (0,25\u00a0MiB)", entryValue(robust, "Оценка размера"))
+        assertEquals("314\u202f573\u00a0байт (≈0,3\u00a0MiB)", entryValue(robust, "С запасом"))
         val mean = configuration(html, "best_mean")
-        assertEquals("524\u202f288 байт (0,5 MiB)", entryValue(mean, "Оценка размера"))
-        assertEquals("629\u202f146 байт (≈0,6 MiB)", entryValue(mean, "С запасом"))
+        assertEquals("524\u202f288\u00a0байт (0,5\u00a0MiB)", entryValue(mean, "Оценка размера"))
+        assertEquals("629\u202f146\u00a0байт (≈0,6\u00a0MiB)", entryValue(mean, "С запасом"))
         val selected = capture(section(html, "indexes"), "<article[^>]*data-selected-index=\"records_created_at\"[^>]*>(.*?)</article>", stripTags = false)
-        assertEquals("262\u202f144 байт (0,25 MiB)", entryValue(selected, "Оценка"))
-        assertEquals("314\u202f573 байт (≈0,3 MiB)", entryValue(selected, "С запасом"))
+        assertEquals("262\u202f144\u00a0байт (0,25\u00a0MiB)", entryValue(selected, "Оценка"))
+        assertEquals("314\u202f573\u00a0байт (≈0,3\u00a0MiB)", entryValue(selected, "С запасом"))
         val candidates = capture(section(html, "search"), "<summary>Все сохранённые кандидаты и оценки</summary>(.*?)</details>", stripTags = false)
-        assertEquals(listOf("262\u202f144 байт (0,25 MiB)", "314\u202f573 байт (≈0,3 MiB)"), tableRows(candidates)[1].subList(1, 3))
+        assertTrue(candidates.contains("href=\"#indexes\""))
+        assertEquals(listOf("524\u202f288\u00a0байт (0,5\u00a0MiB)", "629\u202f146\u00a0байт (≈0,6\u00a0MiB)"), tableRows(candidates)[1].subList(1, 3))
     }
 
     @Test
     fun `storage formatting preserves null zero sub-MiB and large byte values`() {
         val report = HtmlReportFixtures.completed()
         val input = requireNotNull(report.input)
-        val limits = listOf(0L to "0 MiB", 1L to "< 0,001 MiB", 1_048_576L to "1 MiB",
-            Long.MAX_VALUE to "≈8\u202f796\u202f093\u202f022\u202f208 MiB")
-        for ((bytes, expectedMiB) in limits) {
+        val limits = listOf(0L to "0\u00a0байт", 1L to "1\u00a0байт", 1_048_576L to "1\u00a0MiB",
+            Long.MAX_VALUE to "8,6e9\u00a0GiB")
+        for ((bytes, expectedSize) in limits) {
             val html = renderer.render(report.copy(input = input.copy(constraints = input.constraints.copy(storageBudgetBytes = bytes))))
             val card = storageCard(html)
-            assertEquals("≈0,3 MiB / $expectedMiB", capture(card, "<p class=\"budget-mib\">(.*?)</p>"))
-            if (bytes == Long.MAX_VALUE) assertEquals("314\u202f573 / 9\u202f223\u202f372\u202f036\u202f854\u202f775\u202f807 байт", capture(card, "<p class=\"budget-number\">(.*?)</p>"))
+            assertTrue(card.contains("307,2\u00a0KiB"))
+            if (bytes == Long.MAX_VALUE) assertTrue(card.contains("Точное значение лимита"))
+            else assertTrue(card.contains(expectedSize))
+            if (bytes == Long.MAX_VALUE) assertEquals("9\u202f223\u202f372\u202f036\u202f854\u202f775\u202f807\u00a0байт (≈8\u202f796\u202f093\u202f022\u202f208\u00a0MiB)",
+                entryValue(section(html, "indexes"), "Бюджет места"))
         }
         val missing = storageCard(renderer.render(ContractFixtures.report(status = RunStatus.FAILED).copy(input = null)))
-        assertEquals("Нет данных / Нет данных", capture(missing, "<p class=\"budget-mib\">(.*?)</p>"))
-        assertTrue(missing.contains("Оценка HypoPG: Нет данных."))
+        assertTrue(missing.contains("Нет данных"))
+        assertTrue(missing.contains("HypoPG: Нет данных"))
     }
 
     @Test
     fun `completed partial and failed retain honest state and diagnostics`() {
         val same = renderer.render(HtmlReportFixtures.completed(sameIncumbents = true))
-        assertTrue(same.contains("Лучшие наборы robust и mean совпадают"))
+        assertTrue(same.contains("Оба критерия выбрали один набор"))
         val partialReport = ContractFixtures.report(status = RunStatus.PARTIAL)
         val partial = renderer.render(partialReport)
-        assertTrue(partial.contains("partial · Частичный результат"))
+        assertTrue(partial.contains("Частичный результат"))
+        assertEquals("partial", entryValue(section(partial, "run"), "Статус"))
         assertTrue(partial.contains("Поиск остановлен досрочно"))
         assertTrue(partial.contains("EXPLAIN_FAILED"))
         assertTrue(partial.contains("EVALUATION_FAILED"))
         assertEquals(partialReport.result.selected?.evaluation?.candidateIds, selectedIds(partial))
         val failed = renderer.render(ContractFixtures.report(status = RunStatus.FAILED))
-        assertTrue(failed.contains("failed · Ошибка"))
+        assertTrue(failed.contains("Анализ завершился ошибкой"))
+        assertEquals("failed", entryValue(section(failed, "run"), "Статус"))
         assertTrue(failed.contains("Synthetic baseline failure"))
         assertTrue(selectedIds(failed).isEmpty())
         assertFalse(failed.contains("CREATE INDEX"))
@@ -261,10 +266,10 @@ class HtmlReportRendererTest {
         assertTrue(report.queryEffects.isEmpty())
         val html = renderer.render(report)
         val queries = section(html, "queries")
-        assertEquals(listOf("records_by_value", "100", "120", "Нет данных", "Регрессия"),
-            rowByKey(queries, "records_by_value"))
-        assertEquals(listOf("records_by_group", "100", "20", "Нет данных", "Снижение cost"),
-            rowByKey(queries, "records_by_group"))
+        assertEquals(listOf("SQL 2", "100", "120", "Рост cost · процент неизвестен"),
+            rowByKey(queryTable(html), "SQL 2"))
+        assertEquals(listOf("SQL 1", "100", "20", "Снижение cost · процент неизвестен"),
+            rowByKey(queryTable(html), "SQL 1"))
         assertTrue(queries.contains("class=\"regression\""))
         assertTrue(queries.contains("Исходный SQL отсутствует в модели."))
 
@@ -272,37 +277,37 @@ class HtmlReportRendererTest {
         val baselineOnly = failed.copy(input = null, result = (failed.result as SearchResult.Failed).copy(
             baseline = ContractFixtures.baselineEvaluation(),
         ))
-        assertEquals(listOf("records_by_value", "100", "Нет данных", "Нет данных", "Нет данных"),
-            rowByKey(section(renderer.render(baselineOnly), "queries"), "records_by_value"))
+        assertEquals(listOf("SQL 2", "100", "Нет данных", "Нет данных"),
+            rowByKey(queryTable(renderer.render(baselineOnly)), "SQL 2"))
     }
 
     @Test
     fun `disabled write budget unknown units and explicit zero remain distinct`() {
         val report = ContractFixtures.report(withWriteProfile = false)
         val html = renderer.render(report)
-        val section = html.substringAfter("<section id=\"indexes\"").substringBefore("<section id=\"queries\"")
-        assertTrue(section.contains("Бюджет: Отключён"))
-        assertTrue(section.contains("Нет данных <small>write units/час"))
-        assertTrue(section.contains("Профиль записи не задан"))
+        val resources = section(html, "indexes")
+        assertTrue(resources.contains("Бюджет записи отключён"))
+        assertTrue(resources.contains("Нет данных условных ед./ч"))
+        assertTrue(section(html, "provenance").contains("Профиль записи не задан"))
         val zeroInput = requireNotNull(report.input).let { it.copy(constraints = it.constraints.copy(writeBudgetUnitsPerHour = 0.0)) }
         val zero = renderer.render(report.copy(input = zeroInput))
-        assertTrue(zero.contains("Бюджет: 0 units/час"))
+        assertTrue(zero.contains("Нулевой лимит"))
         val enabledProfile = ContractFixtures.report().let {
             it.copy(input = requireNotNull(it.input).let { input -> input.copy(constraints = input.constraints.copy(writeBudgetUnitsPerHour = null)) })
         }
         val enabledProfileHtml = renderer.render(enabledProfile)
-        assertTrue(enabledProfileHtml.contains("4\u202f100 <small>write units/час"))
-        assertTrue(enabledProfileHtml.contains("Бюджет: Отключён"))
+        assertTrue(enabledProfileHtml.contains("4\u202f100 условных ед./ч"))
+        assertTrue(enabledProfileHtml.contains("Бюджет записи отключён"))
     }
 
     @Test
     fun `per-query regressions have visible labels independent of chosen objective`() {
         val html = renderer.render(HtmlReportFixtures.regression())
         val row = html.substringAfter("class=\"regression\">").substringBefore("</tr>")
-        assertTrue(row.contains("records_by_value"))
+        assertTrue(row.contains("SQL 2"))
         assertTrue(row.contains("<td>100</td>"))
         assertTrue(row.contains("<td>120</td>"))
-        assertTrue(row.contains("Регрессия"))
+        assertTrue(row.contains("Рост на 20%"))
         assertTrue(html.contains("3\u202f000"))
         assertTrue(html.contains("вызовов/час"))
     }
@@ -398,8 +403,9 @@ class HtmlReportRendererTest {
         val config = result.bestRobust.copy(metrics = result.bestRobust.metrics.let { metrics ->
             metrics.copy(profiles = metrics.profiles.map { it.copy(normalizedWeight = 1e-15) })
         })
-        val html = renderer.render(report.copy(result = result.copy(bestRobust = config)))
-        assertTrue(html.contains("1E-15"))
+        val html = renderer.render(report.copy(result = result.copy(bestRobust = config),
+            normalizedProfileWeights = report.normalizedProfileWeights.mapValues { 1e-15 }))
+        assertTrue(html.contains("0,000000000000001"))
     }
 
     private fun assertSafeScript(html: String) {
@@ -428,10 +434,10 @@ class HtmlReportRendererTest {
     private fun section(html: String, id: String) = capture(html, "<section id=\"${Regex.escape(id)}\"[^>]*>(.*?)</section>", stripTags = false)
     private fun configuration(html: String, key: String) = capture(html, "<article[^>]*data-configuration=\"${Regex.escape(key)}\"[^>]*>(.*?)</article>", stripTags = false)
     private fun entryValue(html: String, label: String) = capture(html, "<dt>${Regex.escape(label)}</dt><dd>(.*?)</dd>")
-    private fun metricValue(html: String, label: String) = capture(html, "<div class=\"metric-label\">${Regex.escape(label)}</div><strong>(.*?)</strong>")
-    private fun storageCard(html: String) = capture(section(html, "indexes"), "<div class=\"budget-card\"><h3>Место</h3>(.*?)</div>", stripTags = false)
+    private fun storageCard(html: String) = capture(section(html, "indexes"), "<tr><th scope=\"row\">Место</th>(.*?)</tr>", stripTags = false)
     private fun tableRows(html: String): List<List<String>> = Regex("<tr[^>]*>(.*?)</tr>", RegexOption.DOT_MATCHES_ALL).findAll(html).map { row ->
         Regex("<t[hd]\\b[^>]*>(.*?)</t[hd]>", RegexOption.DOT_MATCHES_ALL).findAll(row.groupValues[1]).map { plainText(it.groupValues[1]) }.toList()
     }.toList()
+    private fun queryTable(html: String) = capture(section(html, "queries"), "<div id=\"query-comparison\"[^>]*>(.*?)</table>", stripTags = false)
     private fun rowByKey(html: String, key: String) = tableRows(html).single { it.firstOrNull() == key }
 }

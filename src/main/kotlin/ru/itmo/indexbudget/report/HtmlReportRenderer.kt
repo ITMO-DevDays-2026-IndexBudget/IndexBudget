@@ -10,6 +10,11 @@ import java.util.Locale
 import java.util.Base64
 import java.security.MessageDigest
 
+enum class HtmlReportSection {
+    OVERVIEW, QUERIES, QUERY_DETAILS, PROFILES, INDEXES, INDEX_DETAILS, PROVENANCE,
+    METHOD, RESOURCE_MODEL, SEARCH, RUN, COMPARISON, MANUAL_COMPARISON, NEXT,
+}
+
 /** A read-only view of the shared report. No metric calculation or database calls; the static script only controls the view. */
 @Component
 class HtmlReportRenderer : ReportRenderer {
@@ -26,15 +31,13 @@ class HtmlReportRenderer : ReportRenderer {
             <title>IndexBudget · Отчёт анализа</title><style>""")
         append(stylesheet)
         append("""</style></head><body><a class="skip" href="#main">К содержанию</a>
-            <header class="topbar"><a class="brand" href="#overview"><span class="brand-icon" aria-hidden="true">▥</span>IndexBudget</a>
-            <span class="top-caption">POSTGRESQL / АНАЛИЗ ИНДЕКСОВ</span><span class="offline">Автономный отчёт</span></header>
-            <div class="layout"><aside><div class="nav-label">В ЭТОМ ОТЧЁТЕ</div><nav aria-label="Разделы отчёта">
-            <a href="#overview"><span>01</span>Обзор</a><a href="#comparison"><span>02</span>Robust и mean</a>
-            <a href="#profiles"><span>03</span>Профили нагрузки</a><a href="#indexes"><span>04</span>Индексы и бюджеты</a>
-            <a href="#queries"><span>05</span>Запросы и планы</a><a href="#search"><span>06</span>Границы поиска</a>
-            <a href="#run"><span>07</span>Данные запуска</a>
-            <a href="#provenance"><span>08</span>Происхождение нагрузки</a></nav>
-            <div class="nav-note">Planner cost — оценка планировщика. Фактическое время запросов здесь не измеряется.</div></aside>
+            <header class="topbar"><a class="brand" href="#overview">IndexBudget</a>
+            <span class="top-caption">PostgreSQL · анализ индексов</span><span class="offline">Автономный отчёт</span></header>
+            <div class="layout"><aside><nav aria-label="Разделы отчёта">
+            <a href="#overview">Вывод</a><a href="#queries">Влияние на запросы</a>
+            <a href="#indexes">Ресурсы и индексы</a><a href="#provenance">Исходная нагрузка</a>
+            <a href="#method">Методика и ограничения</a><a href="#next">Следующие шаги</a>
+            </nav></aside>
             <main id="main">""")
         append(renderContent(report))
         append("</main></div><script>")
@@ -42,131 +45,180 @@ class HtmlReportRenderer : ReportRenderer {
         append("</script></body></html>")
     }
 
+    /** Render saved data as independently reusable sections; no metric or query evaluation takes place here. */
+    fun renderSection(report: AnalysisReport, section: HtmlReportSection, prefix: String = "", includeCandidateCatalog: Boolean = true): String =
+        prefixContent(buildString {
+            when (section) {
+                HtmlReportSection.OVERVIEW -> overview(report)
+                HtmlReportSection.QUERIES -> queries(report)
+                HtmlReportSection.QUERY_DETAILS -> { this.section("query-details", "SQL и планы", ""); queryDetails(report); append("</section>") }
+                HtmlReportSection.PROFILES -> profiles(report)
+                HtmlReportSection.INDEXES -> indexes(report)
+                HtmlReportSection.INDEX_DETAILS -> { this.section("index-details", "Каталог индексов и DDL", ""); indexDetails(report); append("</section>") }
+                HtmlReportSection.PROVENANCE -> provenance(report)
+                HtmlReportSection.METHOD -> method(report)
+                HtmlReportSection.RESOURCE_MODEL -> resourceModel()
+                HtmlReportSection.SEARCH -> search(report, includeCandidateCatalog)
+                HtmlReportSection.RUN -> run(report)
+                HtmlReportSection.COMPARISON -> comparison(report)
+                HtmlReportSection.MANUAL_COMPARISON -> manualComparison(report, includeCandidateCatalog)
+                HtmlReportSection.NEXT -> nextSteps()
+            }
+        }, prefix)
+
     /** The same saved report, embedded without document chrome; ordinal prefixes isolate local anchors. */
-    fun renderContent(report: AnalysisReport, prefix: String = ""): String {
-        require(prefix.isEmpty() || prefix.matches(Regex("variant-[1-5]-")))
-        val content = buildString {
-            overview(report)
-            comparison(report)
+    fun renderContent(report: AnalysisReport, prefix: String = ""): String = prefixContent(buildString {
+        overview(report)
+        queries(report, includeDetails = true)
+        if (!singleProfile(report)) profiles(report)
+        indexes(report, includeDetails = true)
+        provenance(report)
+        method(report, includeComparison = true)
+        if (report.manualComparison != null) {
+            append("<details class=\"technical-section\"><summary>Ручной набор индексов</summary>")
             manualComparison(report)
-            profiles(report)
-            indexes(report)
-            queries(report)
-            search(report)
-            run(report)
-            provenance(report)
-            append("""<footer>IndexBudget · Спецификация """)
-            append(h(report.specVersion))
-            append(" · Оценки помогают выбрать набор для отдельной физической проверки.</footer>")
+            append("</details>")
         }
+        append("<details class=\"technical-section\"><summary>Завершение поиска, лимиты и диагностика</summary>")
+        search(report)
+        append("</details><details class=\"technical-section\"><summary>Данные запуска</summary>")
+        run(report)
+        append("</details>")
+        nextSteps()
+        append("<footer>IndexBudget · Спецификация ").append(h(report.specVersion)).append(" · Автономный отчёт</footer>")
+    }, prefix)
+
+    private fun prefixContent(content: String, prefix: String): String {
+        require(prefix.isEmpty() || prefix.matches(Regex("variant-[1-5]-")))
         if (prefix.isEmpty()) return content
         // Only renderer-owned HTML attributes are rewritten; SQL/text has already been escaped.
-        return content.replace(Regex("""(\s(?:id|for)=")([^"]+)(")""")) {
+        return content.replace(Regex("""(\s(?:id|for|data-copy)=")([^"]+)(")""")) {
             it.groupValues[1] + prefix + it.groupValues[2] + it.groupValues[3]
         }.replace(Regex("""(\shref="#)([^"]+)(")""")) {
-            it.groupValues[1] + prefix + it.groupValues[2] + it.groupValues[3]
+            it.groupValues[1] + (if (it.groupValues[2].startsWith("series-")) "" else prefix) + it.groupValues[2] + it.groupValues[3]
         }
     }
 
-    private fun StringBuilder.manualComparison(report: AnalysisReport) {
+    private fun StringBuilder.manualComparison(report: AnalysisReport, includeCandidateCatalog: Boolean = true) {
         val manual = report.manualComparison ?: return
         append("<section id=\"manual-comparison\"><h2>Ручной набор индексов</h2>")
         append("<p>Отдельная оценка вне автоматического shortlist. Best robust и best mean относятся к обычному поиску.</p>")
         append("<p>Статус: ").append(h(manual.status.wireValue)).append(". Допустимость: ")
         text(if (manual.status != ManualComparisonStatus.COMPLETED) "Не установлена" else if (manual.admissible) "Допустим" else "Нарушает ограничения")
         append(".</p>")
+        if (!includeCandidateCatalog && manual.candidates.isNotEmpty()) {
+            append("<p><a href=\"#series-index-catalog\">DDL ручного набора в общем каталоге</a></p>")
+        }
         for (candidate in manual.candidates) {
-            append("<pre>").append(h(candidate.ddl ?: "Нет данных")).append("</pre><p>Оценка размера: ")
+            if (includeCandidateCatalog) append("<pre>").append(h(candidate.ddl ?: "Нет данных")).append("</pre>")
+            append("<p>Оценка размера: ")
             text(candidate.estimatedBytes?.toString() ?: "Нет данных")
             append(" байт; с запасом: ").append(h(candidate.budgetedBytes ?: "Нет данных")).append("; write proxy: ")
             text(candidate.writeUnitsPerHour?.toString() ?: "Нет данных")
             append("</p>")
         }
         manual.metrics?.let { value ->
-            append("<p>M: ").append(h(value.meanRatio ?: "Нет данных")).append("; R: ").append(h(value.worstRatio ?: "Нет данных")).append("</p>")
-            append("<table><thead><tr><th>Профиль</th><th>Baseline cost</th><th>Ручной cost</th><th>Отношение</th></tr></thead><tbody>")
+            if (singleProfile(report)) {
+                append("<p>Отношение стоимости к baseline: ").append(h(value.meanRatio ?: "Нет данных")).append("</p>")
+            } else {
+                append("<p>M: ").append(h(value.meanRatio ?: "Нет данных")).append("; R: ").append(h(value.worstRatio ?: "Нет данных")).append("</p>")
+            }
+            append("<div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Сравнение ручного набора\"><table><thead><tr><th>Профиль</th><th>Baseline cost</th><th>Ручной cost</th><th>Отношение</th></tr></thead><tbody>")
             for (profile in value.profiles) {
                 append("<tr><td>").append(h(profile.profileId)).append("</td><td>").append(h(profile.baselineCost))
                 append("</td><td>").append(h(profile.cost)).append("</td><td>").append(h(profile.ratio ?: "Нет данных")).append("</td></tr>")
             }
-            append("</tbody></table>")
+            append("</tbody></table></div>")
         }
         for (violation in manual.budgetViolations) append("<p>Нарушение бюджета: ").append(h(violation.name)).append("</p>")
         for (violation in manual.evaluationViolations) append("<p>").append(h(violation.code.name)).append("</p>")
         manual.error?.let { append("<p>").append(h(it.code.name)).append(": ").append(h(it.message)).append("</p>") }
         for (decision in manual.decisions) append("<p>").append(h(decision.reason.name)).append(": ").append(h(decision.details)).append("</p>")
-        append("<table><thead><tr><th>SQL ID</th><th>Baseline</th><th>Ручной cost</th><th>Регрессия</th></tr></thead><tbody>")
+        append("<div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Сравнение ручного набора\"><table><thead><tr><th>SQL ID</th><th>Baseline</th><th>Ручной cost</th><th>Регрессия</th></tr></thead><tbody>")
         for (query in manual.queryComparisons) {
             append("<tr><td>").append(h(query.queryId)).append("</td><td>").append(h(query.baselineCost ?: "Нет данных"))
             append("</td><td>").append(h(query.selectedCost ?: "Нет данных")).append("</td><td>")
-            text(if (query.regression == true) "Да" else "Нет")
+            text(when (query.regression) { true -> "Да"; false -> "Нет"; null -> "Нет данных" })
             append("</td></tr>")
         }
-        append("</tbody></table><p>Planner cost не является временем; write proxy — модель, не измерение записи.</p></section>")
+        append("</tbody></table></div><p>Planner cost не является временем; write proxy — модель, не измерение записи.</p></section>")
     }
 
     private fun StringBuilder.overview(report: AnalysisReport) {
         val result = report.result
-        val selected = result.selected
-        val metrics = selected?.metrics
         val summary = report.summary
-        append("<section id=\"overview\" class=\"overview\"><div class=\"eyebrow\">ОТЧЁТ АНАЛИЗА / V")
-        append(h(report.schemaVersion)).append("</div><div class=\"title-row\"><h1>Индексы под вашу нагрузку</h1>")
+        val selected = result.selected
+        append("<section id=\"overview\" class=\"overview\"><div class=\"title-row\"><h1>Результат анализа</h1>")
         badge(statusLabel(result.status), result.status.name.lowercase(Locale.ROOT))
-        append("</div><p class=\"lead\">")
-        text(when (result.status) {
-            RunStatus.COMPLETED -> "Ограниченный поиск завершён. Сохранён лучший найденный набор для выбранного критерия."
-            RunStatus.PARTIAL -> "Поиск остановлен досрочно. Сохранён лучший полный допустимый результат из исследованного пула."
-            RunStatus.FAILED -> "Анализ завершился ошибкой. Рекомендованный набор отсутствует."
-        })
-        append("</p>")
+        append("</div>")
         if (report.environment.applicationVersion == "fixture") {
-            append("<p class=\"notice demo\"><strong>Демонстрационные данные.</strong> Синтетическая фикстура для проверки отчёта; это не результат анализа PostgreSQL.</p>")
+            append("<p class=\"demo muted\">Демонстрационные данные · синтетическая проверка представления.</p>")
         }
-        append("<div class=\"recommendation\"><h2>Рекомендация</h2>")
+        append("<div class=\"recommendation\"><h2>Предлагаемые индексы</h2>")
         when {
-            selected == null -> append("<p>Пригодный результат не сохранён. Индексы не предлагаются.</p>")
-            selected.evaluation.candidateIds.isEmpty() -> append("<p>Выбран пустой набор: новые индексы не предлагаются. Baseline включает уже существующие реальные индексы.</p>")
+            selected == null -> append("<p>Рекомендация отсутствует: пригодный результат не сохранён.</p>")
+            selected.evaluation.candidateIds.isEmpty() -> append("<p>Выбран пустой набор. Новые индексы не предлагаются.</p>")
             else -> {
                 append("<ul class=\"recommended-indexes\">")
-                selected.evaluation.candidateIds.forEach { id ->
+                selected.evaluation.candidateIds.forEachIndexed { index, id ->
                     val candidate = report.candidates.candidates.firstOrNull { it.id == id }
                     append("<li><a href=\"#indexes\"><code>")
-                    text(candidate?.let(::shortDefinition) ?: id)
+                    text(candidate?.let { shortDefinition(it, report) } ?: "Индекс ${index + 1} · определение неизвестно")
                     append("</code></a></li>")
                 }
-                append("</ul><p class=\"muted\">Эффект ниже относится ко всему выбранному набору.</p>")
+                append("</ul>")
             }
         }
-        append("</div><div class=\"metric-grid\">")
-        metric("Снижение взвешенной стоимости планов", effectPercent(summary.meanEffect), "Средний эффект · оценка планировщика", "accent")
-        metric("Худший профиль · после", normalized(summary.worstRatio, metrics?.baselineMeanCost), "До = 100 · меньше — лучше; не гарантия для каждого SQL")
-        metric("Место с запасом", mib(summary.budgetUsage?.budgetedBytes), "Бюджет: ${mib(summary.budgetLimits?.storageBudgetBytes)}")
-        metric("Выбранные индексы", number(summary.budgetUsage?.indexCount), "Лимит: ${number(summary.budgetLimits?.maxIndexes)}")
-        append("</div>")
-        when (val count = summary.regressedQueryCount) {
-            null -> append("<p class=\"notice\">Регрессии SQL: нет данных.</p>")
-            0 -> append("<p class=\"muted\">SQL с ростом оценки планировщика: 0. Фактическое время запросов не измерялось.</p>")
-            else -> append("<p class=\"notice error\"><strong>Есть регрессии SQL: ").append(h(count))
-                .append(".</strong> Улучшение набора не гарантирует улучшение каждого запроса. <a href=\"#queries\">Посмотреть ухудшения и планы →</a></p>")
+        append("</div><p class=\"effect-sentence\">Оценочная стоимость выбранных запросов с учётом частот: <strong class=\"")
+            .append(effectStyle(summary.meanEffect)).append("\">")
+        text(if (result.selected == null) "Эффект не определён" else effectLabel(summary.meanEffect))
+        append("</strong> по сравнению с существующими индексами.</p>")
+        append("<p class=\"muted baseline-note\"><strong>Planner cost</strong> — оценка затрат PostgreSQL, не время выполнения. Снижение cost не гарантирует ускорения.</p>")
+        append("<dl class=\"summary-facts\">")
+        entry("Регрессии SQL", summary.regressedQueryCount?.let { "$it из ${queryCount(report) ?: "нет данных"}" } ?: "Нет данных")
+        append("</dl>")
+        if (summary.regressedQueryCount != null && summary.regressedQueryCount > 0) {
+            append("<p class=\"error\"><a href=\"#queries\">Посмотреть ухудшения запросов</a></p>")
         }
         if (result.status != RunStatus.COMPLETED) {
-            append("<p class=\"notice warning\">Причина остановки: ")
-            text(summary.stopReasons.joinToString { stopLabel(it) }.ifEmpty { "Нет данных" })
+            append("<p class=\"notice warning\">")
+            text(if (result.status == RunStatus.PARTIAL) "Поиск остановлен досрочно. Сохранён лучший полный допустимый результат. " else "Анализ завершился ошибкой. ")
+            text(summary.stopReasons.joinToString { stopLabel(it) })
             summary.errors.forEach { append("<br>").append(h(it.code.name)).append(": ").append(h(it.message)) }
             append("</p>")
         }
-        append("<details><summary>Как читать метрики</summary><dl class=\"values\">")
-        entry("Худшая нормированная стоимость", setRatio(metrics, summary.worstRatio))
-        entry("Средняя нормированная стоимость", setRatio(metrics, summary.meanEffect.ratio))
-        append("</dl><p>M = C_mean / B_mean — отношение ожидаемых стоимостей, а не среднее профильных отношений. ")
-        append("R = max(C_s / B_s) — худшее отношение среди профилей с положительным baseline. ")
-        append("На графиках baseline = 100; ниже 100 — снижение оценки планировщика, выше — рост. ")
-        append("«Нет данных» и «Неприменимо» не означают ноль. Cost не является временем или SLA. Цена устойчивости = C_mean(best_robust) − C_mean(best_mean).</p></details></section>")
+        workloadContext(report)
+        append("</section>")
+    }
+
+    private fun StringBuilder.workloadContext(report: AnalysisReport) {
+        append("<div class=\"workload-context\"><h2>Основа вывода</h2><p>")
+        text("SQL: ${queryCount(report) ?: "нет данных"} · профилей частот: ${report.input?.profiles?.size ?: "нет данных"}. ")
+        val provenance = report.workloadProvenance
+        if (provenance == null) {
+            append("Источник, период и охват неизвестны; репрезентативность не подтверждена.</p>")
+        } else {
+            append("Источник — pg_stat_statements, разница снимков.</p><ul class=\"observation-windows\">")
+            provenance.windows.forEach { window ->
+                append("<li><span>").append(h(window.profileId)).append("</span> · <span class=\"quantity\">")
+                text(windowDuration(window))
+                append("</span> · ").append(if (window.complete) "полное наблюдение" else "<strong class=\"warning-text\">неполное наблюдение</strong>")
+                append(" · выбрано вызовов: ").append(h(number(window.coverage.selectedCalls))).append("</li>")
+            }
+            append("</ul><p class=\"muted\">Репрезентативность нагрузки требует отдельной проверки. ")
+            append("<a href=\"#provenance\">Интервалы, охват и историческое время</a></p>")
+        }
+        val warnings = (report.result.diagnostics.warnings + report.candidates.diagnostics.warnings).distinct()
+        if (warnings.isNotEmpty()) {
+            append("<p class=\"warning-text\">Ограничения данных: ")
+            text(warnings.joinToString(" ") { it.message })
+            append(" <a href=\"#search\">Подробности</a></p>")
+        }
+        append("</div>")
     }
 
     private fun StringBuilder.comparison(report: AnalysisReport) {
-        section("comparison", "02", "Устойчивость или средний эффект", "Два критерия, один исследованный пул")
+        section("comparison", "Устойчивость или средний эффект", "Два критерия, один исследованный пул")
         append("<p>Лучшие найденные решения из одного общего пула полностью оценённых допустимых наборов. Поиском управлял <strong>")
         text(report.result.selectedObjective.name.lowercase(Locale.ROOT))
         append("</strong>. Область сравнения: <code>").append(h(report.comparisonScope.name.lowercase(Locale.ROOT))).append("</code>.</p>")
@@ -181,22 +233,19 @@ class HtmlReportRenderer : ReportRenderer {
             })
             append("</p>")
         }
-        val chartScale = listOfNotNull(robust?.metrics?.meanRatio, robust?.metrics?.worstRatio,
-            mean?.metrics?.meanRatio, mean?.metrics?.worstRatio, 1.0).max()
-        append("<p class=\"muted\">До = 100. Средняя стоимость учитывает веса профилей; худший профиль — наименее выгодное отношение к baseline. Общая шкала для обоих наборов.</p>")
         append("<div class=\"comparison-grid\">")
         if (report.summary.incumbentsCoincide == true) {
-            configuration("best_robust best_mean", "Robust = Mean", "Один набор для обоих критериев", robust, true, chartScale)
+            configuration("best_robust best_mean", "Robust = Mean", "Один набор для обоих критериев", robust, true)
         } else {
-            configuration("best_robust", "Robust", "Сдерживает худшее отношение к baseline", robust, report.result.selectedObjective == Objective.ROBUST, chartScale)
-            configuration("best_mean", "Mean", "Минимизирует ожидаемую стоимость", mean, report.result.selectedObjective == Objective.MEAN, chartScale)
+            configuration("best_robust", "Robust", "Худшее отношение к исходной стоимости", robust, report.result.selectedObjective == Objective.ROBUST)
+            configuration("best_mean", "Mean", "Средняя взвешенная стоимость", mean, report.result.selectedObjective == Objective.MEAN)
         }
         append("</div><div class=\"price\"><div><strong>Цена устойчивости</strong><p>Дополнительная средняя оценка планировщика при выборе robust вместо mean</p></div><strong class=\"price-value\">")
         text(number(report.priceOfRobustness))
         append("</strong></div><p class=\"muted\">Это сравнение найденных решений, а не два независимых поиска. Гарантии глобального оптимума нет.</p></section>")
     }
 
-    private fun StringBuilder.configuration(key: String, title: String, description: String, value: EvaluatedConfiguration?, selected: Boolean, chartScale: Double) {
+    private fun StringBuilder.configuration(key: String, title: String, description: String, value: EvaluatedConfiguration?, selected: Boolean) {
         append("<article class=\"configuration")
         if (selected) append(" chosen")
         append("\" data-configuration=\"").append(key).append("\"><div class=\"title-row\"><h3>").append(title).append("</h3>")
@@ -206,8 +255,6 @@ class HtmlReportRenderer : ReportRenderer {
             append("<p>Нет сохранённого решения.</p></article>")
             return
         }
-        ratioChart(listOf("Средняя стоимость" to value.metrics.meanRatio, "Худший профиль" to value.metrics.worstRatio),
-            value.metrics.baselineMeanCost, chartScale)
         append("<details><summary>Набор, расходы и точные метрики</summary><dl class=\"values\">")
         entry("Худшее отношение R", setRatio(value.metrics, value.metrics.worstRatio))
         entry("Среднее отношение M", setRatio(value.metrics, value.metrics.meanRatio))
@@ -227,91 +274,122 @@ class HtmlReportRenderer : ReportRenderer {
     }
 
     private fun StringBuilder.profiles(report: AnalysisReport) {
-        section("profiles", "03", "Эффект по профилям", "Метрики выбранного набора")
-        val metrics = report.result.selected?.metrics
-        val profileIds = (report.input?.profiles.orEmpty().map { it.id } + metrics?.profiles.orEmpty().map { it.profileId }).distinct()
-        append("<p>Нормированный вес задаёт вклад в среднюю стоимость. Каждый профиль участвует в худшем критерии независимо от веса.</p>")
-        append("<p class=\"muted\">До = 100 · после — оценка планировщика для выбранного набора. Общая шкала для профилей.</p>")
-        val chartScale = maxOf(1.0, report.profileComparisons.mapNotNull { it.selected.ratio }.maxOrNull() ?: 1.0)
-        append("<div class=\"profile-charts\">")
-        report.profileComparisons.forEach { series ->
-            append("<article class=\"profile-chart\"><h3>").append(h(series.id)).append("</h3>")
-            ratioChart(listOf("После" to series.selected.ratio), series.selected.baselineCost, chartScale)
-            append("<p class=\"muted\">Снижение стоимости: ").append(h(effectPercent(series.selected))).append("</p></article>")
+        if (singleProfile(report)) return
+        section("profiles", "Стоимость по профилям нагрузки", "С учётом частот каждого профиля; меньше — лучше")
+        val series = report.profileComparisons
+        append("<div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Стоимость по профилям\"><table class=\"profile-table\"><thead><tr>")
+        listOf("Профиль", "До", "С набором", "Изменение").forEach { append("<th scope=\"col\">").append(h(it)).append("</th>") }
+        append("</tr></thead><tbody>")
+        series.forEach { profile ->
+            append("<tr data-profile-id=\"").append(h(profile.id))
+                .append("\" data-baseline=\"").append(h(profile.selected.baselineCost ?: profile.baseline.baselineCost ?: ""))
+                .append("\" data-cost=\"").append(h(profile.selected.cost ?: ""))
+                .append("\" data-gain=\"").append(h(profile.selected.gainPercent ?: ""))
+                .append("\"><th scope=\"row\">").append(h(profile.id)).append("</th>")
+            cell(compactNumber(profile.selected.baselineCost ?: profile.baseline.baselineCost))
+            cell(compactNumber(profile.selected.cost))
+            cell(effectLabel(profile.selected))
+            append("</tr>")
         }
-        append("</div><details><summary>Точные стоимости, веса и формулы</summary>")
-        table(listOf("Профиль", "Вес", "Baseline cost", "Final cost", "Отношение", "Выигрыш, cost", "Выигрыш, %")) {
-            profileIds.forEach { id ->
-                val profile = metrics?.profiles?.firstOrNull { it.profileId == id }
-                row(id, number(profile?.normalizedWeight), number(profile?.baselineCost), number(profile?.cost),
-                    ratio(profile?.ratio, profile?.baselineCost), number(profile?.gain), percent(profile?.gainPercent, profile?.baselineCost))
+        append("</tbody></table></div>")
+        if (series.isEmpty()) append("<p>Профили отсутствуют в сохранённой модели.</p>")
+        append("<details><summary>Точные стоимости и веса</summary>")
+        profileMetrics(report)
+        append("</details></section>")
+    }
+
+    private fun StringBuilder.profileMetrics(report: AnalysisReport) {
+        table(listOf("Профиль", "Вес", "Baseline cost", "Selected cost", "Отношение", "Выигрыш, cost", "Выигрыш, %")) {
+            report.profileComparisons.forEach { profile ->
+                val effect = profile.selected
+                row(profile.id, number(report.result.selected?.metrics?.profiles?.firstOrNull { it.profileId == profile.id }?.normalizedWeight ?: report.normalizedProfileWeights[profile.id]),
+                    number(effect.baselineCost ?: profile.baseline.baselineCost), number(effect.cost), ratio(effect.ratio, effect.baselineCost),
+                    number(effect.gain), percent(effect.gainPercent, effect.baselineCost))
             }
         }
-        append("<p class=\"muted\">C_s = сумма частота SQL × cost SQL; снижение = baseline − после.</p></details>")
-        append("<details><summary>Сравнение всех сохранённых наборов по профилям</summary>")
-        table(listOf("Профиль", "Baseline cost", "Selected cost", "Best robust cost", "Best mean cost")) {
-            report.profileComparisons.forEach { series ->
-                row(series.id, number(series.baseline.cost), number(series.selected.cost),
-                    number(series.bestRobust.cost), number(series.bestMean.cost))
-            }
-        }
-        append("</details>")
-        if (profileIds.isEmpty()) append("<p class=\"empty\">Профили отсутствуют в сохранённой модели.</p>")
-        append("<p class=\"muted\">Cost — единицы планировщика с учётом частот. Это не миллисекунды, не измеренное ускорение и не SLA. При нулевом baseline отношение и процент неприменимы.</p></section>")
+        if (report.profileComparisons.isEmpty()) append("<p>Профили отсутствуют в сохранённой модели.</p>")
     }
 
-    /** Chart coordinates only: domain ratios and budget totals are never recomputed here. */
-    private fun StringBuilder.ratioChart(values: List<Pair<String, Double?>>, baseline: Double?, scale: Double) {
-        append("<div class=\"ratio-chart\">")
-        chartBar("До", if (baseline != null && baseline > 0) 1.0 else null, scale, baseline, "baseline")
-        values.forEach { (label, value) -> chartBar(label, value, scale, baseline, if (value != null && value > 1) "regressed" else "after") }
-        append("</div>")
-    }
-
-    private fun StringBuilder.chartBar(label: String, value: Double?, scale: Double, baseline: Double?, style: String) {
-        append("<div class=\"chart-row\"><span>").append(h(label)).append("</span><div class=\"chart-track\" aria-hidden=\"true\">")
-        if (value != null) append("<span class=\"chart-fill ").append(style).append("\" style=\"width:")
-            .append(width(value, scale)).append("%\"></span>")
-        append("</div><strong>").append(h(normalized(value, baseline))).append("</strong></div>")
-    }
-
-    private fun normalized(value: Double?, baseline: Double?): String = when {
-        value != null -> number(BigDecimal.valueOf(value).movePointRight(2))
-        baseline == 0.0 -> "Неприменимо: нулевой baseline"
-        else -> "Нет данных"
-    }
-
-    private fun width(value: Number, limit: Number): String = BigDecimal(value.toString())
-        .divide(BigDecimal(limit.toString()), 8, RoundingMode.HALF_EVEN)
-        .movePointRight(2).coerceIn(BigDecimal.ZERO, BigDecimal(100)).stripTrailingZeros().toPlainString()
-
-    private fun StringBuilder.budgetBar(label: String, value: Number?, limit: Number?) {
-        append("<div class=\"budget-meter\"><span>").append(h(label)).append("</span>")
-        when {
-            value == null || limit == null -> append("<span>Нет данных · заполнение неизвестно</span>")
-            limit.toDouble() == 0.0 -> append("<span>Нулевой лимит · ").append(if (value.toDouble() == 0.0) "расход 0" else "превышен").append("</span>")
-            else -> {
-                append("<span class=\"chart-track\" aria-hidden=\"true\"><span class=\"chart-fill after\" style=\"width:")
-                    .append(width(value, limit)).append("%\"></span></span>")
-                append("<span>").append(h(number(value))).append(" / ").append(h(number(limit))).append("</span>")
-            }
-        }
-        append("</div>")
-    }
-
-    private fun shortDefinition(candidate: IndexCandidate): String =
-        "${tableName(candidate.definition.table)}(" + candidate.definition.keys.joinToString { it.column.name } + ")" +
+    private fun shortDefinition(candidate: IndexCandidate, report: AnalysisReport): String =
+        "${shortTable(candidate.definition.table, report)}(" + candidate.definition.keys.joinToString { it.column.name } + ")" +
             candidate.definition.includedColumns.takeIf { it.isNotEmpty() }?.joinToString(", ", " INCLUDE (", ")") { it.name }.orEmpty()
 
     private fun effectPercent(effect: CostEffect): String = when {
-        effect.gainPercent != null -> "${number(effect.gainPercent)} %"
+        effect.gainPercent != null -> percentDisplay(effect.gainPercent)
         effect.relativeStatus == RelativeValueStatus.ZERO_BASELINE -> "Неприменимо: нулевой baseline"
         effect.relativeStatus == RelativeValueStatus.OUT_OF_RANGE -> "Вне числового диапазона"
         else -> "Нет данных"
     }
 
+    private fun effectLabel(effect: CostEffect): String = when {
+        effect.gainPercent == null && effect.relativeStatus == RelativeValueStatus.ZERO_BASELINE -> "Процент неприменим: нулевой baseline"
+        effect.gainPercent == null -> effectPercent(effect)
+        effect.gain == 0.0 -> "Без изменения"
+        kotlin.math.abs(effect.gainPercent) < 0.05 -> if ((effect.gain ?: 0.0) > 0) "Снижение менее 0,1%" else "Рост менее 0,1%"
+        effect.gainPercent > 0 -> "Снижение на ${percentDisplay(effect.gainPercent)}"
+        else -> "Рост на ${percentDisplay(kotlin.math.abs(effect.gainPercent))}"
+    }
+
+    private fun effectStyle(effect: CostEffect) = when {
+        effect.gain == null || effect.gain == 0.0 -> ""
+        effect.gain > 0 -> "improvement"
+        else -> "regressed-text"
+    }
+
+    private fun percentDisplay(value: Double): String = when {
+        value != 0.0 && kotlin.math.abs(value) < 0.05 -> if (value > 0) "< 0,1%" else "−< 0,1%"
+        else -> compactNumber(value) + "%"
+    }
+
+    private fun compactNumber(value: Number?): String {
+        if (value == null) return "Нет данных"
+        val rounded = BigDecimal(value.toString()).setScale(1, RoundingMode.HALF_UP)
+        if (value.toDouble() != 0.0 && rounded.signum() == 0) return if (value.toDouble() > 0) "< 0,1" else "−< 0,1"
+        if (rounded.abs() >= BigDecimal("1000000000")) {
+            val symbols = DecimalFormatSymbols(Locale.ROOT).apply { decimalSeparator = ',' }
+            return DecimalFormat("0.#E0", symbols).format(value).replace('E', 'e')
+        }
+        return number(rounded)
+    }
+
+    private fun readableSize(bytes: Long?): String {
+        if (bytes == null) return "Нет данных"
+        val (divisor, unit) = when {
+            bytes >= 1_073_741_824 -> 1_073_741_824L to "GiB"
+            bytes >= 1_048_576 -> 1_048_576L to "MiB"
+            bytes >= 1_024 -> 1_024L to "KiB"
+            else -> 1L to "байт"
+        }
+        return compactNumber(BigDecimal.valueOf(bytes).divide(BigDecimal.valueOf(divisor))) + "\u00a0" + unit
+    }
+
+    private fun shortTable(table: TableRef, report: AnalysisReport): String {
+        val ambiguous = report.candidates.candidates.map { it.definition.table }.distinct()
+            .any { it.name == table.name && it.schema != table.schema }
+        return if (ambiguous) tableName(table) else table.name
+    }
+
+    private fun windowDuration(window: ObservationWindow): String {
+        val duration = java.time.Duration.between(window.startedAt, window.finishedAt)
+        val millis = BigDecimal.valueOf(duration.seconds).movePointRight(3) + BigDecimal.valueOf(duration.nano.toLong()).movePointLeft(6)
+        return when {
+            millis >= BigDecimal(60_000) -> compactNumber(millis.divide(BigDecimal(60_000), 6, RoundingMode.HALF_UP)) + "\u00a0мин"
+            millis >= BigDecimal(1_000) -> compactNumber(millis.movePointLeft(3)) + "\u00a0с"
+            else -> compactNumber(millis) + "\u00a0мс"
+        }
+    }
+
     private fun StringBuilder.provenance(report: AnalysisReport) {
-        section("provenance", "08", "Происхождение нагрузки", "Наблюдения и примеры параметров")
+        section("provenance", "Исходные запросы и частоты", "")
+        append("<p>Профиль нагрузки — частоты выполнения SQL для заданного периода или сценария.</p>")
+        val profiles = report.input?.profiles.orEmpty()
+        table(listOf("SQL") + profiles.map { "${it.id}, вызовов/час" }) {
+            report.input?.queries.orEmpty().forEachIndexed { index, query ->
+                row(*(listOf("SQL ${index + 1}") + profiles.map { number(it.callsPerHour[query.id]) }).toTypedArray())
+            }
+        }
+        append("<p class=\"muted\">Частоты в пересчёте на час; это не число реально наблюдавшихся вызовов.</p>")
+        writeProfile(report)
         val provenance = report.workloadProvenance
         if (provenance == null) {
             append("<p>Происхождение не задано. Для ручного workload источник и охват наблюдений неизвестны.</p></section>")
@@ -322,14 +400,14 @@ class HtmlReportRenderer : ReportRenderer {
         entry("Идентификатор источника", provenance.sourceId.toString())
         entry("Правило отбора", provenance.selectionRule)
         append("</dl><p>Охват относится к доступным полным записям окна, а не ко всему трафику сервера. Неизвестные значения не заменяются нулём.</p>")
-        table(listOf("Профиль", "Начало (UTC)", "Конец (UTC)", "Полнота наблюдения", "Вызовы: выбрано / доступно")) {
+        table(listOf("Профиль", "Начало (UTC)", "Конец (UTC)", "Длительность", "Полнота наблюдения", "Вызовы: выбрано / доступно")) {
             provenance.windows.forEach { window ->
-                row(window.profileId, window.startedAt.toString(), window.finishedAt.toString(),
+                row(window.profileId, window.startedAt.toString(), window.finishedAt.toString(), windowDuration(window),
                     if (window.complete) "Полное" else "Неполное",
                     "${number(window.coverage.selectedCalls)} / ${number(window.coverage.availableCalls)}")
             }
         }
-        append("<h3>Историческое время выполнения</h3><p>Измерено до рекомендации, в миллисекундах. Эти данные не являются прогнозом времени с новыми индексами и не пересчитываются из planner cost.</p>")
+        append("<details><summary>Историческое время и примеры SQL</summary><h3>Историческое время выполнения</h3><p>Измерено до рекомендации, в миллисекундах. Эти данные не являются прогнозом времени с новыми индексами и не пересчитываются из planner cost.</p>")
         table(listOf("Профиль", "Выбранные записи, мс", "Доступные полные записи, мс")) {
             provenance.windows.forEach { window ->
                 row(window.profileId, number(window.coverage.selectedExecTimeMillis), number(window.coverage.availableExecTimeMillis))
@@ -338,72 +416,89 @@ class HtmlReportRenderer : ReportRenderer {
         append("<h3>Примеры SQL</h3><p>Пример с литералами представляет запись статистики; его план не характеризует все возможные значения параметров.</p>")
         table(listOf("SQL", "Происхождение примера")) {
             provenance.queryExamples.forEach { example ->
-                row(example.queryId, when (example.source) {
+                row(queryLabel(example.queryId, report), when (example.source) {
                     QueryExampleSource.USER_SUPPLIED_LITERALS -> "Репрезентативные литералы пользователя"
                     QueryExampleSource.ORIGINAL_LITERAL_SQL -> "Исходный SQL с литералами"
                 })
             }
         }
+        append("</details></section>")
+    }
+
+    private fun StringBuilder.indexes(report: AnalysisReport, includeDetails: Boolean = false) {
+        section("indexes", "Ресурсы и рекомендуемые индексы", "")
+        val usage = report.summary.budgetUsage
+        val constraints = report.summary.budgetLimits
+        append("<div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Расход ресурсов\"><table class=\"resource-table\"><thead><tr><th scope=\"col\">Ресурс</th><th scope=\"col\">Оценка для набора</th><th scope=\"col\">Ограничение</th></tr></thead><tbody>")
+        append("<tr><th scope=\"row\">Место</th><td><span class=\"quantity\">").append(h(readableSize(usage?.budgetedBytes)))
+            .append("</span> с запасом<span class=\"cell-note\">HypoPG: ").append(h(readableSize(usage?.estimatedBytes))).append("</span></td><td>")
+        if (constraints?.storageBudgetBytes == Long.MAX_VALUE) {
+            append("<a href=\"#resource-metrics\">Точное значение лимита</a>")
+        } else text(readableSize(constraints?.storageBudgetBytes))
+        append("</td></tr>")
+        row("Обслуживание при записи", compactNumber(usage?.writeUnitsPerHour) + " условных ед./ч", when {
+            constraints == null -> "Нет данных"
+            constraints.writeBudgetUnitsPerHour == null -> "Бюджет записи отключён"
+            constraints.writeBudgetUnitsPerHour == 0.0 -> "Нулевой лимит · ${if (usage?.writeUnitsPerHour == 0.0) "расход 0" else "расход ${compactNumber(usage?.writeUnitsPerHour)}"}"
+            else -> compactNumber(constraints.writeBudgetUnitsPerHour) + " условных ед./ч"
+        })
+        row("Дополнительные индексы", number(usage?.indexCount), number(constraints?.maxIndexes))
+        append("</tbody></table></div>")
+        if (usage != null) {
+            append("<p>Размер оценён HypoPG; расход места учитывается с запасом ×").append(h(number(usage.sizeSafetyFactor)))
+                .append(". Фактический размер может отличаться.</p>")
+        }
+        append("<p class=\"muted\">Бюджет записи — лимит условных затрат на обслуживание новых индексов при изменении данных. <a href=\"#resource-model\">Как устроена модель</a></p>")
+        append("<details id=\"resource-metrics\"><summary>Точные расходы и лимиты</summary><dl class=\"values\">")
+        entry("Оценка HypoPG", storageSize(usage?.estimatedBytes))
+        entry("С запасом", storageSize(usage?.budgetedBytes))
+        entry("Бюджет места", storageSize(constraints?.storageBudgetBytes))
+        entry("Write units/час", number(usage?.writeUnitsPerHour))
+        entry("Лимит записи", constraints?.writeBudgetUnitsPerHour?.let(::number) ?: if (constraints == null) "Нет данных" else "Отключён")
+        entry("Число индексов / лимит", "${number(usage?.indexCount)} / ${number(constraints?.maxIndexes)}")
+        append("</dl></details>")
+        if (includeDetails) {
+            append("<h3>Каталог индексов и DDL</h3>")
+            indexDetails(report)
+        }
         append("</section>")
     }
 
-    private fun StringBuilder.indexes(report: AnalysisReport) {
-        section("indexes", "04", "Индексы и бюджеты", "Расходы выбранного набора")
-        val usage = report.summary.budgetUsage
-        val constraints = report.summary.budgetLimits
-        append("<div class=\"budget-grid\"><div class=\"budget-card\"><h3>Место</h3><p class=\"budget-number\">")
-        text(number(usage?.budgetedBytes))
-        append(" <small>/ ").append(h(number(constraints?.storageBudgetBytes))).append(" байт</small></p><p class=\"budget-mib\">")
-        text("${mib(usage?.budgetedBytes)} / ${mib(constraints?.storageBudgetBytes)}")
-        append("</p><p>Оценка HypoPG: ")
-        text(storageSize(usage?.estimatedBytes))
-        append(". Коэффициент запаса: ").append(h(number(usage?.sizeSafetyFactor))).append(".</p>")
-        budgetBar("Оценка HypoPG", usage?.estimatedBytes, constraints?.storageBudgetBytes)
-        budgetBar("С запасом", usage?.budgetedBytes, constraints?.storageBudgetBytes)
-        append("</div>")
-        append("<div class=\"budget-card\"><h3>Запись</h3><p class=\"budget-number\">").append(h(number(usage?.writeUnitsPerHour)))
-        append(" <small>write units/час</small></p><p>Бюджет: ")
-        text(if (constraints == null) "Нет данных" else constraints.writeBudgetUnitsPerHour?.let { "${number(it)} units/час" } ?: "Отключён")
-        append(".</p>")
-        if (constraints != null && constraints.writeBudgetUnitsPerHour == null) {
-            append("<p class=\"budget-state\">Лимит отключён · заполнение неприменимо</p>")
-        } else budgetBar("Write proxy", usage?.writeUnitsPerHour, constraints?.writeBudgetUnitsPerHour)
-        append("</div></div><p class=\"muted\">Место учитывается с запасом для каждого индекса. Write units — вспомогательная модель изменений строк × (число ключей + число INCLUDE-колонок), а не измеренное замедление INSERT/UPDATE/DELETE.</p>")
+    private fun StringBuilder.indexDetails(report: AnalysisReport) {
         val selected = report.result.selected
-        if (selected == null) {
-            append("<p class=\"empty\">Рекомендованные индексы отсутствуют: пригодный результат не сохранён.</p>")
-        } else if (selected.evaluation.candidateIds.isEmpty()) {
-            append("<p class=\"empty\">Пустой набор. Новые индексы не нужны для сохранённого решения.</p>")
-        } else {
-            selected.evaluation.candidateIds.forEach { id ->
+        when {
+            selected == null -> append("<p>Рекомендация отсутствует: пригодный результат не сохранён.</p>")
+            selected.evaluation.candidateIds.isEmpty() -> append("<p>Выбран пустой набор. Новые индексы не предлагаются.</p>")
+            else -> selected.evaluation.candidateIds.forEachIndexed { ordinal, id ->
                 append("<article class=\"index-card\" data-selected-index=\"").append(h(id)).append("\">")
                 val candidate = report.candidates.candidates.firstOrNull { it.id == id }
                 if (candidate == null) {
                     append("<p>Описание индекса отсутствует в модели.</p>")
+                    pre(id)
                 } else {
-                    append("<h3><code>").append(h(shortDefinition(candidate))).append("</code></h3><p class=\"muted\">ID: ").append(h(id)).append("</p>")
-                    append("<p class=\"muted\">").append(h(definition(candidate))).append("</p><dl class=\"values\">")
+                    append("<h3><code>").append(h(shortDefinition(candidate, report))).append("</code></h3>")
+                    append("<p class=\"muted\">Оценка: ").append(h(readableSize(candidate.estimatedBytes)))
+                        .append(" · с запасом: ").append(h(readableSize(candidate.budgetedBytes))).append("</p>")
+                    append("<details><summary>DDL, определение и происхождение</summary>")
+                    copyable(candidate.ddl ?: "DDL отсутствует в модели.", "copy-ddl-$ordinal", "Скопировать DDL")
+                    pre(id)
+                    append("<p>").append(h(definition(candidate))).append("</p><dl class=\"values\">")
                     entry("Оценка", storageSize(candidate.estimatedBytes))
                     entry("С запасом", storageSize(candidate.budgetedBytes))
-                    entry("INCLUDE", candidate.definition.includedColumns.takeIf { it.isNotEmpty() }
-                        ?.joinToString { it.name } ?: "Нет")
                     entry("Write units/час", number(candidate.writeUnitsPerHour))
                     entry("Источники SQL", candidate.sourceQueryIds.sorted().joinToString())
-                    if (candidate.sourceBranches.isNotEmpty()) entry("Ветви условий", candidate.sourceBranches
-                        .sortedWith(compareBy({ it.queryId }, { it.conditionPath }))
-                        .joinToString { "${it.queryId}: ${it.conditionPath}" })
+                    if (candidate.sourceBranches.isNotEmpty()) entry("Ветви условий", candidate.sourceBranches.sortedWith(compareBy({ it.queryId }, { it.conditionPath })).joinToString { "${it.queryId}: ${it.conditionPath}" })
                     entry("Происхождение", candidate.generationReasons.sortedBy { it.name }.joinToString { it.name })
-                    append("</dl><p class=\"muted\">Источники SQL объясняют происхождение кандидата, а не измеренную индивидуальную пользу индекса.</p>")
-                    if (candidate.definition.includedColumns.isNotEmpty()) {
-                        append("<p>INCLUDE позволяет рассмотреть index-only scan; обращения к таблице зависят от visibility map и не исключены.</p>")
-                    }
-                    append("<details><summary>DDL из модели</summary>")
-                    pre(candidate.ddl ?: "DDL отсутствует в модели.")
+                    append("</dl><p>Источники SQL объясняют происхождение кандидата, а не измеренную индивидуальную пользу индекса.</p>")
+                    if (candidate.definition.includedColumns.isNotEmpty()) append("<p>INCLUDE позволяет рассмотреть index-only scan; обращения к таблице зависят от visibility map и не исключены.</p>")
                     append("</details>")
                 }
                 append("</article>")
             }
         }
+    }
+
+    private fun StringBuilder.writeProfile(report: AnalysisReport) {
         append("<details><summary>Исходный профиль записи</summary>")
         val rates = report.input?.tableWriteRates
         if (rates == null) append("<p>Профиль записи не задан. Неизвестные write units не заменяются нулём.</p>") else {
@@ -411,64 +506,89 @@ class HtmlReportRenderer : ReportRenderer {
                 rates.toSortedMap().forEach { (table, rate) -> row(table, number(rate.insertsPerHour), number(rate.updatesPerHour), number(rate.deletesPerHour), rate.source.name.lowercase(Locale.ROOT)) }
             }
         }
-        append("</details></section>")
+        append("</details>")
     }
 
-    private fun StringBuilder.queries(report: AnalysisReport) {
-        section("queries", "05", "Запросы и планы", "Один общий вектор costs на каждый набор")
-        append("<p>Baseline сохраняет существующие реальные индексы. Final cost относится ко всему выбранному набору. Отдельные SQL могут регрессировать, даже если критерий набора улучшился.</p>")
+    private fun StringBuilder.queries(report: AnalysisReport, includeDetails: Boolean = false) {
+        section("queries", "Каким запросам поможет выбранный набор", "Оценка одного выполнения запроса, planner cost")
+        append("<p>До — существующие индексы; с набором — они же и все предложенные. Меньшая оценка лучше.</p>")
         val baseline = report.result.baseline
         val selected = report.result.selected?.evaluation
         val effects = report.queryEffects.associateBy { it.id }
-        val profiles = report.input?.profiles.orEmpty()
+        val comparisons = report.queryComparisons.associateBy { it.queryId }
         val queryIds = (report.input?.queries.orEmpty().map { it.id } + baseline?.costByQueryId.orEmpty().keys + selected?.costByQueryId.orEmpty().keys).distinct()
+        fun hasRegression(id: String): Boolean = comparisons[id]?.regression ?: run {
+            val before = baseline?.costByQueryId?.get(id)
+            val after = selected?.costByQueryId?.get(id)
+            before != null && after != null && after > before
+        }
         append("<div class=\"query-controls\" hidden><label for=\"query-sort\">Порядок запросов</label> ")
         append("<select id=\"query-sort\"><option value=\"regression\">Сначала ухудшения</option><option value=\"gain\">Сначала наибольшее снижение, %</option><option value=\"cost\">Сначала высокая стоимость после</option><option value=\"original\">Исходный порядок</option></select></div>")
-        append("<div id=\"query-comparison\">")
-        table(listOf("SQL") + profiles.map { "${it.id}, вызовов/час" } + listOf("Baseline cost", "Final cost", "Снижение cost, %", "Изменение")) {
-            queryIds.withIndex().sortedWith(compareBy<IndexedValue<String>> {
-                val before = baseline?.costByQueryId?.get(it.value)
-                val after = selected?.costByQueryId?.get(it.value)
-                if (before != null && after != null && after > before) 0 else 1
-            }.thenBy { it.index }).forEach { (index, id) ->
+        append("<div id=\"query-comparison\" class=\"query-comparison\">")
+        table(listOf("SQL", "До", "С набором", "Изменение")) {
+            queryIds.withIndex().sortedWith(compareBy<IndexedValue<String>> { if (hasRegression(it.value)) 0 else 1 }.thenBy { it.index }).forEach { (index, id) ->
                 val effect = effects[id]?.selected
                 val before = baseline?.costByQueryId?.get(id)
                 val after = selected?.costByQueryId?.get(id)
-                val regression = before != null && after != null && after > before
+                val regression = hasRegression(id)
                 append("<tr data-order=\"").append(index).append("\" data-regression=\"").append(if (regression) 1 else 0)
                     .append("\" data-gain=\"").append(h(effect?.gainPercent ?: ""))
                     .append("\" data-cost=\"").append(h(after ?: "")).append("\"")
                 if (regression) append(" class=\"regression\"")
-                append("><th scope=\"row\"><a href=\"#query-").append(index).append("\">").append(h(id)).append("</a></th>")
-                profiles.forEach { cell(number(it.callsPerHour[id])) }
-                cell(number(before))
-                cell(number(after))
-                cell(effect?.let(::effectPercent) ?: "Нет данных")
-                cell(when {
+                append("><th scope=\"row\"><a href=\"#query-").append(index).append("\">SQL ").append(index + 1).append("</a></th>")
+                cell(compactNumber(before))
+                cell(compactNumber(after))
+                cell(effect?.let(::effectLabel) ?: when {
                     before == null || after == null -> "Нет данных"
-                    regression -> "Регрессия"
-                    after < before -> "Снижение cost"
-                    else -> "Без изменений"
+                    regression -> "Рост cost · процент неизвестен"
+                    after < before -> "Снижение cost · процент неизвестен"
+                    else -> "Без изменения"
                 })
                 append("</tr>")
             }
         }
         append("</div>")
         costGuards(report)
-        queryIds.forEachIndexed { index, id ->
-            append("<details id=\"query-").append(index).append("\"><summary>SQL и сохранённые планы · ").append(h(id)).append("</summary><h4>Исходный SQL</h4>")
-            pre(report.input?.queries?.firstOrNull { it.id == id }?.sql ?: "Исходный SQL отсутствует в модели.")
-            append("<h4>Baseline · EXPLAIN JSON</h4>")
-            pre(baseline?.plansByQueryId?.get(id)?.json ?: "План отсутствует.")
-            append("<h4>Выбранный набор · EXPLAIN JSON</h4>")
-            pre(selected?.plansByQueryId?.get(id)?.json ?: "План отсутствует.")
-            append("<details><summary>Планы обоих лучших наборов</summary><h4>best_robust</h4>")
-            pre(report.result.bestRobust?.evaluation?.plansByQueryId?.get(id)?.json ?: "План отсутствует.")
-            append("<h4>best_mean</h4>")
-            pre(report.result.bestMean?.evaluation?.plansByQueryId?.get(id)?.json ?: "План отсутствует.")
-            append("</details></details>")
+        if (includeDetails) {
+            append("<h3>SQL и планы</h3>")
+            queryDetails(report)
         }
         append("</section>")
+    }
+
+    private fun StringBuilder.queryDetails(report: AnalysisReport) {
+        val baseline = report.result.baseline
+        val selected = report.result.selected?.evaluation
+        val effects = report.queryEffects.associateBy { it.id }
+        val queryIds = (report.input?.queries.orEmpty().map { it.id } + baseline?.costByQueryId.orEmpty().keys + selected?.costByQueryId.orEmpty().keys).distinct()
+        queryIds.forEachIndexed { index, id ->
+            append("<details class=\"query-detail\" id=\"query-").append(index).append("\"><summary>SQL ").append(index + 1).append(" · текст, точные значения и планы</summary>")
+            append("<h3>Исходный SQL</h3>")
+            copyable(report.input?.queries?.firstOrNull { it.id == id }?.sql ?: "Исходный SQL отсутствует в модели.", "copy-sql-$index", "Скопировать SQL")
+            append("<h3>Полный ID</h3>")
+            pre(id)
+            append("<dl class=\"values\">")
+            entry("Baseline cost", number(baseline?.costByQueryId?.get(id)))
+            entry("Selected cost", number(selected?.costByQueryId?.get(id)))
+            entry("Снижение cost, %", effects[id]?.selected?.let { percent(it.gainPercent, it.baselineCost) } ?: "Нет данных")
+            append("</dl>")
+            val plans = linkedMapOf<String, MutableList<String>>()
+            fun retain(label: String, plan: ExplainPlan?) {
+                if (plan == null) {
+                    append("<p>").append(h(label)).append(": план отсутствует.</p>")
+                } else plans.getOrPut(plan.json) { mutableListOf() }.add(label)
+            }
+            retain("Существующие индексы", baseline?.plansByQueryId?.get(id))
+            retain("Выбранный набор", selected?.plansByQueryId?.get(id))
+            report.result.bestRobust?.let { retain("best_robust", it.evaluation.plansByQueryId[id]) }
+            report.result.bestMean?.let { retain("best_mean", it.evaluation.plansByQueryId[id]) }
+            plans.entries.forEachIndexed { planIndex, (json, labels) ->
+                append("<details class=\"plan-detail\"><summary>").append(h(labels.joinToString(" · "))).append(" · EXPLAIN JSON</summary>")
+                copyable(json, "copy-plan-$index-$planIndex", "Скопировать план")
+                append("</details>")
+            }
+            append("</details>")
+        }
     }
 
     private fun StringBuilder.costGuards(report: AnalysisReport) {
@@ -505,8 +625,8 @@ class HtmlReportRenderer : ReportRenderer {
         }
     }
 
-    private fun StringBuilder.search(report: AnalysisReport) {
-        section("search", "06", "Границы поиска", "Что было исследовано и где сработали ограничения")
+    private fun StringBuilder.search(report: AnalysisReport, includeCandidateCatalog: Boolean = true) {
+        section("search", "Границы поиска", "Что было исследовано и где сработали ограничения")
         append("<p>Режим анализа: ").append(h(modeName(report.analysisMode))).append(".</p>")
         append("<p>Рейтинг shortlist: ").append(h(rankingName(report.candidateRanking)))
             .append(". Рейтинг задаёт порядок сценарных очередей; критерии поиска и бюджеты сохраняются.</p>")
@@ -523,9 +643,9 @@ class HtmlReportRenderer : ReportRenderer {
             row("Непроверенные конфигурации", number(search.unexaminedConfigurations), "Не задан")
         }
         append("<div class=\"caps\">")
-        cap("01", "Колонки до генерации пар", "${candidates.columnLimitPerQueryTable} на (SQL, таблица)")
-        cap("02", "Локальные кандидаты", "${candidates.localCandidateLimit} на (SQL, таблица)")
-        cap("03", "Общий shortlist", "${candidates.fixedPoolSelection?.admissibleCandidates ?: candidates.preparation?.finalShortlistedCandidates ?: candidates.shortlistedCandidates} / ${candidates.globalCandidateLimit}")
+        cap("Колонки до генерации пар", "${candidates.columnLimitPerQueryTable} на (SQL, таблица)")
+        cap("Локальные кандидаты", "${candidates.localCandidateLimit} на (SQL, таблица)")
+        cap("Общий shortlist", "${candidates.fixedPoolSelection?.admissibleCandidates ?: candidates.preparation?.finalShortlistedCandidates ?: candidates.shortlistedCandidates} / ${candidates.globalCandidateLimit}")
         append("</div>")
         append("<dl class=\"values\">")
         entry("Исходный shortlist", number(candidates.initialShortlistedCandidates))
@@ -598,16 +718,21 @@ class HtmlReportRenderer : ReportRenderer {
                 }
             }
         }
-        append("</details><details><summary>Все сохранённые кандидаты и оценки</summary>")
-        table(listOf("ID / определение", "Оценка, байт и MiB", "С запасом, байт и MiB", "Write units/час", "Источники SQL", "Ветви условий")) {
-            report.candidates.candidates.forEach { candidate ->
-                row("${candidate.id} / ${definition(candidate)}", storageSize(candidate.estimatedBytes), storageSize(candidate.budgetedBytes),
-                    number(candidate.writeUnitsPerHour), candidate.sourceQueryIds.sorted().joinToString(),
-                    candidate.sourceBranches.sortedWith(compareBy({ it.queryId }, { it.conditionPath }))
-                        .joinToString { "${it.queryId}: ${it.conditionPath}" }.ifEmpty { "Нет OR-происхождения" })
-            }
-        }
         append("</details>")
+        if (includeCandidateCatalog) {
+            append("<details><summary>Все сохранённые кандидаты и оценки</summary>")
+            val selectedIds = report.result.selected?.evaluation?.candidateIds.orEmpty().toSet()
+            if (selectedIds.isNotEmpty()) append("<p>Выбранные индексы — в <a href=\"#indexes\">каталоге рекомендации</a>. Остальные кандидаты:</p>")
+            table(listOf("ID / определение", "Оценка, байт и MiB", "С запасом, байт и MiB", "Write units/час", "Источники SQL", "Ветви условий")) {
+                report.candidates.candidates.filterNot { it.id in selectedIds }.forEach { candidate ->
+                    row("${candidate.id} / ${definition(candidate)}", storageSize(candidate.estimatedBytes), storageSize(candidate.budgetedBytes),
+                        number(candidate.writeUnitsPerHour), candidate.sourceQueryIds.sorted().joinToString(),
+                        candidate.sourceBranches.sortedWith(compareBy({ it.queryId }, { it.conditionPath }))
+                            .joinToString { "${it.queryId}: ${it.conditionPath}" }.ifEmpty { "Нет OR-происхождения" })
+                }
+            }
+            append("</details>")
+        }
         val warnings = (candidates.warnings + search.warnings).distinct()
         val errors = (search.errors + listOfNotNull((report.result as? SearchResult.Failed)?.error)).distinct()
         if (warnings.isNotEmpty() || errors.isNotEmpty()) {
@@ -618,8 +743,48 @@ class HtmlReportRenderer : ReportRenderer {
         append("</section>")
     }
 
+    private fun StringBuilder.method(report: AnalysisReport, includeComparison: Boolean = false) {
+        section("method", "Как получена оценка и где её границы", "")
+        append("<p><strong>Baseline</strong> — оценка с существующими индексами. Новые наборы оценены целиком через HypoPG, без физического построения. Поиск ограничен и не гарантирует лучший возможный набор.</p>")
+        append("<details><summary>Ограничения методики</summary><p>Вывод относится только к переданным SQL и параметрам. Время запросов и записи, фактический размер индексов и конкуренция запросов не измерены. Planner cost не обещает SLA.</p></details>")
+        append("<details><summary>Точные метрики выбранного набора</summary><p>Baseline — существующие реальные индексы. Selected — весь добавленный гипотетический набор. Planner cost не переводится во время выполнения.</p><dl class=\"values\">")
+        val metrics = report.result.selected?.metrics
+        if (singleProfile(report)) entry("Отношение стоимости к baseline", setRatio(metrics, metrics?.meanRatio)) else {
+            entry("Среднее отношение M", setRatio(metrics, metrics?.meanRatio))
+            entry("Худшее отношение R", setRatio(metrics, metrics?.worstRatio))
+        }
+        entry("Baseline B_mean", number(metrics?.baselineMeanCost))
+        entry("Selected C_mean", number(metrics?.meanCost))
+        entry("Снижение средней стоимости, %", percent(report.summary.meanEffect.gainPercent, report.summary.meanEffect.baselineCost))
+        entry("Критерий поиска", report.result.selectedObjective.name.lowercase(Locale.ROOT))
+        entry("Область сравнения", report.comparisonScope.name.lowercase(Locale.ROOT))
+        append("</dl><p>M = C_mean / B_mean; среднее учитывает веса профилей. R = max(C_s / B_s) среди положительных baseline. При одном профиле критерии совпадают. Цена устойчивости = C_mean(best_robust) − C_mean(best_mean). Проценты неприменимы при нулевом baseline.</p></details>")
+        if (singleProfile(report)) {
+            append("<details><summary>Точные стоимости профиля и вес</summary>")
+            profileMetrics(report)
+            append("</details>")
+        } else if (includeComparison) {
+            append("<details><summary>").append(if (report.incumbentsCoincide == true) "Оба критерия выбрали один набор" else "Сравнение критериев robust и mean").append("</summary>")
+            comparison(report)
+            append("</details>")
+        }
+        resourceModel()
+        append("</section>")
+    }
+
+    private fun StringBuilder.resourceModel() {
+        append("<details id=\"resource-model\"><summary>Как оцениваются место и запись</summary><p>Место: для каждого индекса учитывается округлённая вверх оценка HypoPG с заданным запасом, затем размеры складываются. KiB = 1 024 байта; MiB = 1 048 576 байт.</p>")
+        append("<p>Запись — условная модель, не число операций и не измеренное замедление. Модель одного индекса: <code>(INSERT + UPDATE + DELETE строк/ч) × (число ключей + число INCLUDE-колонок)</code>. Расходы индексов суммируются.</p>")
+        append("<p>Модель не измеряет WAL, I/O, HOT, ширину ключей, разрастание индексов или отложенную очистку после DELETE.</p></details>")
+    }
+
+    private fun StringBuilder.nextSteps() {
+        section("next", "Что делать дальше", "")
+        append("<ol><li>Уточнить период, охват, частоты и параметры SQL.</li><li>Проверить допустимые расходы места и записи.</li><li>Проверить весь набор на тестовой БД: время запросов, нагрузку записи и фактический размер индексов.</li></ol></section>")
+    }
+
     private fun StringBuilder.run(report: AnalysisReport) {
-        section("run", "07", "Данные запуска", "Идентичность отчёта и воспроизводимость")
+        section("run", "Данные запуска", "Идентичность отчёта и воспроизводимость")
         append("<dl class=\"values metadata\">")
         entry("Run ID", report.runId)
         entry("SHA-256 входа", report.inputHash ?: "Нет данных")
@@ -633,7 +798,7 @@ class HtmlReportRenderer : ReportRenderer {
         entry("Приложение", report.environment.applicationVersion)
         entry("Java / Kotlin", "${report.environment.javaVersion} / ${report.environment.kotlinVersion ?: "Нет данных"}")
         entry("PostgreSQL / HypoPG", "${report.environment.postgresVersion ?: "Нет данных"} / ${report.environment.hypopgVersion ?: "Нет данных"}")
-        append("</dl><div class=\"notice\"><strong>Границы результата</strong><p>Поиск ограничен кандидатами, бюджетами и числом оценок. Глобальный оптимум не гарантирован. Выигрыш planner cost не обещает ускорение или SLA; регрессии отдельных SQL возможны. Для проверки нужны отдельные измерения времени и размера на тестовой БД.</p></div></section>")
+        append("</dl></section>")
     }
 
     private fun StringBuilder.diagnostic(code: String, message: String, query: String?, profile: String?, details: Map<String, String>, kind: String) {
@@ -644,18 +809,15 @@ class HtmlReportRenderer : ReportRenderer {
         append("</article>")
     }
 
-    private fun StringBuilder.section(id: String, index: String, title: String, subtitle: String) {
-        append("<section id=\"").append(id).append("\"><div class=\"section-heading\"><span class=\"section-number\">").append(index)
-            .append("</span><div><h2>").append(title).append("</h2><p>").append(subtitle).append("</p></div></div>")
+    private fun StringBuilder.section(id: String, title: String, subtitle: String) {
+        append("<section id=\"").append(id).append("\"><div class=\"section-heading\"><h2>").append(title)
+            .append("</h2>")
+        if (subtitle.isNotEmpty()) append("<p>").append(subtitle).append("</p>")
+        append("</div>")
     }
 
-    private fun StringBuilder.metric(label: String, value: String, caption: String, style: String = "") {
-        append("<div class=\"metric ").append(style).append("\"><div class=\"metric-label\">").append(h(label))
-            .append("</div><strong>").append(h(value)).append("</strong><small>").append(h(caption)).append("</small></div>")
-    }
-
-    private fun StringBuilder.cap(index: String, title: String, value: String) {
-        append("<div class=\"cap\"><span>").append(index).append("</span><h3>").append(title).append("</h3><p>").append(h(value)).append("</p></div>")
+    private fun StringBuilder.cap(title: String, value: String) {
+        append("<div class=\"cap\"><h3>").append(title).append("</h3><p>").append(h(value)).append("</p></div>")
     }
 
     private fun StringBuilder.badge(label: String, style: String) {
@@ -678,8 +840,30 @@ class HtmlReportRenderer : ReportRenderer {
         append("</tr>")
     }
 
-    private fun StringBuilder.cell(value: String) { append("<td>").append(h(value)).append("</td>") }
+    private fun StringBuilder.cell(value: String) {
+        append("<td>")
+        text(value)
+        append("</td>")
+    }
     private fun StringBuilder.entry(label: String, value: String) { append("<div><dt>").append(h(label)).append("</dt><dd>").append(h(value)).append("</dd></div>") }
+    private fun StringBuilder.copyable(value: String, id: String, label: String) {
+        append("<pre id=\"").append(id).append("\"><code>").append(h(value)).append("</code></pre>")
+        append("<button type=\"button\" class=\"copy-button\" data-copy=\"").append(id).append("\" hidden>")
+            .append(h(label)).append("</button> <span class=\"copy-status\" aria-live=\"polite\"></span>")
+    }
+
+    private fun queryCount(report: AnalysisReport): Int? = report.input?.queries?.size
+        ?: report.result.baseline?.costByQueryId?.size
+        ?: report.result.selected?.evaluation?.costByQueryId?.size
+
+    private fun singleProfile(report: AnalysisReport): Boolean =
+        (report.input?.profiles?.size ?: report.result.selected?.metrics?.profiles?.size) == 1
+
+    private fun queryLabel(id: String, report: AnalysisReport): String {
+        val index = report.input?.queries?.indexOfFirst { it.id == id } ?: -1
+        return if (index >= 0) "SQL ${index + 1}" else id
+    }
+
     private fun StringBuilder.pre(value: String) { append("<pre><code>").append(h(value)).append("</code></pre>") }
     private fun StringBuilder.text(value: String) { append(h(value)) }
 
@@ -697,7 +881,7 @@ class HtmlReportRenderer : ReportRenderer {
     private fun number(value: Number?): String {
         if (value == null) return "Нет данных"
         val symbols = DecimalFormatSymbols(Locale.ROOT).apply { groupingSeparator = '\u202f'; decimalSeparator = ',' }
-        val formatter = DecimalFormat("#,##0.#########", symbols)
+        val formatter = DecimalFormat("#,##0." + "#".repeat(340), symbols)
         val formatted = formatter.format(value)
         // Do not display a tiny positive value as zero; no scientific/domain rounding is performed here.
         return if (value.toDouble() != 0.0 && (formatted == "0" || formatted == "-0")) {
@@ -706,7 +890,7 @@ class HtmlReportRenderer : ReportRenderer {
     }
 
     private fun storageSize(bytes: Long?): String =
-        if (bytes == null) "Нет данных" else "${number(bytes)} байт (${mib(bytes)})"
+        if (bytes == null) "Нет данных" else "${number(bytes)}\u00a0байт (${mib(bytes)})"
 
     /** Display conversion only; exact bytes remain visible and budget decisions stay in domain. */
     private fun mib(bytes: Long?): String {
@@ -715,7 +899,7 @@ class HtmlReportRenderer : ReportRenderer {
         val rounded = exact.setScale(3, RoundingMode.HALF_EVEN)
         if (bytes > 0 && rounded.signum() == 0) return "< 0,001 MiB"
         val prefix = if (exact.compareTo(rounded) == 0) "" else "≈"
-        return "$prefix${number(rounded)} MiB"
+        return "$prefix${number(rounded)}\u00a0MiB"
     }
 
     private fun ratio(value: Double?, baseline: Double?) = if (value == null && baseline == 0.0) "Неприменимо" else number(value)
@@ -738,9 +922,9 @@ class HtmlReportRenderer : ReportRenderer {
     }
 
     private fun statusLabel(status: RunStatus) = when (status) {
-        RunStatus.COMPLETED -> "completed · Завершён"
-        RunStatus.PARTIAL -> "partial · Частичный результат"
-        RunStatus.FAILED -> "failed · Ошибка"
+        RunStatus.COMPLETED -> "Анализ завершён"
+        RunStatus.PARTIAL -> "Частичный результат"
+        RunStatus.FAILED -> "Ошибка анализа"
     }
 
     private fun stopLabel(reason: StopReason): String = when (reason) {

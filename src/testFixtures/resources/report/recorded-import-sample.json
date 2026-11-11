@@ -1,0 +1,211 @@
+{
+  "source": {
+    "filename": "report.html",
+    "sha256": "aa1a9609a049409a0c1884360e914cc43048284208b569929c9dad0bf09a9ab5",
+    "original_run_id": "1f398603-e7bf-4399-a4fa-25b94a4d7f1a",
+    "original_input_hash": "dfefb5e7de2e0d4b89840df6ffb64a71211d7f7e2ded270b98a4d3343d7fe73a",
+    "note": "Извлечено из предоставленного HTML от 11.11.2026, не новый запуск БД. Частоты и нормированные веса доступны только с точностью отображения HTML; исходный JSON не предоставлен. Costs отдельных SQL, планы, размеры и provenance сохранены. Производные метрики пересчитываются общей domain-моделью."
+  },
+  "workload": {
+    "schema_version": 2,
+    "queries": [
+      {
+        "id": "obs_6019ff9b5ce4edbdd568d6800f1b951dab2f279d1381e9e173bdfb6b1ea7e197",
+        "sql": "SELECT group_id FROM \"report_import_285555c9116540579487f2af8ec3fa75\".records WHERE group_id = 42"
+      },
+      {
+        "id": "obs_26562d1eb8dda2dd47d4fc986ab01355d25b135e800e012d452302589b21ca87",
+        "sql": "SELECT value FROM \"report_import_285555c9116540579487f2af8ec3fa75\".records WHERE value = 7"
+      }
+    ],
+    "profiles": [
+      {
+        "id": "normal",
+        "weight": 0.75,
+        "calls_per_hour": {
+          "obs_6019ff9b5ce4edbdd568d6800f1b951dab2f279d1381e9e173bdfb6b1ea7e197": 113533.629081429,
+          "obs_26562d1eb8dda2dd47d4fc986ab01355d25b135e800e012d452302589b21ca87": 264911.801190001
+        }
+      },
+      {
+        "id": "campaign",
+        "weight": 0.25,
+        "calls_per_hour": {
+          "obs_6019ff9b5ce4edbdd568d6800f1b951dab2f279d1381e9e173bdfb6b1ea7e197": 454673.028346899,
+          "obs_26562d1eb8dda2dd47d4fc986ab01355d25b135e800e012d452302589b21ca87": 101038.450743755
+        }
+      }
+    ],
+    "constraints": {
+      "storage_budget_bytes": 10000000,
+      "write_budget_units_per_hour": null,
+      "max_indexes": 5
+    },
+    "provenance": {
+      "schema_version": 1,
+      "source": "pg_stat_statements",
+      "source_id": "d0d60c19-eb9d-42ee-9e01-935560eb7e20",
+      "selection_rule": "profile_round_robin_desc_calls_per_hour_full_identity_tiebreak_max_20; import_manifest=import-manifest.json; sha256=6e092636a9c466f0d8253f83c3d60eccd9084875c771a2e0f07d6e1a8082ae47",
+      "windows": [
+        {
+          "profile_id": "normal",
+          "started_at": "2026-11-11T13:30:30.966358Z",
+          "finished_at": "2026-11-11T13:30:31.061484Z",
+          "complete": false,
+          "coverage": {
+            "denominator": "available_complete_entries",
+            "selected_calls": 10,
+            "available_calls": 20,
+            "selected_exec_time_millis": 3.157004,
+            "available_exec_time_millis": 7.082334
+          }
+        },
+        {
+          "profile_id": "campaign",
+          "started_at": "2026-11-11T13:30:31.061484Z",
+          "finished_at": "2026-11-11T13:30:31.132744Z",
+          "complete": true,
+          "coverage": {
+            "denominator": "available_complete_entries",
+            "selected_calls": 11,
+            "available_calls": 21,
+            "selected_exec_time_millis": 3.701207,
+            "available_exec_time_millis": 7.47633
+          }
+        }
+      ],
+      "query_examples": [
+        {
+          "query_id": "obs_6019ff9b5ce4edbdd568d6800f1b951dab2f279d1381e9e173bdfb6b1ea7e197",
+          "source": "user_supplied_literals"
+        },
+        {
+          "query_id": "obs_26562d1eb8dda2dd47d4fc986ab01355d25b135e800e012d452302589b21ca87",
+          "source": "user_supplied_literals"
+        }
+      ]
+    }
+  },
+  "table": {
+    "schema": "report_import_285555c9116540579487f2af8ec3fa75",
+    "name": "records"
+  },
+  "indexes": [
+    {
+      "id": "3fed6ea7d43460b68b3344049e64e89b51a4fdd4ef20d25aae1f37c96d346612",
+      "column": "value",
+      "query_id": "obs_26562d1eb8dda2dd47d4fc986ab01355d25b135e800e012d452302589b21ca87",
+      "ddl": "CREATE INDEX \"ib_3fed6ea7d43460b68b3344049e64e89b51a4fdd4ef20d25aae1f37c96d34\" ON \"report_import_285555c9116540579487f2af8ec3fa75\".\"records\" USING btree (\"value\" \"pg_catalog\".\"int4_ops\" ASC NULLS LAST);",
+      "estimated_bytes": 114688,
+      "budgeted_bytes": 137626
+    },
+    {
+      "id": "9d40841a6b27448af23ab2b58c9f6df33b4b64139e52cdf671b53a58e4e71f32",
+      "column": "group_id",
+      "query_id": "obs_6019ff9b5ce4edbdd568d6800f1b951dab2f279d1381e9e173bdfb6b1ea7e197",
+      "ddl": "CREATE INDEX \"ib_9d40841a6b27448af23ab2b58c9f6df33b4b64139e52cdf671b53a58e4e7\" ON \"report_import_285555c9116540579487f2af8ec3fa75\".\"records\" USING btree (\"group_id\" \"pg_catalog\".\"int4_ops\" ASC NULLS LAST);",
+      "estimated_bytes": 114688,
+      "budgeted_bytes": 137626
+    }
+  ],
+  "queries": [
+    {
+      "id": "obs_6019ff9b5ce4edbdd568d6800f1b951dab2f279d1381e9e173bdfb6b1ea7e197",
+      "sql": "SELECT group_id FROM \"report_import_285555c9116540579487f2af8ec3fa75\".records WHERE group_id = 42",
+      "baseline_cost": 85.5,
+      "selected_cost": 28.05,
+      "baseline_plan": [
+        {
+          "Plan": {
+            "Node Type": "Seq Scan",
+            "Parallel Aware": false,
+            "Async Capable": false,
+            "Relation Name": "records",
+            "Alias": "records",
+            "Startup Cost": 0.0,
+            "Total Cost": 85.5,
+            "Plan Rows": 50,
+            "Plan Width": 4,
+            "Filter": "(group_id = 42)"
+          }
+        }
+      ],
+      "selected_plan": [
+        {
+          "Plan": {
+            "Node Type": "Bitmap Heap Scan",
+            "Parallel Aware": false,
+            "Async Capable": false,
+            "Relation Name": "records",
+            "Alias": "records",
+            "Startup Cost": 4.42,
+            "Total Cost": 28.05,
+            "Plan Rows": 50,
+            "Plan Width": 4,
+            "Recheck Cond": "(group_id = 42)",
+            "Plans": [
+              {
+                "Node Type": "Bitmap Index Scan",
+                "Parent Relationship": "Outer",
+                "Parallel Aware": false,
+                "Async Capable": false,
+                "Index Name": "<13562>btree_report_import_285555c9116540579487f2af8ec3fa75_rec",
+                "Startup Cost": 0.0,
+                "Total Cost": 4.41,
+                "Plan Rows": 50,
+                "Plan Width": 0,
+                "Index Cond": "(group_id = 42)"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "obs_26562d1eb8dda2dd47d4fc986ab01355d25b135e800e012d452302589b21ca87",
+      "sql": "SELECT value FROM \"report_import_285555c9116540579487f2af8ec3fa75\".records WHERE value = 7",
+      "baseline_cost": 85.5,
+      "selected_cost": 8.05,
+      "baseline_plan": [
+        {
+          "Plan": {
+            "Node Type": "Seq Scan",
+            "Parallel Aware": false,
+            "Async Capable": false,
+            "Relation Name": "records",
+            "Alias": "records",
+            "Startup Cost": 0.0,
+            "Total Cost": 85.5,
+            "Plan Rows": 1,
+            "Plan Width": 4,
+            "Filter": "(value = 7)"
+          }
+        }
+      ],
+      "selected_plan": [
+        {
+          "Plan": {
+            "Node Type": "Index Only Scan",
+            "Parallel Aware": false,
+            "Async Capable": false,
+            "Scan Direction": "Forward",
+            "Index Name": "<13561>btree_report_import_285555c9116540579487f2af8ec3fa75_rec",
+            "Relation Name": "records",
+            "Alias": "records",
+            "Startup Cost": 0.03,
+            "Total Cost": 8.05,
+            "Plan Rows": 1,
+            "Plan Width": 4,
+            "Index Cond": "(value = 7)"
+          }
+        }
+      ]
+    }
+  ],
+  "duration_millis": 208,
+  "environment": {
+    "application_version": "0.1.0-SNAPSHOT",
+    "java_version": "25.0.2",
+    "kotlin_version": "2.4.21"
+  }
+}

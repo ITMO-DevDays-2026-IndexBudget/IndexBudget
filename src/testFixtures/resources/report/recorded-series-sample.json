@@ -1,0 +1,456 @@
+{
+  "source": {
+    "filename": "report.html",
+    "sha256": "910efc478c7426f41012f24039d98feb6c0be615bd287d678f88850992a1b96c",
+    "original_series_id": "2f3ddd2c-5f4f-45e5-b15f-8e95641d28c8",
+    "original_input_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "note": "Факты трёх встроенных отчётов из обновлённого HTML пользователя от 11.11.2026. Повторный рендер штатными renderer, без нового анализа БД. Один профиль default; ручной workload, provenance отсутствует. Costs, планы, размеры, расходы и диагностика точек сохранены; производные метрики строит общая domain-модель. Исходный series.json не предоставлен: скрытые hashes условий и общие counters подготовки не восстанавливаются.",
+    "original_duration_millis": 574
+  },
+  "workload": {
+    "schema_version": 2,
+    "queries": [
+      {
+        "id": "qa",
+        "sql": "SELECT a FROM series_b8e22baf5d1f402783587473afaf1b89.items WHERE a = 42"
+      },
+      {
+        "id": "qb",
+        "sql": "SELECT b FROM series_b8e22baf5d1f402783587473afaf1b89.items WHERE b = 42"
+      }
+    ],
+    "profiles": [
+      {
+        "id": "default",
+        "weight": 1,
+        "calls_per_hour": {
+          "qa": 1,
+          "qb": 1
+        }
+      }
+    ],
+    "constraints": {
+      "storage_budget_bytes": 9223372036854775807,
+      "write_budget_units_per_hour": 2,
+      "max_indexes": 2
+    },
+    "table_write_rates": {
+      "series_b8e22baf5d1f402783587473afaf1b89.items": {
+        "inserts_per_hour": 1,
+        "updates_per_hour": 0,
+        "deletes_per_hour": 0,
+        "source": "manual"
+      }
+    }
+  },
+  "table": {
+    "schema": "series_b8e22baf5d1f402783587473afaf1b89",
+    "name": "items"
+  },
+  "indexes": [
+    {
+      "id": "76d70417d604039f0b1ad763ed09f8eb3d0d3a67efd187d3e17c0a8ec3446ccb",
+      "column": "a",
+      "query_id": "qa",
+      "ddl": "CREATE INDEX \"ib_76d70417d604039f0b1ad763ed09f8eb3d0d3a67efd187d3e17c0a8ec344\" ON \"series_b8e22baf5d1f402783587473afaf1b89\".\"items\" USING btree (\"a\" \"pg_catalog\".\"int4_ops\" ASC NULLS LAST);",
+      "estimated_bytes": 696320,
+      "budgeted_bytes": 835584,
+      "write_units_per_hour": 1
+    },
+    {
+      "id": "cccb169058cbc3391df4bc05b0fb9249a31520ca47be78616344e1bad988254a",
+      "column": "b",
+      "query_id": "qb",
+      "ddl": "CREATE INDEX \"ib_cccb169058cbc3391df4bc05b0fb9249a31520ca47be78616344e1bad988\" ON \"series_b8e22baf5d1f402783587473afaf1b89\".\"items\" USING btree (\"b\" \"pg_catalog\".\"int4_ops\" ASC NULLS LAST);",
+      "estimated_bytes": 696320,
+      "budgeted_bytes": 835584,
+      "write_units_per_hour": 1
+    }
+  ],
+  "points": [
+    {
+      "write_budget": 0,
+      "original_run_id": "24e8685f-6ead-4f11-bfd9-2bde7c8ad1f4",
+      "duration_millis": 65,
+      "selected_ids": [],
+      "queries": [
+        {
+          "id": "qa",
+          "sql": "SELECT a FROM series_b8e22baf5d1f402783587473afaf1b89.items WHERE a = 42",
+          "baseline_cost": 893.0,
+          "selected_cost": 893.0,
+          "baseline_plan": [
+            {
+              "Plan": {
+                "Node Type": "Seq Scan",
+                "Parallel Aware": false,
+                "Async Capable": false,
+                "Relation Name": "items",
+                "Alias": "items",
+                "Startup Cost": 0.0,
+                "Total Cost": 893.0,
+                "Plan Rows": 1,
+                "Plan Width": 4,
+                "Filter": "(a = 42)"
+              }
+            }
+          ],
+          "selected_plan": [
+            {
+              "Plan": {
+                "Node Type": "Seq Scan",
+                "Parallel Aware": false,
+                "Async Capable": false,
+                "Relation Name": "items",
+                "Alias": "items",
+                "Startup Cost": 0.0,
+                "Total Cost": 893.0,
+                "Plan Rows": 1,
+                "Plan Width": 4,
+                "Filter": "(a = 42)"
+              }
+            }
+          ]
+        },
+        {
+          "id": "qb",
+          "sql": "SELECT b FROM series_b8e22baf5d1f402783587473afaf1b89.items WHERE b = 42",
+          "baseline_cost": 893.0,
+          "selected_cost": 893.0,
+          "baseline_plan": [
+            {
+              "Plan": {
+                "Node Type": "Seq Scan",
+                "Parallel Aware": false,
+                "Async Capable": false,
+                "Relation Name": "items",
+                "Alias": "items",
+                "Startup Cost": 0.0,
+                "Total Cost": 893.0,
+                "Plan Rows": 1,
+                "Plan Width": 4,
+                "Filter": "(b = 42)"
+              }
+            }
+          ],
+          "selected_plan": [
+            {
+              "Plan": {
+                "Node Type": "Seq Scan",
+                "Parallel Aware": false,
+                "Async Capable": false,
+                "Relation Name": "items",
+                "Alias": "items",
+                "Startup Cost": 0.0,
+                "Total Cost": 893.0,
+                "Plan Rows": 1,
+                "Plan Width": 4,
+                "Filter": "(b = 42)"
+              }
+            }
+          ]
+        }
+      ],
+      "stop_reasons": [
+        "NO_CANDIDATES"
+      ],
+      "phases": [
+        "INTROSPECTION",
+        "BASELINE",
+        "CANDIDATES"
+      ],
+      "statistics": {
+        "explain_attempts": 2,
+        "evaluation_attempts": 1,
+        "completed_evaluations": 1,
+        "cache_hits": 0,
+        "repair_attempts": 0
+      },
+      "unexamined_configurations": null,
+      "fixed_pool_selection": {
+        "pool_candidates": 2,
+        "admissible_candidates": 0,
+        "budget_rejected_candidates": 2,
+        "size_attempts": 0
+      },
+      "decisions": [
+        {
+          "reason": "WRITE_BUDGET",
+          "candidate_id": "76d70417d604039f0b1ad763ed09f8eb3d0d3a67efd187d3e17c0a8ec3446ccb",
+          "table": true,
+          "phase": "CANDIDATES",
+          "details": {
+            "pool_scope": "fixed"
+          }
+        },
+        {
+          "reason": "WRITE_BUDGET",
+          "candidate_id": "cccb169058cbc3391df4bc05b0fb9249a31520ca47be78616344e1bad988254a",
+          "table": true,
+          "phase": "CANDIDATES",
+          "details": {
+            "pool_scope": "fixed"
+          }
+        }
+      ],
+      "conditions_match": true
+    },
+    {
+      "write_budget": 1,
+      "original_run_id": "3d015bc5-75e6-403f-b465-d8fc9031e1c1",
+      "duration_millis": 63,
+      "selected_ids": [
+        "76d70417d604039f0b1ad763ed09f8eb3d0d3a67efd187d3e17c0a8ec3446ccb"
+      ],
+      "queries": [
+        {
+          "id": "qa",
+          "sql": "SELECT a FROM series_b8e22baf5d1f402783587473afaf1b89.items WHERE a = 42",
+          "baseline_cost": 893.0,
+          "selected_cost": 8.05,
+          "baseline_plan": [
+            {
+              "Plan": {
+                "Node Type": "Seq Scan",
+                "Parallel Aware": false,
+                "Async Capable": false,
+                "Relation Name": "items",
+                "Alias": "items",
+                "Startup Cost": 0.0,
+                "Total Cost": 893.0,
+                "Plan Rows": 1,
+                "Plan Width": 4,
+                "Filter": "(a = 42)"
+              }
+            }
+          ],
+          "selected_plan": [
+            {
+              "Plan": {
+                "Node Type": "Index Only Scan",
+                "Parallel Aware": false,
+                "Async Capable": false,
+                "Scan Direction": "Forward",
+                "Index Name": "<13561>btree_series_b8e22baf5d1f402783587473afaf1b89_items_a",
+                "Relation Name": "items",
+                "Alias": "items",
+                "Startup Cost": 0.04,
+                "Total Cost": 8.05,
+                "Plan Rows": 1,
+                "Plan Width": 4,
+                "Index Cond": "(a = 42)"
+              }
+            }
+          ]
+        },
+        {
+          "id": "qb",
+          "sql": "SELECT b FROM series_b8e22baf5d1f402783587473afaf1b89.items WHERE b = 42",
+          "baseline_cost": 893.0,
+          "selected_cost": 893.0,
+          "baseline_plan": [
+            {
+              "Plan": {
+                "Node Type": "Seq Scan",
+                "Parallel Aware": false,
+                "Async Capable": false,
+                "Relation Name": "items",
+                "Alias": "items",
+                "Startup Cost": 0.0,
+                "Total Cost": 893.0,
+                "Plan Rows": 1,
+                "Plan Width": 4,
+                "Filter": "(b = 42)"
+              }
+            }
+          ],
+          "selected_plan": [
+            {
+              "Plan": {
+                "Node Type": "Seq Scan",
+                "Parallel Aware": false,
+                "Async Capable": false,
+                "Relation Name": "items",
+                "Alias": "items",
+                "Startup Cost": 0.0,
+                "Total Cost": 893.0,
+                "Plan Rows": 1,
+                "Plan Width": 4,
+                "Filter": "(b = 42)"
+              }
+            }
+          ]
+        }
+      ],
+      "stop_reasons": [
+        "NO_IMPROVEMENT",
+        "SEARCH_COMPLETE"
+      ],
+      "phases": [
+        "INTROSPECTION",
+        "BASELINE",
+        "CANDIDATES",
+        "GREEDY",
+        "REPAIR"
+      ],
+      "statistics": {
+        "explain_attempts": 6,
+        "evaluation_attempts": 3,
+        "completed_evaluations": 3,
+        "cache_hits": 1,
+        "repair_attempts": 0
+      },
+      "unexamined_configurations": 0,
+      "fixed_pool_selection": {
+        "pool_candidates": 2,
+        "admissible_candidates": 2,
+        "budget_rejected_candidates": 0,
+        "size_attempts": 0
+      },
+      "decisions": [
+        {
+          "reason": "WRITE_BUDGET",
+          "candidate_id": "cccb169058cbc3391df4bc05b0fb9249a31520ca47be78616344e1bad988254a",
+          "table": false,
+          "phase": "GREEDY",
+          "details": {
+            "candidate_ids": "76d70417d604039f0b1ad763ed09f8eb3d0d3a67efd187d3e17c0a8ec3446ccb,cccb169058cbc3391df4bc05b0fb9249a31520ca47be78616344e1bad988254a"
+          }
+        },
+        {
+          "reason": "NOT_SELECTED",
+          "candidate_id": "cccb169058cbc3391df4bc05b0fb9249a31520ca47be78616344e1bad988254a",
+          "table": false,
+          "phase": null,
+          "details": {}
+        }
+      ],
+      "conditions_match": true
+    },
+    {
+      "write_budget": 2,
+      "original_run_id": "d45372c9-b69e-41a8-a38b-ca7342279dae",
+      "duration_millis": 64,
+      "selected_ids": [
+        "76d70417d604039f0b1ad763ed09f8eb3d0d3a67efd187d3e17c0a8ec3446ccb",
+        "cccb169058cbc3391df4bc05b0fb9249a31520ca47be78616344e1bad988254a"
+      ],
+      "queries": [
+        {
+          "id": "qa",
+          "sql": "SELECT a FROM series_b8e22baf5d1f402783587473afaf1b89.items WHERE a = 42",
+          "baseline_cost": 893.0,
+          "selected_cost": 8.05,
+          "baseline_plan": [
+            {
+              "Plan": {
+                "Node Type": "Seq Scan",
+                "Parallel Aware": false,
+                "Async Capable": false,
+                "Relation Name": "items",
+                "Alias": "items",
+                "Startup Cost": 0.0,
+                "Total Cost": 893.0,
+                "Plan Rows": 1,
+                "Plan Width": 4,
+                "Filter": "(a = 42)"
+              }
+            }
+          ],
+          "selected_plan": [
+            {
+              "Plan": {
+                "Node Type": "Index Only Scan",
+                "Parallel Aware": false,
+                "Async Capable": false,
+                "Scan Direction": "Forward",
+                "Index Name": "<13561>btree_series_b8e22baf5d1f402783587473afaf1b89_items_a",
+                "Relation Name": "items",
+                "Alias": "items",
+                "Startup Cost": 0.04,
+                "Total Cost": 8.05,
+                "Plan Rows": 1,
+                "Plan Width": 4,
+                "Index Cond": "(a = 42)"
+              }
+            }
+          ]
+        },
+        {
+          "id": "qb",
+          "sql": "SELECT b FROM series_b8e22baf5d1f402783587473afaf1b89.items WHERE b = 42",
+          "baseline_cost": 893.0,
+          "selected_cost": 8.05,
+          "baseline_plan": [
+            {
+              "Plan": {
+                "Node Type": "Seq Scan",
+                "Parallel Aware": false,
+                "Async Capable": false,
+                "Relation Name": "items",
+                "Alias": "items",
+                "Startup Cost": 0.0,
+                "Total Cost": 893.0,
+                "Plan Rows": 1,
+                "Plan Width": 4,
+                "Filter": "(b = 42)"
+              }
+            }
+          ],
+          "selected_plan": [
+            {
+              "Plan": {
+                "Node Type": "Index Only Scan",
+                "Parallel Aware": false,
+                "Async Capable": false,
+                "Scan Direction": "Forward",
+                "Index Name": "<13562>btree_series_b8e22baf5d1f402783587473afaf1b89_items_b",
+                "Relation Name": "items",
+                "Alias": "items",
+                "Startup Cost": 0.04,
+                "Total Cost": 8.05,
+                "Plan Rows": 1,
+                "Plan Width": 4,
+                "Index Cond": "(b = 42)"
+              }
+            }
+          ]
+        }
+      ],
+      "stop_reasons": [
+        "MAX_INDEXES",
+        "SEARCH_COMPLETE"
+      ],
+      "phases": [
+        "INTROSPECTION",
+        "BASELINE",
+        "CANDIDATES",
+        "GREEDY",
+        "REPAIR"
+      ],
+      "statistics": {
+        "explain_attempts": 8,
+        "evaluation_attempts": 4,
+        "completed_evaluations": 4,
+        "cache_hits": 0,
+        "repair_attempts": 0
+      },
+      "unexamined_configurations": 0,
+      "fixed_pool_selection": {
+        "pool_candidates": 2,
+        "admissible_candidates": 2,
+        "budget_rejected_candidates": 0,
+        "size_attempts": 0
+      },
+      "decisions": [],
+      "conditions_match": true
+    }
+  ],
+  "environment": {
+    "application_version": "0.1.0-SNAPSHOT",
+    "java_version": "25.0.2",
+    "kotlin_version": "2.4.21",
+    "postgres_version": "16.15 (Debian 16.15-1.pgdg12+2)",
+    "hypopg_version": "1.4.2"
+  }
+}

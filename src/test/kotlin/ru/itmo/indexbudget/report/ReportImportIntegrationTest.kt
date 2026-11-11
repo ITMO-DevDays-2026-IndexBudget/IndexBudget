@@ -205,47 +205,9 @@ class ReportImportIntegrationTest {
     }
 
     private fun assertHtmlReport(report: AnalysisReport, output: Path) {
-        val provenance = requireNotNull(report.workloadProvenance)
         val html = Files.readString(output.resolve("report.html"))
         assertEquals(HtmlReportRenderer().render(report), html)
-        val overview = html.substringAfter("id=\"overview\"").substringBefore("</section>")
-        val cards = Regex("<div class=\"metric-label\">([^<]+)</div><strong>([^<]+)</strong>")
-            .findAll(overview).map { it.groupValues[1] to it.groupValues[2] }.toList()
-        assertEquals(4, cards.size)
-        val values = cards.toMap()
-        val summary = report.summary
-        assertDisplayedNumber(summary.worstRatio?.times(100), values.getValue("Худший профиль · после"))
-        assertDisplayedNumber(summary.budgetUsage?.indexCount?.toDouble(), values.getValue("Выбранные индексы"))
-        val gain = values.getValue("Снижение взвешенной стоимости планов")
-        assertTrue(gain.endsWith(" %"))
-        assertDisplayedNumber(summary.meanEffect.gainPercent, gain.removeSuffix(" %"))
-        assertFalse(overview.contains("Полностью оценённые наборы"))
-        assertTrue(values.getValue("Место с запасом").contains("MiB"))
-        assertTrue(overview.contains("SQL с ростом оценки планировщика: ${summary.regressedQueryCount}"))
-        val provenanceSection = html.substringAfter("id=\"provenance\"").substringBefore("</section>")
-        assertTrue(provenanceSection.contains(provenance.sourceId.toString()))
-        assertTrue(provenanceSection.contains(provenance.selectionRule))
-        assertTrue(provenanceSection.contains("Историческое время выполнения"))
-        assertTrue(provenanceSection.contains("не являются прогнозом времени с новыми индексами"))
-        val rows = htmlRows(provenanceSection)
-        for (window in provenance.windows) {
-            val windowRows = rows.filter { it.first() == window.profileId }
-            val coverage = windowRows.single { it.size == 5 }
-            assertEquals(listOf(window.profileId, window.startedAt.toString(), window.finishedAt.toString(),
-                if (window.complete) "Полное" else "Неполное",
-                "${window.coverage.selectedCalls} / ${window.coverage.availableCalls}"), coverage)
-            val history = windowRows.single { it.size == 3 }
-            assertDisplayedNumber(window.coverage.selectedExecTimeMillis, history[1])
-            assertDisplayedNumber(window.coverage.availableExecTimeMillis, history[2])
-        }
-        for (query in requireNotNull(report.input).queries) assertTrue(rows.contains(listOf(query.id, "Репрезентативные литералы пользователя")))
-        val profileRows = htmlRows(html.substringAfter("id=\"profiles\"").substringBefore("</section>"))
-        for (series in report.profileComparisons) {
-            val row = profileRows.single { it.first() == series.id && it.size == 5 }
-            listOf(series.baseline, series.selected, series.bestRobust, series.bestMean).forEachIndexed { i, effect ->
-                assertDisplayedNumber(effect.cost, row[i + 1])
-            }
-        }
+        ImportedHtmlAssertions.assertReport(report, html)
     }
 
     private fun saveEvidence(workload: Path, output: Path) {
@@ -273,15 +235,6 @@ class ReportImportIntegrationTest {
                 assertEquals(effect.relativeStatus.name.lowercase(), node[key]["relative_status"].asString())
             }
         }
-    }
-
-    private fun htmlRows(html: String): List<List<String>> = Regex("<tr>(.*?)</tr>").findAll(html).map { row ->
-        Regex("<t[hd][^>]*>(.*?)</t[hd]>").findAll(row.groupValues[1]).map { it.groupValues[1] }.toList()
-    }.toList()
-
-    private fun assertDisplayedNumber(expected: Double?, text: String) {
-        val actual = text.replace("\u202f", "").replace(',', '.').toDouble()
-        assertEquals(requireNotNull(expected), actual, 1e-9, "HTML may only round for display")
     }
 
     private data class ImportedScenario(
@@ -342,5 +295,89 @@ class ReportImportIntegrationTest {
         assertEquals(0, exit, errors.toString())
         return ImportedScenario(output.resolve("workload.json"),
             mapOf("normal" to (before to middle), "campaign" to (middle to after)), keys.take(2), keys.last())
+    }
+}
+
+
+/** Shared by the real database route and its retained-data regression test. */
+internal object ImportedHtmlAssertions {
+    fun assertReport(report: AnalysisReport, html: String) {
+        val input = requireNotNull(report.input)
+        val provenance = requireNotNull(report.workloadProvenance)
+        val summary = report.summary
+        val overview = section(html, "overview")
+        val recommendation = overview.substringAfter("class=\"recommended-indexes\"").substringBefore("</ul>")
+        assertEquals(summary.selectedIndexIds?.size, Regex("<li>").findAll(recommendation).count())
+        val displayedGain = Regex("Снижение на ([^%]+)%").find(overview)?.groupValues?.get(1)
+        assertEquals(requireNotNull(summary.meanEffect.gainPercent), number(requireNotNull(displayedGain)), 0.05,
+            "The main effect may round to one decimal; exact values stay in details")
+        assertTrue(overview.contains("<dt>Регрессии SQL</dt><dd>${summary.regressedQueryCount} из ${input.queries.size}</dd>"))
+        assertTrue(overview.contains("pg_stat_statements"))
+        assertFalse(overview.contains("Полностью оценённые наборы"))
+
+        val method = values(section(html, "method").substringBefore("</dl>"))
+        assertDisplayedNumber(summary.worstRatio, method.getValue("Худшее отношение R"))
+        assertDisplayedNumber(summary.meanEffect.gainPercent, method.getValue("Снижение средней стоимости, %"))
+        val resourceValues = values(section(html, "indexes").substringAfter("id=\"resource-metrics\"").substringBefore("</details>"))
+        assertEquals(summary.budgetUsage?.indexCount.toString(), resourceValues.getValue("Число индексов / лимит").substringBefore(" / "))
+        assertEquals(requireNotNull(summary.budgetUsage).budgetedBytes.toString(),
+            resourceValues.getValue("С запасом").substringBefore("байт").filterNot(Char::isWhitespace))
+        assertEquals("Нет данных", resourceValues.getValue("Write units/час"))
+        assertEquals("Отключён", resourceValues.getValue("Лимит записи"))
+
+        val provenanceSection = section(html, "provenance")
+        assertTrue(provenanceSection.contains(provenance.sourceId.toString()))
+        assertTrue(provenanceSection.contains(provenance.selectionRule))
+        assertTrue(provenanceSection.contains("Историческое время выполнения"))
+        assertTrue(provenanceSection.contains("не являются прогнозом времени с новыми индексами"))
+        val rows = htmlRows(provenanceSection)
+        for (window in provenance.windows) {
+            val windowRows = rows.filter { it.first() == window.profileId }
+            val coverage = windowRows.single { it.size == 6 }
+            assertEquals(listOf(window.profileId, window.startedAt.toString(), window.finishedAt.toString()), coverage.take(3))
+            assertTrue(coverage[3].isNotBlank(), "Observation duration stays next to its period")
+            assertEquals(listOf(if (window.complete) "Полное" else "Неполное",
+                "${window.coverage.selectedCalls} / ${window.coverage.availableCalls}"), coverage.takeLast(2))
+            val history = windowRows.single { it.size == 3 }
+            assertDisplayedNumber(window.coverage.selectedExecTimeMillis, history[1])
+            assertDisplayedNumber(window.coverage.availableExecTimeMillis, history[2])
+        }
+        val examples = htmlRows(provenanceSection.substringAfter("<h3>Примеры SQL</h3>"))
+        for (index in input.queries.indices) {
+            assertTrue(examples.contains(listOf("SQL ${index + 1}", "Репрезентативные литералы пользователя")))
+        }
+        val profiles = section(html, "profiles")
+        val exactProfileRows = htmlRows(profiles).filter { it.size == 7 }
+        for (series in report.profileComparisons) {
+            val row = exactProfileRows.single { it.first() == series.id }
+            assertDisplayedNumber(series.baseline.cost, row[2])
+            assertDisplayedNumber(series.selected.cost, row[3])
+            assertDisplayedNumber(series.selected.ratio, row[4])
+            assertDisplayedNumber(series.selected.gain, row[5])
+            assertDisplayedNumber(series.selected.gainPercent, row[6])
+        }
+        val configurations = Regex("<article[^>]*data-configuration=\"([^\"]+)\"[^>]*>(.*?)</article>")
+            .findAll(section(html, "comparison")).toList()
+        for ((key, saved) in listOf("best_robust" to report.result.bestRobust, "best_mean" to report.result.bestMean)) {
+            val rendered = configurations.single { key in it.groupValues[1].split(' ') }.groupValues[2]
+            val renderedRows = htmlRows(rendered)
+            for (profile in requireNotNull(saved).metrics.profiles) {
+                val row = renderedRows.single { it.first() == profile.profileId }
+                assertDisplayedNumber(profile.cost, row[1])
+                assertDisplayedNumber(profile.ratio, row[2])
+                assertDisplayedNumber(profile.gainPercent, row[3])
+            }
+        }
+    }
+
+    private fun section(html: String, id: String): String = html.substringAfter("id=\"$id\"").substringBefore("</section>")
+    private fun values(html: String): Map<String, String> = Regex("<dt>(.*?)</dt><dd>(.*?)</dd>")
+        .findAll(html).associate { it.groupValues[1] to it.groupValues[2] }
+    private fun htmlRows(html: String): List<List<String>> = Regex("<tr[^>]*>(.*?)</tr>").findAll(html).map { row ->
+        Regex("<t[hd][^>]*>(.*?)</t[hd]>").findAll(row.groupValues[1]).map { it.groupValues[1] }.toList()
+    }.toList()
+    private fun number(text: String) = text.replace("\u202f", "").replace(',', '.').toDouble()
+    private fun assertDisplayedNumber(expected: Double?, text: String) {
+        assertEquals(requireNotNull(expected), number(text), 1e-9, "Detailed HTML must preserve the saved value")
     }
 }

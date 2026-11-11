@@ -25,19 +25,37 @@
       });
     }
   }
-  const reveal = () => {
-    // Only renderer-owned ordinal anchors, never selectors supplied by SQL or identifiers.
-    if (!/^#(?:variant-[1-5]-)?query-\d+$/.test(location.hash)) return;
-    const details = document.getElementById(location.hash.slice(1));
-    if (details && details.tagName === 'DETAILS') {
-      details.open = true;
-      details.scrollIntoView({block: 'start'});
+  document.querySelectorAll('button[data-copy]').forEach(button => {
+    button.hidden = false;
+    button.addEventListener('click', async () => {
+      const target = document.getElementById(button.dataset.copy);
+      const status = button.nextElementSibling;
+      if (!target) return;
+      try {
+        await navigator.clipboard.writeText(target.textContent);
+        status.textContent = 'Скопировано';
+      } catch (_) {
+        // file:// and restrictive browser settings may deny the Clipboard API.
+        const selection = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(target);
+        selection.removeAllRanges();
+        selection.addRange(range);
+        status.textContent = 'Текст выделен. Нажмите Ctrl+C или ⌘C.';
+      }
+    });
+  });
+  const reveal = hash => {
+    // Lookup by ID only; no selector or HTML is constructed from an anchor.
+    if (!/^#[a-z0-9-]+$/.test(hash)) return;
+    const target = document.getElementById(hash.slice(1));
+    if (!target) return;
+    for (let node = target; node; node = node.parentElement) {
+      if (node.tagName === 'DETAILS') node.open = true;
     }
+    target.scrollIntoView({block: 'start'});
   };
-  window.addEventListener('hashchange', reveal);
-  document.querySelectorAll('a[href^="#query-"], a[href^="#variant-"]').forEach(link => link.addEventListener('click', () => {
-    const details = document.getElementById(link.getAttribute('href').slice(1));
-    if (details && details.tagName === 'DETAILS') details.open = true;
-  }));
-  reveal();
+  window.addEventListener('hashchange', () => reveal(location.hash));
+  document.querySelectorAll('a[href^="#"]').forEach(link => link.addEventListener('click', () => reveal(link.getAttribute('href'))));
+  reveal(location.hash);
 })();
