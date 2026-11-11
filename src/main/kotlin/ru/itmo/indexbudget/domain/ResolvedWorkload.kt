@@ -1,6 +1,19 @@
 package ru.itmo.indexbudget.domain
 
 enum class PredicateSource { WHERE, JOIN }
+
+/** Leaf indices refer to the complete, ordered ResolvedQuery.predicates vector. No DNF expansion. */
+sealed interface ResolvedCondition {
+    data class Predicate(val index: Int) : ResolvedCondition
+    data class And(val left: ResolvedCondition, val right: ResolvedCondition) : ResolvedCondition
+    data class Or(val left: ResolvedCondition, val right: ResolvedCondition) : ResolvedCondition
+}
+
+object ConditionLimits {
+    const val MAX_COMPLEXITY = 256
+    const val MAX_NODES = 1024
+    const val MAX_DEPTH = 512
+}
 enum class ComparisonOperator {
     EQUAL, LESS_THAN, LESS_THAN_OR_EQUAL, GREATER_THAN, GREATER_THAN_OR_EQUAL,
     IN, BETWEEN, IS_NULL, IS_NOT_NULL;
@@ -34,6 +47,8 @@ data class ResolvedQuery(
     val orderBy: List<OrderByColumn>,
     val projectedColumns: Set<ColumnRef> = emptySet(),
     val selectsAllColumns: Boolean = false,
+    /** Null means the legacy conjunctive vector (or no conditions). Production preserves the tree. */
+    val condition: ResolvedCondition? = null,
 )
 
 data class ResolvedWorkload(

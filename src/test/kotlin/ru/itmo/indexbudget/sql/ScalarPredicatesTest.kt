@@ -104,7 +104,7 @@ class ScalarPredicatesTest {
     @ValueSource(strings = ["id NOT IN (1, 2)", "id NOT BETWEEN 1 AND 2", "id IN (SELECT id FROM records)",
         "id IN (value, 2)", "id IN (1, abs(2))", "id IN (1, $1)", "(id, value) IN ((1, 2))",
         "id + 1 BETWEEN 1 AND 2", "id BETWEEN value AND 2", "id BETWEEN 1 AND value",
-        "id IN (1, 2) OR value IS NULL", "(id + 1) IS NULL", "id ISNULL", "id NOTNULL",
+        "(id + 1) IS NULL", "id ISNULL", "id NOTNULL",
         "id IN (1, ~2)", "id BETWEEN ~1 AND 2", "id IN (1, CAST('2' AS missing_type))",
         "id BETWEEN 1 AND CAST(2 AS missing_type)", "id BETWEEN SYMMETRIC 1 AND 2", "id BETWEEN ASYMMETRIC 1 AND 2",
         "id IN ()", "id(+) IN (1, 2)", "id(+) BETWEEN 1 AND 2", "id(+) IS NULL", "PRIOR id IN (1, 2)"])

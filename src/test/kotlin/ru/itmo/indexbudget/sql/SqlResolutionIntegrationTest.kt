@@ -301,6 +301,54 @@ class SqlResolutionIntegrationTest {
     }
 
     @Test
+    fun `mixed OR branches keep exact SQL and generate only structurally compatible pairs`() {
+        val text = "SELECT id FROM records WHERE (id = 1 AND value >= 2) OR (id >= 3 AND value = 4)"
+        val workload = resolve(text)
+        assertEquals(text, workload.queries.single().sql)
+        assertInstanceOf(ResolvedCondition.Or::class.java, workload.queries.single().condition)
+        val scopes = mutableListOf<CandidateScope>()
+        BtreeCandidateEnumerator().forEachScope(workload, RunContext(), scopes::add)
+        val pairs = scopes.single().variants.filter { it.definition.keys.size == 2 }
+        assertEquals(2, pairs.size)
+        assertTrue(pairs.all { it.generationReasons == setOf(GenerationReason.EQUALITY_AND_RANGE) })
+        assertTrue(pairs.all { it.sourceBranches.size == 2 })
+        sql("EXPLAIN (FORMAT JSON) $text")
+        val alternatives = resolve("SELECT id FROM records WHERE id IN (1, 2) OR value IS NULL")
+        scopes.clear()
+        BtreeCandidateEnumerator().forEachScope(alternatives, RunContext(), scopes::add)
+        assertTrue(scopes.single().variants.all { it.definition.keys.size == 1 })
+        sql("EXPLAIN (FORMAT JSON) " + alternatives.queries.single().sql)
+        failure("SELECT id FROM records WHERE id = 1 OR missing = 2", ErrorCode.UNKNOWN_COLUMN)
+        failure("SELECT id FROM records WHERE id = 1 OR value = CAST('1' AS missing_type)", ErrorCode.UNSUPPORTED_SQL)
+    }
+
+    @Test
+    fun `real OR joins resolve all branches and real null semantics remain unchanged`() {
+        sql("INSERT INTO records(id, value) VALUES (1, NULL), (2, 2), (3, 3)")
+        val text = "SELECT id FROM records WHERE value = 2 OR value IS NULL ORDER BY id"
+        assertEquals(text, resolve(text).queries.single().sql)
+        assertEquals(listOf(1, 2), queryIds(text))
+        val join = "SELECT r.id FROM records r INNER JOIN groups g ON r.id=g.id OR r.value=g.id"
+        assertEquals(2, resolve(join).queries.single().predicates.size)
+        sql("EXPLAIN (FORMAT JSON) $join")
+        failure("SELECT r.id FROM records r INNER JOIN groups g ON r.id=g.id OR missing=g.id", ErrorCode.UNKNOWN_COLUMN)
+    }
+
+    @Test
+    fun `one hundred real OR predicates reach full EXPLAIN without cross branch pairs`() {
+        sql("CREATE TABLE wide_or (" + (1..100).joinToString(",") { "c$it integer" } + ")")
+        val text = "SELECT * FROM wide_or WHERE " + (1..100).joinToString(" OR ") { "c$it = $it" }
+        val workload = resolve(text)
+        assertEquals(100, workload.queries.single().predicates.size)
+        val scopes = mutableListOf<CandidateScope>()
+        BtreeCandidateEnumerator().forEachScope(workload, RunContext(), scopes::add)
+        assertEquals(16, scopes.single().variants.size)
+        assertTrue(scopes.single().variants.all { it.definition.keys.size == 1 })
+        assertEquals(text, workload.queries.single().sql)
+        sql("EXPLAIN (FORMAT JSON) $text")
+    }
+
+    @Test
     fun `json null tests keep integer candidates with a real catalog`() {
         sql("ALTER TABLE records ADD COLUMN payload json")
         sql("INSERT INTO records(id, payload) VALUES (1, NULL), (2, '{}'::json)")

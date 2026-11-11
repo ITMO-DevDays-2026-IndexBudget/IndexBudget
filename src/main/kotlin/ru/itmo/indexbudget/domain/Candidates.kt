@@ -12,6 +12,9 @@ enum class GenerationReason(val pairPriority: Int? = null) {
 /** Shared local/global pair ordering; all generation reasons remain available as provenance. */
 fun IndexCandidate.bestPairPriority(): Int? = generationReasons.mapNotNull { it.pairPriority }.minOrNull()
 
+/** A structural leaf path in the resolved condition tree, or the unconditional 'order_by' source. */
+data class CandidateSourceBranch(val queryId: String, val conditionPath: String)
+
 /** Unknown estimates stay null. The PostgreSQL adapter fills sizes only for the final shortlist. */
 data class IndexCandidate(
     val id: String,
@@ -22,6 +25,7 @@ data class IndexCandidate(
     val estimatedBytes: Long? = null,
     val budgetedBytes: Long? = null,
     val writeUnitsPerHour: Double? = null,
+    val sourceBranches: Set<CandidateSourceBranch> = emptySet(),
 )
 
 enum class CandidateReason {
