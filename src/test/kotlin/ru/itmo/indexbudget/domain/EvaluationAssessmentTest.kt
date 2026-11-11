@@ -269,6 +269,133 @@ class EvaluationAssessmentTest {
         constraints = Constraints(storageBudgetBytes = 1_000L, writeBudgetUnitsPerHour = null),
     )
 
+    @Test
+    fun `guard ratio equal to the limit passes and improvement passes any limit`() {
+        val workload = workload(profile("only", 1.0, 1.0, 1.0))
+            .let { it.copy(constraints = it.constraints.copy(queryCostGuards = mapOf("q1" to 2.0))) }
+        // 100 -> 200 puts the observed ratio exactly at the inclusive 2.0 limit; 200 -> 200 and
+        // 200 -> 100 stay strictly below it, so a strict-inequality regression fails the first pair only.
+        for ((first, second) in listOf(100.0 to 200.0, 200.0 to 200.0, 200.0 to 100.0)) {
+            val assessment = calculator.assessEvaluation(
+                workload, evaluation(first, 1.0), evaluation(second, 1.0, listOf("idx_a")), candidateUsage,
+            )
+            assertInstanceOf(EvaluationAssessment.Accepted::class.java, assessment)
+        }
+    }
+
+    @Test
+    fun `guard violation rejects the set with the limit and the observed ratio`() {
+        val workload = workload(profile("only", 1.0, 1.0, 1.0))
+            .let { it.copy(constraints = it.constraints.copy(queryCostGuards = mapOf("q1" to 1.1))) }
+
+        val assessment = calculator.assessEvaluation(
+            workload, evaluation(100.0, 1.0), evaluation(150.0, 1.0, listOf("idx_a")), candidateUsage,
+        )
+        val rejected = assertInstanceOf(EvaluationAssessment.Rejected::class.java, assessment)
+
+        val violation = rejected.violations.single()
+        assertEquals(ErrorCode.CRITICAL_QUERY_REGRESSION, violation.code)
+        assertEquals("q1", violation.queryId)
+        assertEquals("1.1", violation.details["limit"])
+        assertEquals("1.5", violation.details["observed_ratio"])
+        assertEquals("100.0", violation.details["baseline_cost"])
+        assertEquals("150.0", violation.details["selected_cost"])
+        // Raw metrics survive the rejection: both query costs are still visible in the profile.
+        assertEquals(151.0 / 101.0, rejected.metrics.meanRatio)
+    }
+
+    @Test
+    fun `an improving mean does not bypass a critical query guard`() {
+        val workload = workload(profile("only", 1.0, 1.0, 1.0))
+            .let { it.copy(constraints = it.constraints.copy(queryCostGuards = mapOf("q1" to 1.05))) }
+
+        val assessment = calculator.assessEvaluation(
+            workload, evaluation(100.0, 100.0), evaluation(110.0, 1.0, listOf("idx_a")), candidateUsage,
+        )
+        val rejected = assertInstanceOf(EvaluationAssessment.Rejected::class.java, assessment)
+
+        assertTrue(requireNotNull(rejected.metrics.meanRatio) < 1.0)
+        assertEquals(ErrorCode.CRITICAL_QUERY_REGRESSION, rejected.violations.single().code)
+        assertEquals("q1", rejected.violations.single().queryId)
+    }
+
+    @Test
+    fun `a zero-baseline guard keeps zero cost but never divides by zero`() {
+        val workload = workload(profile("only", 1.0, 1.0, 1.0))
+            .let { it.copy(constraints = it.constraints.copy(queryCostGuards = mapOf("q1" to 1.1))) }
+        val baseline = evaluation(0.0, 50.0)
+
+        val retained = calculator.assessEvaluation(
+            workload, baseline, evaluation(0.0, 10.0, listOf("idx_a")), candidateUsage,
+        )
+        assertInstanceOf(EvaluationAssessment.Accepted::class.java, retained)
+
+        val regression = calculator.assessEvaluation(
+            workload, baseline, evaluation(Double.MIN_VALUE, 10.0, listOf("idx_a")), candidateUsage,
+        )
+        val rejected = assertInstanceOf(EvaluationAssessment.Rejected::class.java, regression)
+        val violation = rejected.violations.single()
+        assertEquals(ErrorCode.CRITICAL_QUERY_REGRESSION, violation.code)
+        assertEquals("q1", violation.queryId)
+        assertEquals("unknown", violation.details["observed_ratio"])
+        // The ratio stays unknown instead of becoming zero or infinity.
+        assertNull(CostGuards.evaluate(workload.constraints.queryCostGuards, baseline,
+            evaluation(Double.MIN_VALUE, 10.0)).single().observedRatio)
+    }
+
+    @Test
+    fun `guard and zero-baseline profile violations are reported together in stable order`() {
+        val workload = workload(profile("zero", 1.0, 1.0, 0.0), profile("positive", 1.0, 0.0, 1.0))
+            .let { it.copy(constraints = it.constraints.copy(queryCostGuards = mapOf("q2" to 1.0))) }
+
+        val assessment = calculator.assessEvaluation(
+            workload, evaluation(0.0, 100.0), evaluation(5.0, 150.0, listOf("idx_a")), candidateUsage,
+        )
+        val rejected = assertInstanceOf(EvaluationAssessment.Rejected::class.java, assessment)
+
+        assertEquals(
+            listOf(ErrorCode.ZERO_BASELINE_REGRESSION, ErrorCode.CRITICAL_QUERY_REGRESSION),
+            rejected.violations.map { it.code },
+        )
+        assertEquals(listOf("zero", "q2"), rejected.violations.map { it.profileId ?: it.queryId })
+    }
+
+    @Test
+    fun `a non-finite guard ratio remains a numeric error`() {
+        val workload = workload(profile("only", 1.0, 0.0, 1.0))
+            .let { it.copy(constraints = it.constraints.copy(queryCostGuards = mapOf("q1" to 1.1))) }
+
+        val exception = assertThrows(AnalysisException::class.java) {
+            calculator.assessEvaluation(
+                workload, evaluation(Double.MIN_VALUE, 1.0),
+                evaluation(1e308, 1.0, listOf("idx_a")), candidateUsage,
+            )
+        }
+        assertEquals(ErrorCode.NUMERIC_ERROR, exception.error.code)
+        assertEquals("q1", exception.error.queryId)
+    }
+
+    @Test
+    fun `guard outcomes preserve full vectors for reports`() {
+        val guards = mapOf("q1" to 1.2, "q2" to 1.0)
+        val baseline = evaluation(100.0, 0.0)
+        val selected = evaluation(110.0, 0.0)
+
+        val outcomes = CostGuards.evaluate(guards, baseline, selected)
+
+        assertEquals(listOf("q1", "q2"), outcomes.map { it.queryId })
+        val first = outcomes.first()
+        assertEquals(1.2, first.maxRatio)
+        assertEquals(1.1, first.observedRatio)
+        assertFalse(first.zeroBaseline)
+        assertFalse(first.violated)
+        val second = outcomes.last()
+        assertTrue(second.zeroBaseline)
+        assertNull(second.observedRatio)
+        assertFalse(second.violated)
+        assertTrue(CostGuards.violationErrors(outcomes).isEmpty())
+    }
+
     private fun profile(id: String, weight: Double, q1: Double, q2: Double): Profile =
         Profile(id, weight, mapOf("q1" to q1, "q2" to q2))
 

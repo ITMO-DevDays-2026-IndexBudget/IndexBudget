@@ -38,7 +38,8 @@ JSON записывается в UTF-8. Все перечисленные пол
 | `profile_comparisons`, `query_effects` | Готовые серии baseline/selected/best_robust/best_mean по профилям и SQL |
 | `workload_provenance` | Метаданные наблюдений из входного `provenance`, либо `null` |
 | `profiles` | Исходный порядок профилей; поля `id`, `weight`, `normalized_weight`, `calls_per_hour` |
-| `budgets` | `storage_budget_bytes`, `write_budget_units_per_hour`, `max_indexes` |
+| `budgets` | `storage_budget_bytes`, `write_budget_units_per_hour`, `max_indexes`, `query_cost_guards` (эхо заданных пределов) |
+| `cost_guards` | Ограничения критических SQL (#78): `basis: "planner_cost_ratio"`, подпись «не latency и не SLA», `max_ratio_by_query_id` и `outcomes` для выбранного набора: `query_id`, `max_ratio`, `baseline_cost`, `selected_cost`, `observed_ratio` (`null` при нулевом baseline), `zero_baseline`, `violated`. Пусто без guards; при failed без выбранного набора `outcomes` пуст |
 | `write_proxy_model` | Всегда `row_changes_times_key_and_include_columns`; payload оплачивается как ключ |
 | `table_write_rates` | Объект по физическим `schema.table` либо `null`; значения содержат `inserts_per_hour`, `updates_per_hour`, `deletes_per_hour`, `source` |
 | `queries` | Общий список SQL в исходном порядке; поля `id`, `sql`, `baseline_cost`, `selected_cost`, `regression` |

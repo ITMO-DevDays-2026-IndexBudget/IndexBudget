@@ -50,6 +50,10 @@ class DefaultReportBuilder(
             emptyMap()
         }
         val selectedCosts = result.selected?.evaluation?.costByQueryId
+        val selectedEvaluation = result.selected?.evaluation
+        val costGuards = if (baseline != null && selectedEvaluation != null) {
+            CostGuards.evaluate(input.constraints.queryCostGuards, baseline, selectedEvaluation)
+        } else emptyList()
         return AnalysisReport(
             runId = context.runId,
             inputHash = context.inputHash,
@@ -74,6 +78,7 @@ class DefaultReportBuilder(
             },
             incumbentsCoincide = if (result.status == RunStatus.FAILED) null else
                 result.bestRobust?.evaluation?.candidateIds == result.bestMean?.evaluation?.candidateIds,
+            costGuards = costGuards,
         )
     }
 }

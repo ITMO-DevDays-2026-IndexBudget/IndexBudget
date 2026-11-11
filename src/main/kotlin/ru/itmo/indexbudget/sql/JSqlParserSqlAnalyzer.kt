@@ -1,7 +1,9 @@
 package ru.itmo.indexbudget.sql
 
 import net.sf.jsqlparser.JSQLParserException
+import net.sf.jsqlparser.parser.CCJSqlParser
 import net.sf.jsqlparser.parser.CCJSqlParserUtil
+import net.sf.jsqlparser.statement.Statements
 import net.sf.jsqlparser.statement.select.PlainSelect
 import org.springframework.stereotype.Component
 import ru.itmo.indexbudget.domain.AnalysisError
@@ -14,9 +16,14 @@ import ru.itmo.indexbudget.domain.RunContext
 import ru.itmo.indexbudget.domain.TableName
 import ru.itmo.indexbudget.domain.WorkloadInput
 import java.nio.charset.StandardCharsets
+import java.util.function.Consumer
 
 @Component
-class JSqlParserSqlAnalyzer : SqlAnalyzer {
+class JSqlParserSqlAnalyzer internal constructor(
+    private val statementParser: (String, Consumer<CCJSqlParser>) -> Statements,
+) : SqlAnalyzer {
+    constructor() : this(CCJSqlParserUtil::parseStatements)
+
     override fun parse(input: WorkloadInput, context: RunContext): ParsedWorkload {
         val parsedQueries = linkedMapOf<String, PlainSelect>()
         val referencedTables = linkedSetOf<TableName>()
@@ -46,9 +53,10 @@ class JSqlParserSqlAnalyzer : SqlAnalyzer {
         try {
             context.checkDeadline()
             validateSqlSize(query)
-            val select = parseSingleSelect(query, context)
-            val tables = JSqlParserAstValidator(query.id, context).validate(select)
-            select to tables.map { TableName(name = decodePostgresIdentifier(it.name), schema = it.schemaName?.let(::decodePostgresIdentifier)) }
+            val tokens = PostgresParserTokens(query.sql, context)
+            val select = parseSingleSelect(query, context, tokens)
+            val tables = JSqlParserAstValidator(query.id, context, tokens::restoreIdentifier).validate(select)
+            select to tables.map { TableName(name = decodePostgresIdentifier(it.postgresName), schema = it.schemaName?.let(::decodePostgresIdentifier)) }
         } catch (error: AnalysisException) {
             if (error.error.queryId != null) throw error
             throw AnalysisException(error.error.copy(queryId = query.id), error)
@@ -60,15 +68,16 @@ class JSqlParserSqlAnalyzer : SqlAnalyzer {
         }
     }
 
-    private fun parseSingleSelect(query: QueryInput, context: RunContext): PlainSelect {
+    private fun parseSingleSelect(query: QueryInput, context: RunContext, tokens: PostgresParserTokens): PlainSelect {
         context.checkDeadline()
         val statements = try {
-            CCJSqlParserUtil.parseStatements(query.sql)
+            statementParser(query.sql, Consumer(tokens::configure))
         } catch (_: JSQLParserException) {
             fail(ErrorCode.UNSUPPORTED_SQL, query.id, "SQL cannot be parsed as a supported SELECT.")
         } finally {
             context.checkDeadline()
         }
+        tokens.restoreImages(context)
 
         if (statements.size != 1) {
             fail(ErrorCode.UNSUPPORTED_SQL, query.id, "Exactly one SELECT statement is required.")

@@ -146,6 +146,49 @@ class DefaultReportBuilderTest {
     }
 
     @Test
+    fun `cost guard outcomes describe the selected set with limits and observed ratios`() {
+        val source = ContractFixtures.workload(Objective.MEAN)
+        val input = source.copy(constraints = source.constraints.copy(
+            queryCostGuards = mapOf("records_by_group" to 2.0, "records_by_value" to 1.1)))
+        val baseline = ContractFixtures.baselineConfiguration()
+        val original = ContractFixtures.meanConfiguration()
+        val evaluation = original.evaluation.copy(
+            costByQueryId = mapOf("records_by_group" to 10.0, "records_by_value" to 110.0),
+        )
+        val mean = EvaluatedConfiguration(evaluation, MetricsCalculatorImpl().calculate(
+            input, baseline.evaluation, evaluation, original.metrics.budgetUsage,
+        ))
+        val result = SearchResult.Completed(Objective.MEAN, baseline.evaluation, baseline, mean)
+
+        val report = builder.build(input, CandidateBatch(ContractFixtures.candidates()), result, RunContext())
+
+        assertEquals(listOf("records_by_group", "records_by_value"), report.costGuards.map { it.queryId })
+        val group = report.costGuards.first()
+        assertEquals(2.0, group.maxRatio)
+        assertEquals(100.0, group.baselineCost)
+        assertEquals(10.0, group.selectedCost)
+        assertEquals(0.1, group.observedRatio)
+        assertFalse(group.violated)
+        val value = report.costGuards.last()
+        // Equality with the 1.1 limit passes.
+        assertEquals(1.1, value.observedRatio)
+        assertFalse(value.violated)
+    }
+
+    @Test
+    fun `failed runs keep requested guards echo without selected outcomes`() {
+        val source = ContractFixtures.workload()
+        val input = source.copy(constraints = source.constraints.copy(
+            queryCostGuards = mapOf("records_by_group" to 1.05)))
+        val failed = ContractFixtures.failedResult()
+
+        val report = builder.build(input, CandidateBatch(ContractFixtures.candidates()), failed, RunContext())
+
+        assertTrue(report.costGuards.isEmpty())
+        assertEquals(mapOf("records_by_group" to 1.05), report.input?.constraints?.queryCostGuards)
+    }
+
+    @Test
     fun `zero baseline and absent write profile preserve nulls instead of fabricating zeros`() {
         val input = ContractFixtures.workload(withWriteProfile = false)
         val baseline = ContractFixtures.baselineEvaluation().let { it.copy(
