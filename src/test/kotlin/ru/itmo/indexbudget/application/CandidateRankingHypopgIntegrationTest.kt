@@ -77,7 +77,10 @@ class CandidateRankingHypopgIntegrationTest {
                     CandidateRanking.BASELINE_COST to cost)) {
                     val report = observation.report
                     assertEquals(RunStatus.COMPLETED, report.result.status)
-                    assertEquals(16, report.candidates.candidates.size)
+                    assertEquals(16, report.candidates.diagnostics.preparation?.finalShortlistedCandidates)
+                    assertTrue(report.candidates.candidates.size > 16, "Report must retain the unmeasured reserve")
+                    assertTrue(report.candidates.candidates.take(16).all { it.estimatedBytes != null })
+                    assertTrue(report.candidates.candidates.drop(16).all { it.estimatedBytes == null })
                     assertTrue(report.result.diagnostics.candidateDecisions.none {
                         it.reason in setOf(CandidateReason.STORAGE_BUDGET, CandidateReason.WRITE_BUDGET,
                             CandidateReason.HYPOTHETICAL_INDEX_ERROR)

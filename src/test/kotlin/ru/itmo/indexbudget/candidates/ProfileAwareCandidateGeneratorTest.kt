@@ -46,7 +46,18 @@ class ProfileAwareCandidateGeneratorTest {
         assertEquals(table, local.table)
         assertEquals("256", local.details["candidates_before"])
         assertEquals("32", local.details["candidates_after"])
-        assertEquals(16, result.diagnostics.decisions.count { it.reason == CandidateReason.GLOBAL_CANDIDATE_LIMIT })
+        assertEquals(0, result.diagnostics.decisions.count { it.reason == CandidateReason.GLOBAL_CANDIDATE_LIMIT })
+        assertEquals(16, result.reserve.size)
+        assertEquals(16, result.diagnostics.initialShortlistedCandidates)
+        assertEquals(16, result.diagnostics.reserveCandidates)
+        val pool = result.candidates + result.reserve
+        assertEquals(List(16) { listOf(1, 2) }.flatten(), pool.map { it.definition.keys.size })
+        assertEquals(pool.size, pool.map { it.id }.toSet().size)
+        val singles = pool.filter { it.definition.keys.size == 1 }.sortedBy { it.id }
+        val pairs = pool.filter { it.definition.keys.size == 2 }.sortedBy { it.id }
+        assertEquals(singles.take(8).zip(pairs.take(8)).flatMap { listOf(it.first, it.second) }, result.candidates)
+        assertEquals("true", result.diagnostics.warnings.single { it.code == WarningCode.GLOBAL_CANDIDATE_LIMIT }
+            .details["refill_after_budget_filter"])
         assertUnknownEstimates(result)
         assertEquals(0, context.statistics().explainAttempts)
     }
@@ -64,10 +75,67 @@ class ProfileAwareCandidateGeneratorTest {
         assertEquals(List(8) { listOf("rare", "common") }.flatten(),
             result.candidates.map { it.sourceQueryIds.single() })
         assertEquals(8, result.candidates.count { it.definition.keys.size == 1 })
+        assertEquals(48, result.reserve.size)
+        assertEquals(24, result.reserve.count { it.sourceQueryIds == setOf("rare") })
+        assertEquals(24, result.reserve.count { it.sourceQueryIds == setOf("common") })
+        for (id in listOf("rare", "common")) {
+            val fromProfile = (result.candidates + result.reserve).filter { id in it.sourceQueryIds }
+            assertEquals(List(16) { listOf(1, 2) }.flatten(), fromProfile.map { it.definition.keys.size })
+        }
         val permuted = input.copy(input = input.input.copy(profiles = profiles.reversed().map {
             it.copy(weight = 42.0, callsPerHour = it.callsPerHour.entries.reversed().associate { it.toPair() })
         }), queries = input.queries.reversed())
         assertEquals(result, generate(permuted, catalog.copy(tables = catalog.tables.map { it.copy(columns = it.columns.reversed()) })))
+    }
+
+    @Test
+    fun `bounded reserve continues three profile turns and equal score ordering deterministically`() {
+        val tables = listOf("busy", "middle", "rare").map { TableRef("public", it) }
+        val queries = tables.mapIndexed { i, table ->
+            val columns = names.take(16).map { ColumnRef(table, it) }
+            ResolvedQuery("q$i", "SELECT * FROM public.${table.name} WHERE " +
+                columns.joinToString(" AND ") { "${it.name} = 1" }, setOf(table), columns.toSet(),
+                columns.map { ResolvedPredicate(it, ComparisonOperator.EQUAL, PredicateSource.WHERE) },
+                emptyList(), selectsAllColumns = true)
+        }
+        val profiles = listOf(
+            Profile("a_busy", 1e9, mapOf("q0" to 1e9, "q1" to 0.0, "q2" to 0.0)),
+            Profile("b_middle", 1.0, mapOf("q0" to 0.0, "q1" to 7.0, "q2" to 0.0)),
+            Profile("z_rare", 1e-9, mapOf("q0" to 0.0, "q1" to 0.0, "q2" to 1.0)),
+        )
+        val workload = workload(queries, profiles)
+        val catalog = CatalogSnapshot(tables.map { table ->
+            CatalogTable(table, this.catalog.tables.single().columns.take(16))
+        })
+
+        val result = generate(workload, catalog)
+        val pool = result.candidates + result.reserve
+        assertEquals(96, result.diagnostics.candidatesAfterGlobalDeduplication)
+        assertEquals(16, result.candidates.size)
+        assertEquals(48, result.reserve.size)
+        assertEquals(64, pool.map { it.id }.toSet().size)
+        assertEquals(listOf("q0", "q1", "q2"), pool.take(3).map { it.sourceQueryIds.single() })
+        assertEquals(listOf(1, 1, 1, 2, 2, 2), pool.take(6).map { it.definition.keys.size })
+        for (query in queries) {
+            assertEquals(16, result.reserve.count { query.id in it.sourceQueryIds })
+            val fromProfile = pool.filter { query.id in it.sourceQueryIds }
+            assertEquals(List(fromProfile.size) { if (it % 2 == 0) 1 else 2 },
+                fromProfile.map { it.definition.keys.size })
+            for (arity in 1..2) {
+                val ids = fromProfile.filter { it.definition.keys.size == arity }.map { it.id }
+                assertEquals(ids.sorted(), ids)
+            }
+        }
+        val excluded = result.diagnostics.decisions.filter { it.reason == CandidateReason.GLOBAL_CANDIDATE_LIMIT }
+        assertEquals(32, excluded.size)
+        assertTrue(excluded.none { decision -> pool.any { it.id == decision.candidateId } })
+        val permuted = workload.copy(input = workload.input.copy(profiles = profiles.reversed()),
+            queries = queries.reversed())
+        val permutedCatalog = catalog.copy(tables = catalog.tables.reversed().map {
+            it.copy(columns = it.columns.reversed())
+        })
+        assertEquals(result, generate(permuted, permutedCatalog))
+        assertUnknownEstimates(result)
     }
 
     @Test
@@ -172,7 +240,13 @@ class ProfileAwareCandidateGeneratorTest {
         assertEquals(1920, result.diagnostics.candidatesBeforeGlobalDeduplication)
         assertEquals(96, result.diagnostics.candidatesAfterGlobalDeduplication)
         assertEquals(16, result.candidates.size)
-        assertTrue(result.candidates.all { it.sourceQueryIds.size == 20 })
+        assertEquals(48, result.reserve.size)
+        val pool = result.candidates + result.reserve
+        assertEquals(64, pool.map { it.id }.toSet().size)
+        assertTrue(pool.all { it.sourceQueryIds.size == 20 })
+        val excluded = result.diagnostics.decisions.filter { it.reason == CandidateReason.GLOBAL_CANDIDATE_LIMIT }
+        assertEquals(32, excluded.size)
+        assertTrue(excluded.none { decision -> pool.any { it.id == decision.candidateId } })
 
         val scenario = CandidateGenerationFixtures.twoEqualities()
         val streamed = ProfileAwareCandidateGenerator(CandidateEnumerator { w, c, consume ->
@@ -231,6 +305,7 @@ class ProfileAwareCandidateGeneratorTest {
         dynamicTest(scenario.name) {
             val result = generate(scenario.workload, scenario.catalog)
             assertTrue(result.candidates.size <= 16)
+            assertTrue(result.reserve.size <= 48)
             assertTrue(result.diagnostics.localScopes.all { it.retainedDefinitions <= 32 && it.retainedColumns <= 16 })
             assertUnknownEstimates(result)
         }
@@ -247,7 +322,9 @@ class ProfileAwareCandidateGeneratorTest {
         val above = withScopes(input, listOf(first, scope("q2", listOf(variant("c17", queryId = "q2")))))
         assertEquals(17, above.diagnostics.candidatesAfterGlobalDeduplication)
         assertEquals(16, above.candidates.size)
-        assertEquals(1, above.diagnostics.decisions.count { it.reason == CandidateReason.GLOBAL_CANDIDATE_LIMIT })
+        assertEquals(0, above.diagnostics.decisions.count { it.reason == CandidateReason.GLOBAL_CANDIDATE_LIMIT })
+        assertEquals(1, above.reserve.size)
+        assertEquals(17, (above.candidates + above.reserve).map { it.id }.toSet().size)
     }
 
     @Test
@@ -305,7 +382,7 @@ class ProfileAwareCandidateGeneratorTest {
         Profile("p", 1.0, queries.associate { it.id to 1.0 }),
     )) = CandidateGenerationFixtures.workload(queries, profiles)
 
-    private fun assertUnknownEstimates(result: CandidateBatch) = result.candidates.forEach {
+    private fun assertUnknownEstimates(result: CandidateBatch) = (result.candidates + result.reserve).forEach {
         assertNull(it.estimatedBytes)
         assertNull(it.budgetedBytes)
         assertNull(it.writeUnitsPerHour)

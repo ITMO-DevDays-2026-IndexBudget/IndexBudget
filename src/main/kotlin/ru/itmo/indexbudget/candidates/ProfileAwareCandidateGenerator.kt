@@ -86,7 +86,9 @@ class ProfileAwareCandidateGenerator(
         context.checkDeadline()
         val pool = canonicalizer.merge(survivors)
         val selection = select(pool, workload, context, baseline)
-        val selected = selection.candidates
+        val orderedPool = selection.candidates
+        val selected = orderedPool.take(CandidatePreparationLimits.SHORTLIST)
+        val reserve = orderedPool.drop(CandidatePreparationLimits.SHORTLIST)
         val zeroSupportIds = if (workload.input.candidateRanking == CandidateRanking.BASELINE_COST) {
             pool.filter { candidate ->
                 context.checkDeadline()
@@ -98,10 +100,11 @@ class ProfileAwareCandidateGenerator(
                 table = candidate.definition.table, phase = AnalysisPhase.CANDIDATES)
         }
         val supportedCandidates = pool.size - zeroSupportIds.size
-        if (supportedCandidates > GLOBAL_LIMIT) {
+        if (supportedCandidates > CandidatePreparationLimits.SHORTLIST) {
             val details = mapOf("candidates_before" to supportedCandidates.toString(),
-                "candidates_after" to selected.size.toString(), "refill_after_budget_filter" to "false")
-            val selectedIds = selected.map { it.id }.toSet()
+                "candidates_after" to selected.size.toString(), "reserve_candidates" to reserve.size.toString(),
+                "preparation_pool_size" to orderedPool.size.toString(), "refill_after_budget_filter" to "true")
+            val selectedIds = orderedPool.map { it.id }.toSet()
             for (candidate in pool) {
                 context.checkDeadline()
                 if (candidate.id !in selectedIds && candidate.id !in zeroSupportIds) decisions += CandidateDecision(
@@ -109,7 +112,7 @@ class ProfileAwareCandidateGenerator(
                     table = candidate.definition.table, phase = AnalysisPhase.CANDIDATES, details = details)
             }
             warnings += AnalysisWarning(WarningCode.GLOBAL_CANDIDATE_LIMIT,
-                "Общий shortlist ограничен до оценки размеров. После бюджетного отсева вытесненные кандидаты не возвращаются.",
+                "Общий shortlist ограничен до оценки размеров; ограниченный резерв пополняет его после бюджетного отсева.",
                 details = details)
         }
         context.checkDeadline()
@@ -118,10 +121,12 @@ class ProfileAwareCandidateGenerator(
             candidatesBeforeGlobalDeduplication = survivors.size,
             candidatesAfterGlobalDeduplication = pool.size,
             shortlistedCandidates = selected.size,
+            initialShortlistedCandidates = selected.size,
+            reserveCandidates = reserve.size,
             ungeneratedDefinitions = null,
             decisions = decisions,
             warnings = warnings,
-        ))
+        ), reserve = reserve)
     }
 
     private fun select(
@@ -182,7 +187,8 @@ class ProfileAwareCandidateGenerator(
             ProfileQueues(queue(1), queue(2))
         }
         val selected = linkedMapOf<String, IndexCandidate>()
-        while (selected.size < GLOBAL_LIMIT) {
+        val poolLimit = CandidatePreparationLimits.SHORTLIST + CandidatePreparationLimits.RESERVE
+        while (selected.size < poolLimit) {
             context.checkDeadline()
             var added = false
             for (queue in queues) {
@@ -190,7 +196,7 @@ class ProfileAwareCandidateGenerator(
                 val candidate = queue.next(selected.keys, context) ?: continue
                 selected[candidate.id] = candidate
                 added = true
-                if (selected.size == GLOBAL_LIMIT) break
+                if (selected.size == poolLimit) break
             }
             if (!added) break
         }
@@ -226,7 +232,6 @@ class ProfileAwareCandidateGenerator(
 
     private companion object {
         const val LOCAL_LIMIT = 32
-        const val GLOBAL_LIMIT = 16
         const val MAX_SCOPES = 60
         const val MAX_VARIANTS_PER_SCOPE = 976
         val localOrder = compareBy<IndexCandidate> { it.definition.keys.size }

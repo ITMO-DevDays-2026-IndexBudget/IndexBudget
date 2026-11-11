@@ -2,9 +2,11 @@ package ru.itmo.indexbudget.candidates
 
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
+import ru.itmo.indexbudget.application.CandidatePreparation
 import ru.itmo.indexbudget.domain.*
 import ru.itmo.indexbudget.fixtures.CandidateGenerationFixtures
 import ru.itmo.indexbudget.fixtures.withSqlSemantics
+import ru.itmo.indexbudget.postgres.AnalysisSession
 import ru.itmo.indexbudget.sql.JSqlParserSqlAnalyzer
 
 class BaselineCostCandidateRankingTest {
@@ -57,6 +59,73 @@ class BaselineCostCandidateRankingTest {
             it.definition.keys.single().column.name
         })
         assertEquals(setOf("q1", "q2"), result.candidates[1].sourceQueryIds)
+    }
+
+    @Test
+    fun `baseline cost ranks the bounded reserve used after storage rejections`() {
+        val queries = (1..10).map { index ->
+            val columns = (1..3).map { ColumnRef(table, "c${index}_$it") }
+            ResolvedQuery("q$index", "SELECT * FROM public.t WHERE " +
+                columns.joinToString(" AND ") { "${it.name} = 1" },
+                setOf(table), columns.toSet(), columns.map {
+                    ResolvedPredicate(it, ComparisonOperator.EQUAL, PredicateSource.WHERE)
+                }, emptyList(), selectsAllColumns = true)
+        }
+        val resolved = costAware(workload(queries)).let {
+            it.copy(input = it.input.copy(constraints = Constraints(100, null)))
+        }
+        val baseline = baseline(queries.associate {
+            it.id to if (it.id == "q10") 0.0 else it.id.removePrefix("q").toDouble()
+        })
+        val batch = generator.generate(resolved, catalog(queries), RunContext(), baseline)
+        val ordered = batch.candidates + batch.reserve
+
+        assertEquals(16, batch.candidates.size)
+        assertEquals(48, batch.reserve.size)
+        assertEquals(90, batch.diagnostics.candidatesAfterGlobalDeduplication)
+        assertEquals(setOf("q9"), ordered.first().sourceQueryIds)
+        assertTrue(ordered.none { "q10" in it.sourceQueryIds })
+        for (arityQueue in ordered.groupBy { it.definition.keys.size }.values) {
+            val scores = arityQueue.map { baseline.costByQueryId.getValue(it.sourceQueryIds.single()) }
+            assertEquals(scores.sortedDescending(), scores,
+                "Both the initial shortlist and reserve must continue the same cost-ranked arity queues")
+        }
+        val zeroIds = batch.diagnostics.decisions.filter {
+            it.reason == CandidateReason.ZERO_BASELINE_COST_SUPPORT
+        }.map { it.candidateId }.toSet()
+        val globallyExcludedIds = batch.diagnostics.decisions.filter {
+            it.reason == CandidateReason.GLOBAL_CANDIDATE_LIMIT
+        }.map { it.candidateId }.toSet()
+        assertEquals(9, zeroIds.size)
+        assertEquals(17, globallyExcludedIds.size)
+        assertTrue(zeroIds.intersect(globallyExcludedIds).isEmpty())
+
+        val rejectedIds = ordered.take(14).map { it.id }.toSet()
+        val sizeCalls = mutableListOf<String>()
+        val session = object : AnalysisSession {
+            override fun readCatalog(tables: Set<TableName>, context: RunContext): CatalogSnapshot =
+                error("Refill must use the saved catalog")
+            override fun estimateSize(candidate: IndexCandidate, context: RunContext): Long {
+                sizeCalls += candidate.id
+                return if (candidate.id in rejectedIds) 1000 else 1
+            }
+            override fun evaluate(candidates: List<IndexCandidate>, workload: ResolvedWorkload,
+                                  context: RunContext): EvaluationResult =
+                error("Refill must not evaluate SQL costs")
+            override fun cancel() = Unit
+            override fun close() = Unit
+        }
+        val prepared = CandidatePreparation(MetricsCalculatorImpl()).prepare(
+            batch, session, resolved.input, RunContext())
+
+        assertEquals(ordered.take(30).map { it.id }, sizeCalls)
+        assertEquals(ordered.subList(14, 30).map { it.id }, prepared.searchBatch.candidates.map { it.id })
+        val preparation = checkNotNull(prepared.reportBatch.diagnostics.preparation)
+        assertEquals(14, preparation.budgetRejectedCandidates)
+        assertEquals(14, preparation.refilledCandidates)
+        assertEquals(16, preparation.finalShortlistedCandidates)
+        assertEquals(CandidatePreparationStopReason.SHORTLIST_FULL, preparation.stopReason)
+        assertTrue(prepared.reportBatch.candidates.drop(30).all { it.estimatedBytes == null })
     }
 
     @Test

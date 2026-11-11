@@ -282,11 +282,7 @@ internal class SearchRun(
 
     private fun recordBudgetRejection(budget: BudgetAssessment, ids: List<String>, candidateId: String? = null) {
         for (violation in budget.violations) {
-            val reason = when (violation) {
-                BudgetViolation.STORAGE_BUDGET -> CandidateReason.STORAGE_BUDGET
-                BudgetViolation.WRITE_BUDGET -> CandidateReason.WRITE_BUDGET
-                BudgetViolation.MAX_INDEXES -> CandidateReason.MAX_INDEXES
-            }
+            val reason = violation.toCandidateReason()
             decisions += CandidateDecision(reason, candidateId = candidateId, phase = context.phase,
                 details = mapOf("candidate_ids" to ids.joinToString(",")))
         }
