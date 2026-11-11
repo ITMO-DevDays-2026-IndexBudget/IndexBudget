@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "kind": "pg_stat_statements_import_config",
+  "windows": [{"id": "day", "weight": 1, "before": "before.json", "after": "after.json"}],
+  "examples": "examples.json",
+  "objective": "robust",
+  "constraints": {"storage_budget_bytes": 67108864, "write_budget_units_per_hour": null, "max_indexes": 5}
+}
