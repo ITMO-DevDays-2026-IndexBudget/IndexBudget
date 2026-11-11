@@ -60,6 +60,7 @@ class DefaultReportBuilder(
             ),
             result = result,
             input = input,
+            analysisMode = context.analysisMode,
             candidates = reportCandidates,
             priceOfRobustness = PriceOfRobustness.calculate(result),
             baselineMetrics = baselineMetrics,
