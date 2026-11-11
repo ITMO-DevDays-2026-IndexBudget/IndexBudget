@@ -21,6 +21,17 @@ class JdbcAnalysisSessionFactory(
     private val connect: (PGSimpleDataSource) -> Connection = { it.connection },
 ) : AnalysisSessionFactory {
     override fun open(context: RunContext): AnalysisSession {
+        val connection = openConnection(context)
+        try {
+            return JdbcAnalysisSession(connection)
+        } catch (error: Throwable) {
+            releaseConnection(connection)
+            throw error
+        }
+    }
+
+    /** Dedicated physical connection; ownership passes to the caller (also used by read-only collectors). */
+    fun openConnection(context: RunContext): Connection {
         context.checkDeadline()
         val url = databaseUrl()?.takeIf { it.startsWith("jdbc:postgresql:") }
             ?: fail("INDEXBUDGET_DATABASE_URL must contain a PostgreSQL JDBC URL")
@@ -46,7 +57,7 @@ class JdbcAnalysisSessionFactory(
         val connection = awaitConnection(source, context)
         try {
             context.checkDeadline()
-            return JdbcAnalysisSession(connection)
+            return connection
         } catch (error: Throwable) {
             // A connection obtained after the budget expired still belongs to this invocation.
             releaseConnection(connection)

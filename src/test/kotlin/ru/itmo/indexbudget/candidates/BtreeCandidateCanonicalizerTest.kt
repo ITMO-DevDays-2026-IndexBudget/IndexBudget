@@ -158,6 +158,15 @@ class BtreeCandidateCanonicalizerTest {
     }
 
     @Test
+    fun `unindexable first key cannot hide a missing second catalog column`() {
+        val snapshot = CatalogSnapshot(listOf(CatalogTable(table, listOf(CatalogColumn("a", "json")))))
+        val canonicalizer = BtreeCandidateCanonicalizer(snapshot, RunContext())
+        assertEquals(ErrorCode.CATALOG_ERROR, assertThrows(AnalysisException::class.java) {
+            canonicalizer.canonicalize(scope(listOf(variant(definition))))
+        }.error.code)
+    }
+
+    @Test
     fun `unknown defaults and missing catalog facts fail explicitly`() {
         val catalogs = listOf(CatalogSnapshot(emptyList()), CatalogSnapshot(listOf(CatalogTable(table, emptyList()))),
             CatalogSnapshot(listOf(CatalogTable(table, listOf(CatalogColumn("a", "json"))))))

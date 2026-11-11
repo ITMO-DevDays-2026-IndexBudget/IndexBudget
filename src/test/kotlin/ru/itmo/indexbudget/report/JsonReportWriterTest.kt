@@ -11,11 +11,11 @@ class JsonReportWriterTest {
     private val writer = JsonReportWriter()
 
     @Test
-    fun `wire v2 exposes both incumbents from one pool and embeds saved plan JSON`() {
+    fun `wire v3 exposes both incumbents from one pool and embeds saved plan JSON`() {
         val report = ContractFixtures.report(objective = Objective.MEAN)
         val json = mapper.readTree(writer.render(report))
 
-        assertEquals(2, json["schema_version"].intValue())
+        assertEquals(3, json["schema_version"].intValue())
         assertEquals("0.2", json["spec_version"].stringValue())
         assertEquals(report.runId, json["run_id"].stringValue())
         assertEquals(report.inputHash, json["input_hash"].stringValue())
@@ -148,6 +148,13 @@ class JsonReportWriterTest {
         val json = mapper.readTree(writer.render(edited))
 
         assertEquals(sql, json["queries"][0]["sql"].stringValue())
+    }
+
+    @Test
+    fun `old report version cannot silently emit a new definition format`() {
+        assertThrows(IllegalArgumentException::class.java) {
+            writer.render(ContractFixtures.report().copy(schemaVersion = 2))
+        }
     }
 
     @Test

@@ -56,7 +56,7 @@ class AtomicReportExporter(
     private fun validateIdentity(report: AnalysisReport, context: RunContext) {
         require(report.runId == context.runId && report.inputHash == context.inputHash)
         require(report.runId.matches(Regex("[A-Za-z0-9._-]{1,128}")))
-        require(report.schemaVersion == 2 && report.specVersion == "0.2")
+        require(report.schemaVersion == 3 && report.specVersion == "0.2")
         val hash = report.inputHash
         require(hash == null || hash.matches(Regex("[a-f0-9]{64}")))
         require(report.result.status == RunStatus.FAILED || hash != null)

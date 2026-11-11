@@ -8,6 +8,9 @@ import net.sf.jsqlparser.expression.operators.relational.GreaterThanEquals
 import net.sf.jsqlparser.expression.operators.relational.MinorThan
 import net.sf.jsqlparser.expression.operators.relational.MinorThanEquals
 import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList
+import net.sf.jsqlparser.expression.operators.relational.InExpression
+import net.sf.jsqlparser.expression.operators.relational.Between
+import net.sf.jsqlparser.expression.operators.relational.IsNullExpression
 import net.sf.jsqlparser.schema.Column
 import net.sf.jsqlparser.schema.Table
 import net.sf.jsqlparser.statement.select.AllColumns
@@ -141,6 +144,27 @@ internal class JSqlParserNameResolver(private val catalog: CatalogSnapshot, priv
                     resolveCondition(expression.rightExpression, source, visible, result)
                 }
                 is ParenthesedExpressionList<*> -> resolveCondition(expression.single(), source, visible, result)
+                is InExpression -> {
+                    val column = requireNotNull(resolveOperand(expression.leftExpression, visible))
+                    val values = (expression.rightExpression as ParenthesedExpressionList<*>).map {
+                        context.checkDeadline()
+                        literalTypes.infer(it)
+                    }
+                    operators.requireBuiltinIn(literalTypes.columnType(column.column), values)
+                    result += ResolvedPredicate(column.ref, ComparisonOperator.IN, source, literalCount = values.size)
+                }
+                is Between -> {
+                    val column = requireNotNull(resolveOperand(expression.leftExpression, visible))
+                    val type = literalTypes.columnType(column.column)
+                    operators.requireBuiltin(">=", type, literalTypes.infer(expression.betweenExpressionStart))
+                    operators.requireBuiltin("<=", type, literalTypes.infer(expression.betweenExpressionEnd))
+                    result += ResolvedPredicate(column.ref, ComparisonOperator.BETWEEN, source, literalCount = 2)
+                }
+                is IsNullExpression -> {
+                    val column = requireNotNull(resolveOperand(expression.leftExpression, visible))
+                    val operator = if (expression.isNot) ComparisonOperator.IS_NOT_NULL else ComparisonOperator.IS_NULL
+                    result += ResolvedPredicate(column.ref, operator, source, literalCount = 0)
+                }
                 is EqualsTo, is MinorThan, is MinorThanEquals, is GreaterThan, is GreaterThanEquals -> {
                     val left = expression.leftExpression
                     val right = expression.rightExpression
@@ -231,6 +255,7 @@ internal class JSqlParserNameResolver(private val catalog: CatalogSnapshot, priv
         ComparisonOperator.LESS_THAN_OR_EQUAL -> ComparisonOperator.GREATER_THAN_OR_EQUAL
         ComparisonOperator.GREATER_THAN -> ComparisonOperator.LESS_THAN
         ComparisonOperator.GREATER_THAN_OR_EQUAL -> ComparisonOperator.LESS_THAN_OR_EQUAL
+        else -> error("Only binary comparisons can be reversed")
     }
 
     private data class Binding(val position: Int, val table: CatalogTable, val alias: String?) {

@@ -159,7 +159,7 @@ class HtmlReportRenderer : ReportRenderer {
         append("<div class=\"budget-card\"><h3>Запись</h3><p class=\"budget-number\">").append(h(number(usage?.writeUnitsPerHour)))
         append(" <small>write units/час</small></p><p>Бюджет: ")
         text(if (constraints == null) "Нет данных" else constraints.writeBudgetUnitsPerHour?.let { "${number(it)} units/час" } ?: "Отключён")
-        append(".</p></div></div><p class=\"muted\">Место учитывается с запасом для каждого индекса. Write units — вспомогательная модель изменений строк и числа ключей, а не измеренное замедление INSERT/UPDATE/DELETE.</p>")
+        append(".</p></div></div><p class=\"muted\">Место учитывается с запасом для каждого индекса. Write units — вспомогательная модель изменений строк × (число ключей + число INCLUDE-колонок), а не измеренное замедление INSERT/UPDATE/DELETE.</p>")
         val selected = report.result.selected
         if (selected == null) {
             append("<p class=\"empty\">Рекомендованные индексы отсутствуют: пригодный результат не сохранён.</p>")
@@ -175,10 +175,16 @@ class HtmlReportRenderer : ReportRenderer {
                     append("<p class=\"muted\">").append(h(definition(candidate))).append("</p><dl class=\"values\">")
                     entry("Оценка", storageSize(candidate.estimatedBytes))
                     entry("С запасом", storageSize(candidate.budgetedBytes))
+                    entry("INCLUDE", candidate.definition.includedColumns.takeIf { it.isNotEmpty() }
+                        ?.joinToString { it.name } ?: "Нет")
                     entry("Write units/час", number(candidate.writeUnitsPerHour))
                     entry("Источники SQL", candidate.sourceQueryIds.sorted().joinToString())
                     entry("Происхождение", candidate.generationReasons.sortedBy { it.name }.joinToString { it.name })
-                    append("</dl><details><summary>DDL из модели</summary>")
+                    append("</dl>")
+                    if (candidate.definition.includedColumns.isNotEmpty()) {
+                        append("<p>INCLUDE позволяет рассмотреть index-only scan; обращения к таблице зависят от visibility map и не исключены.</p>")
+                    }
+                    append("<details><summary>DDL из модели</summary>")
                     pre(candidate.ddl ?: "DDL отсутствует в модели.")
                     append("</details>")
                 }
@@ -257,10 +263,11 @@ class HtmlReportRenderer : ReportRenderer {
         cap("02", "Локальные кандидаты", "${candidates.localCandidateLimit} на (SQL, таблица)")
         cap("03", "Общий shortlist", "${candidates.shortlistedCandidates} / ${candidates.globalCandidateLimit}")
         append("</div>")
-        table(listOf("SQL / таблица", "Колонки: найдено → оставлено", "Перечислено", "После дедупликации", "Оставлено локально")) {
+        table(listOf("SQL / таблица", "Колонки: найдено → оставлено", "Перечислено", "После дедупликации", "Оставлено локально", "INCLUDE: перечислено → оставлено")) {
             candidates.localScopes.forEach { scope ->
                 row("${scope.queryId} / ${tableName(scope.table)}", "${scope.discoveredColumns} → ${scope.retainedColumns}",
-                    number(scope.enumeratedDefinitions), number(scope.deduplicatedDefinitions), number(scope.retainedDefinitions))
+                    number(scope.enumeratedDefinitions), number(scope.deduplicatedDefinitions), number(scope.retainedDefinitions),
+                    "${scope.enumeratedIncludeDefinitions} → ${scope.retainedIncludeDefinitions}")
             }
         }
         if (candidates.localScopes.isEmpty()) append("<p class=\"muted\">Подробные локальные счётчики не сохранены.</p>")
@@ -410,7 +417,8 @@ class HtmlReportRenderer : ReportRenderer {
             candidate.definition.keys.joinToString { key ->
                 "${key.column.name} ${key.direction.name} NULLS ${key.nulls.name}" +
                     (key.collation?.let { " COLLATE $it" } ?: "") + (key.operatorClass?.let { " $it" } ?: "")
-            } + ")"
+            } + ")" + candidate.definition.includedColumns.takeIf { it.isNotEmpty() }
+                ?.joinToString(", ", " INCLUDE (", ")") { it.name }.orEmpty()
     private fun detailsText(details: Map<String, String>) = details.toSortedMap().entries.joinToString("\n") { "${it.key}: ${it.value}" }.ifEmpty { "Нет данных" }
 
     private fun h(value: Any): String = buildString {
@@ -443,7 +451,10 @@ class HtmlReportRenderer : ReportRenderer {
 
     private fun candidateReason(reason: CandidateReason): String = when (reason) {
         CandidateReason.EXACT_EXISTING_DUPLICATE -> "Точный реальный дубль"
+        CandidateReason.NO_BTREE_OPERATOR_CLASS -> "Нет подходящего B-tree opclass"
         CandidateReason.COLUMN_SHORTLIST_TRUNCATED -> "Отсечение колонок"
+        CandidateReason.INCLUDE_PAYLOAD_LIMIT -> "Лимит INCLUDE-колонок"
+        CandidateReason.INCLUDE_VARIANT_LIMIT -> "Лимит INCLUDE-вариантов"
         CandidateReason.LOCAL_CANDIDATE_LIMIT -> "Локальный лимит"
         CandidateReason.GLOBAL_CANDIDATE_LIMIT -> "Общий лимит"
         CandidateReason.STORAGE_BUDGET -> "Превышение бюджета места"

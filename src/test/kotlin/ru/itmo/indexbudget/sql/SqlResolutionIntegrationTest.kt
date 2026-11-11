@@ -286,6 +286,85 @@ class SqlResolutionIntegrationTest {
         return analyzer.resolve(parsed, snapshot, context)
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = ["id IN (1, '2'::integer, NULL)", "value BETWEEN 1 AND CAST(3 AS integer)",
+        "value IS NULL", "value IS NOT NULL", "id IN (1, 2147483648)", "id IN (1, 2.5)"])
+    fun `scalar predicates resolve from real types and reach full EXPLAIN`(condition: String) {
+        val text = "SELECT r.id FROM records r WHERE $condition"
+        val workload = resolve(text)
+        assertEquals(text, workload.queries.single().sql)
+        assertEquals(1, workload.queries.single().predicates.size)
+        val scopes = mutableListOf<CandidateScope>()
+        BtreeCandidateEnumerator().forEachScope(workload, RunContext(), scopes::add)
+        assertTrue(scopes.single().variants.isNotEmpty())
+        sql("EXPLAIN (FORMAT JSON) $text")
+    }
+
+    @Test
+    fun `json null tests keep integer candidates with a real catalog`() {
+        sql("ALTER TABLE records ADD COLUMN payload json")
+        sql("INSERT INTO records(id, payload) VALUES (1, NULL), (2, '{}'::json)")
+        for (nullTest in listOf("IS NULL", "IS NOT NULL")) {
+            val text = "SELECT id FROM records WHERE payload $nullTest AND id = 1"
+            val workload = resolve(text)
+            val context = RunContext()
+            val snapshot = JdbcCatalogReader(connection).readCatalog(setOf(TableName("records")), context)
+            assertNull(snapshot.tables.single().columns.single { it.name == "payload" }.defaultOperatorClass)
+            val batch = ru.itmo.indexbudget.candidates.ProfileAwareCandidateGenerator().generate(workload, snapshot, context)
+            assertEquals(listOf("id"), batch.candidates.single().definition.keys.map { it.column.name })
+            assertEquals(CandidateReason.NO_BTREE_OPERATOR_CLASS, batch.diagnostics.decisions.single().reason)
+            assertEquals(text, workload.queries.single().sql)
+            sql("EXPLAIN (FORMAT JSON) $text")
+        }
+    }
+
+    @Test
+    fun `null predicates preserve PostgreSQL three valued semantics`() {
+        sql("INSERT INTO records(id, value) VALUES (1, NULL), (2, 2), (3, 3)")
+        for ((condition, expected) in listOf(
+            "value IN (2, NULL)" to listOf(2), "value BETWEEN NULL AND 3" to emptyList(),
+            "value IS NULL" to listOf(1), "value IS NOT NULL" to listOf(2, 3),
+        )) {
+            val text = "SELECT id FROM records WHERE $condition ORDER BY id"
+            assertEquals(text, resolve(text).queries.single().sql)
+            assertEquals(expected, queryIds(text))
+        }
+    }
+
+    @Test
+    fun `IN common RHS type keeps original left type when choosing visible operator`() {
+        sql("CREATE OPERATOR $schema.= (LEFTARG = integer, RIGHTARG = bigint, PROCEDURE = pg_catalog.int48ne)")
+        val text = "SELECT id FROM records WHERE id IN (1, 2147483648)"
+        sql("EXPLAIN $text")
+        failure(text, ErrorCode.UNSUPPORTED_SQL)
+        resolve("SELECT id FROM records WHERE id IN (1, 2)")
+    }
+
+    @Test
+    fun `IN must not coerce left type to common RHS type before choosing operator`() {
+        sql("CREATE OPERATOR $schema.= (LEFTARG = bigint, RIGHTARG = bigint, PROCEDURE = pg_catalog.int8ne)")
+        val text = "SELECT id FROM records WHERE id IN (1, 2147483648)"
+        resolve(text) // int4 = int8 remains builtin; int8 = int8 is irrelevant here.
+        sql("EXPLAIN $text")
+    }
+
+    @Test
+    fun `BETWEEN upper boundary cannot hide a custom operator`() {
+        sql("CREATE OPERATOR $schema.<= (LEFTARG = integer, RIGHTARG = integer, PROCEDURE = pg_catalog.int4gt)")
+        val text = "SELECT id FROM records WHERE id BETWEEN 1 AND 10"
+        sql("EXPLAIN $text")
+        failure(text, ErrorCode.UNSUPPORTED_SQL)
+    }
+
+    @Test
+    fun `IN common numeric array does not check discarded int4 equality signatures`() {
+        sql("CREATE OPERATOR $schema.= (LEFTARG = integer, RIGHTARG = integer, PROCEDURE = pg_catalog.int4ne)")
+        val text = "SELECT id FROM records WHERE id IN (1, 2.5)"
+        resolve(text)
+        sql("EXPLAIN $text")
+        failure("SELECT id FROM records WHERE id IN (1)", ErrorCode.UNSUPPORTED_SQL)
+    }
+
     private fun failure(text: String, code: ErrorCode) {
         val error = assertThrows(AnalysisException::class.java) { resolve(text) }.error
         assertEquals(code, error.code)
