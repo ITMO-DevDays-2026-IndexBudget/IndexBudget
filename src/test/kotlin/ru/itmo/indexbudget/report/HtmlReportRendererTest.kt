@@ -11,6 +11,54 @@ class HtmlReportRendererTest {
     private val renderer = HtmlReportRenderer()
 
     @Test
+    fun `legacy diagnostics show the same original and global shortlist`() {
+        val source = HtmlReportFixtures.completed()
+        val report = source.copy(candidates = source.candidates.copy(
+            diagnostics = CandidateDiagnostics(shortlistedCandidates = 16)))
+        val search = section(renderer.render(report), "search")
+        assertEquals("16", entryValue(search, "Исходный shortlist"))
+        assertEquals("16 / 16", capture(search, "<h3>Общий shortlist</h3><p>(.*?)</p>"))
+    }
+
+    @Test
+    fun `refill diagnostics distinguish original and final shortlist and display every stop reason`() {
+        val source = HtmlReportFixtures.completed()
+        for (reason in CandidatePreparationStopReason.entries) {
+            val report = source.copy(candidates = source.candidates.copy(
+                diagnostics = source.candidates.diagnostics.copy(
+                    shortlistedCandidates = 16, initialShortlistedCandidates = 16,
+                    reserveCandidates = 2, reserveCandidateLimit = 48, maxSizeAttempts = 32,
+                    preparation = CandidatePreparationStatistics(
+                        examinedCandidates = 18, sizeAttempts = 18,
+                        budgetRejectedCandidates = 14, candidateErrors = 0,
+                        refilledCandidates = 2, finalShortlistedCandidates = 4,
+                        stopReason = reason,
+                    ),
+                ),
+            ))
+            val search = section(renderer.render(report), "search")
+            assertEquals("16", entryValue(search, "Исходный shortlist"))
+            assertEquals("2 / 48", entryValue(search, "Кандидаты в резерве"))
+            assertEquals("4 / 16", capture(search, "<h3>Общий shortlist</h3><p>(.*?)</p>"))
+            assertEquals(listOf("Рассмотрено кандидатов", "18", "18"), rowByKey(search, "Рассмотрено кандидатов"))
+            assertEquals(listOf("Попытки оценки размера, включая ошибки", "18", "32"),
+                rowByKey(search, "Попытки оценки размера, включая ошибки"))
+            assertEquals(listOf("Бюджетные отказы", "14", "Не задан"), rowByKey(search, "Бюджетные отказы"))
+            assertEquals(listOf("Ошибки отдельных кандидатов", "0", "Не задан"), rowByKey(search, "Ошибки отдельных кандидатов"))
+            assertEquals(listOf("Пополнено из резерва", "2", "Не задан"), rowByKey(search, "Пополнено из резерва"))
+            assertEquals(listOf("Итоговый shortlist", "4", "16"), rowByKey(search, "Итоговый shortlist"))
+            assertTrue(search.contains("Остановка подготовки:"))
+            assertTrue(search.contains(reason.name))
+            assertFalse(search.contains("Диагностика подготовки кандидатов не сохранена."))
+        }
+        val legacy = source.copy(candidates = source.candidates.copy(
+            diagnostics = source.candidates.diagnostics.copy(shortlistedCandidates = 7)))
+        val search = section(renderer.render(legacy), "search")
+        assertEquals("7 / 16", capture(search, "<h3>Общий shortlist</h3><p>(.*?)</p>"))
+        assertTrue(search.contains("Диагностика подготовки кандидатов не сохранена."))
+    }
+
+    @Test
     fun `objective selects the same indices and costs as the shared report`() {
         for (objective in Objective.entries) {
             val report = HtmlReportFixtures.completed(objective = objective)

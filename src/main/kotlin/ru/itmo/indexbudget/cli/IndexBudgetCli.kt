@@ -183,6 +183,9 @@ class IndexBudgetCli(
             Runs SQL resolution, bounded shortlist, HypoPG, greedy + repair and HTML/JSON/SQL export.
             Requires a prepared PostgreSQL database with HypoPG; analysis creates no physical indexes.
             Progress on stderr contains stages and actual EXPLAIN/set/cache counters.
+            Candidate preparation starts with up to 16 candidates and a reserve of up to 48.
+            Budget rejections are refilled from that reserve, with at most 32 size calls,
+            including failed calls, under the shared search/command deadline.
 
             Analysis modes (CLI overrides optional JSON analysis_mode; default: normal):
               fast:   command 30s, search 20s, EXPLAIN attempts 500, repair attempts 8.
