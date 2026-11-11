@@ -115,6 +115,20 @@ class LogicalConditionsTest {
     }
 
     @Test
+    fun `INCLUDE inherits valid key origins without creating a false conjunction`() {
+        val workload = resolve("a=1 OR b=2", projection = "a")
+        val variants = scope(workload).variants
+        assertTrue(variants.all { it.definition.keys.size == 1 })
+        val covering = variants.single { it.definition.includedColumns.isNotEmpty() }
+        assertEquals(listOf("b"), covering.definition.keys.map { it.column.name })
+        assertEquals(listOf("a"), covering.definition.includedColumns.map { it.name })
+        assertTrue(GenerationReason.COVERING_PROJECTION in covering.generationReasons)
+        assertEquals(setOf(CandidateSourceBranch("q", "condition/R")), covering.sourceBranches)
+        val batch = ProfileAwareCandidateGenerator().generate(workload, catalog, RunContext())
+        assertEquals(covering.sourceBranches, batch.candidates.single { it.definition.includedColumns.isNotEmpty() }.sourceBranches)
+    }
+
+    @Test
     fun `sort sources are unconditional while WHERE branches remain exclusive`() {
         val query = resolve("a=1 OR b=2", " ORDER BY c DESC, d ASC")
         val variants = scope(query).variants
@@ -132,7 +146,7 @@ class LogicalConditionsTest {
         "((a=1)) OR (((b=2 AND c=3)))", "a=1 OR a=2"])
     fun `every supported scalar form can appear in alternatives`(condition: String) {
         val workload = resolve(condition)
-        assertEquals("SELECT a FROM records WHERE $condition", workload.queries.single().sql)
+        assertEquals("SELECT * FROM records WHERE $condition", workload.queries.single().sql)
         assertTrue(scope(workload).variants.isNotEmpty())
     }
 
@@ -245,8 +259,8 @@ class LogicalConditionsTest {
     }
     private fun input(sql: String) = WorkloadInput(listOf(QueryInput("q", sql)),
         listOf(Profile("p", 1.0, mapOf("q" to 1.0))), Constraints(1024 * 1024, null))
-    private fun resolve(condition: String, suffix: String = ""): ResolvedWorkload {
+    private fun resolve(condition: String, suffix: String = "", projection: String = "*"): ResolvedWorkload {
         val context = RunContext()
-        return analyzer.resolve(analyzer.parse(input("SELECT a FROM records WHERE $condition$suffix"), context), catalog, context)
+        return analyzer.resolve(analyzer.parse(input("SELECT $projection FROM records WHERE $condition$suffix"), context), catalog, context)
     }
 }
