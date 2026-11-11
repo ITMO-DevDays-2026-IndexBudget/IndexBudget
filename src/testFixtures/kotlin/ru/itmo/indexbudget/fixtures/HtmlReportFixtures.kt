@@ -186,6 +186,14 @@ object ReportPreview {
             Files.writeString(directory.resolve("$name.html"), renderer.render(report))
             Files.writeString(directory.resolve("$name.json"), JsonReportWriter().render(report))
         }
+        BudgetSeriesFixtures.variants.forEach { variant ->
+            val target = directory.resolve("series-$variant")
+            // Preview owns only these generated directories. Production series still require an empty destination.
+            if (Files.exists(target)) Files.walk(target).use { paths ->
+                paths.sorted(Comparator.reverseOrder()).forEach(Files::delete)
+            }
+            BudgetSeriesFixtures.generate(target, variant)
+        }
         println("Синтетический отчёт: ${Path.of(args[0]).toAbsolutePath()}")
         println("Варианты для проверки: ${directory.toAbsolutePath()}")
     }

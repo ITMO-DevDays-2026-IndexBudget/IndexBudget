@@ -68,6 +68,7 @@ data class BudgetSeriesPoint(
     val artifacts: Map<String, String> = emptyMap(),
     val error: AnalysisError? = null,
     val diagnostics: SearchDiagnostics? = null,
+    val report: AnalysisReport? = null,
 )
 
 data class BudgetSeriesResult(

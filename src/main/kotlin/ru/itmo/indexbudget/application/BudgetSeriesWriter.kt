@@ -1,6 +1,8 @@
 package ru.itmo.indexbudget.application
 
 import ru.itmo.indexbudget.domain.*
+import ru.itmo.indexbudget.report.HtmlBudgetSeriesRenderer
+import tools.jackson.databind.DeserializationFeature
 import tools.jackson.databind.json.JsonMapper
 import java.nio.file.Files
 import java.nio.file.Path
@@ -15,7 +17,8 @@ internal class BudgetSeriesWriter(
     private val context: RunContext,
 ) {
     private val directory: Path get() = owner.directory
-    private val mapper = JsonMapper.builder().build()
+    private val mapper = JsonMapper.builder().enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS).build()
+    private val renderer = HtmlBudgetSeriesRenderer()
 
     fun publish(result: BudgetSeriesResult, preparation: SeriesPreparation?, preparationContext: RunContext?, finished: Boolean) {
         owner.verify()
@@ -59,14 +62,30 @@ internal class BudgetSeriesWriter(
                 "artifacts" to point.artifacts, "error" to point.error?.let(::error)) },
         )
         val temporary = directory.resolve(".series-${context.runId}.tmp")
+        val temporaryHtml = directory.resolve(".series-${context.runId}.html.tmp")
+        val temporaryReport = directory.resolve(".series-${context.runId}.report.tmp")
         try {
-            Files.writeString(temporary, mapper.writerWithDefaultPrettyPrinter().writeValueAsString(root) + "\n")
+            val json = mapper.writerWithDefaultPrettyPrinter().writeValueAsString(root) + "\n"
+            val summary = mapper.readTree(json)
+            val reports = result.points.mapNotNull { point ->
+                point.report?.takeIf { point.artifacts.containsKey("report.html") }?.let { point.ordinal to it }
+            }.toMap()
+            Files.writeString(temporary, json)
+            Files.writeString(temporaryHtml, renderer.render(summary))
+            Files.writeString(temporaryReport, renderer.render(summary, reports))
             owner.verify()
             Files.move(temporary, directory.resolve("series.json"), ATOMIC_MOVE, REPLACE_EXISTING)
+            Files.move(temporaryHtml, directory.resolve("series.html"), ATOMIC_MOVE, REPLACE_EXISTING)
+            Files.move(temporaryReport, directory.resolve("report.html"), ATOMIC_MOVE, REPLACE_EXISTING)
         } catch (_: Exception) {
+            // Never leave an older HTML snapshot describing a different set of published points.
+            try { owner.verify(); Files.deleteIfExists(directory.resolve("series.html")) } catch (_: Exception) { }
+            try { owner.verify(); Files.deleteIfExists(directory.resolve("report.html")) } catch (_: Exception) { }
             throw AnalysisException(AnalysisError(ErrorCode.EXPORT_FAILED, "Cannot publish budget series summary."))
         } finally {
             try { Files.deleteIfExists(temporary) } catch (_: Exception) { }
+            try { Files.deleteIfExists(temporaryHtml) } catch (_: Exception) { }
+            try { Files.deleteIfExists(temporaryReport) } catch (_: Exception) { }
         }
     }
 

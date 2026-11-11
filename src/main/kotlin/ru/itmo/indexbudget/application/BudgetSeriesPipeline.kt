@@ -58,7 +58,7 @@ class BudgetSeriesPipeline(
                             .associateWith { "$runDirectory/$it" }
                         BudgetSeriesPoint(index + 1, value, SeriesPointStatus.valueOf(run.result.status.name),
                             runContext.runId, run.result, run.conditions, conditionsMatch,
-                            changes, artifacts, (run.result as? SearchResult.Failed)?.error, run.result.diagnostics)
+                            changes, artifacts, (run.result as? SearchResult.Failed)?.error, run.result.diagnostics, run.report)
                     } catch (error: Exception) {
                         val safe = safeError(error)
                         BudgetSeriesPoint(index + 1, value, SeriesPointStatus.FAILED,

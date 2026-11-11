@@ -64,8 +64,10 @@ class AnalysisPipeline(
     override fun runSeriesPoint(input: WorkloadInput, outputDirectory: Path, context: RunContext,
         pool: PreparedCandidatePool): SeriesPointRun {
         var conditions: SeriesConditions? = null
-        val result = runInternal(input, outputDirectory, context, pool) { conditions = it }
-        return SeriesPointRun(result, conditions)
+        var report: AnalysisReport? = null
+        val result = runInternal(input, outputDirectory, context, pool,
+            onConditions = { conditions = it }, onReport = { report = it })
+        return SeriesPointRun(result, conditions, report)
     }
     override fun run(input: WorkloadInput, outputDirectory: Path, context: RunContext): SearchResult =
         runInternal(input, outputDirectory, context, null)
@@ -84,6 +86,7 @@ class AnalysisPipeline(
         context: RunContext,
         fixedPool: PreparedCandidatePool?,
         onConditions: (SeriesConditions) -> Unit = {},
+        onReport: (AnalysisReport) -> Unit = {},
     ): SearchResult {
         var manual: ManualComparison? = input.manualIndexes?.let { ManualComparison(ManualComparisonStatus.NOT_EVALUATED) }
         val manualEvaluator = ManualIndexEvaluator()
@@ -207,6 +210,7 @@ class AnalysisPipeline(
                 "Report must describe this invocation and saved result"
             }
             reportExporter.export(report, outputDirectory, context)
+            onReport(report)
             context.completePhase()
         } catch (error: AnalysisException) {
             if (error.error.code == ErrorCode.EXPORT_FAILED) throw error
