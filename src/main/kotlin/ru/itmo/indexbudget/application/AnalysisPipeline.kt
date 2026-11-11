@@ -110,7 +110,7 @@ class AnalysisPipeline(
                 context.enterPhase(AnalysisPhase.CANDIDATES)
                 val preparation = CandidatePreparation(metrics)
                 val prepared = if (fixedSelection == null) {
-                    candidateBatch = candidateGenerator.generate(resolved, catalog, context)
+                    candidateBatch = candidateGenerator.generate(resolved, catalog, context, evaluatedBaseline)
                     preparation.prepare(candidateBatch, session, input, context) { candidateBatch = it }
                 } else {
                     fixedSelection
@@ -188,6 +188,7 @@ class AnalysisPipeline(
             val report = reportBuilder.build(input, candidateBatch, finalResult, context)
             require(report.runId == context.runId && report.inputHash == context.inputHash &&
                 report.analysisMode == context.analysisMode &&
+                report.candidateRanking == input.candidateRanking &&
                 report.result == finalResult && report.input == input) {
                 "Report must describe this invocation and saved result"
             }

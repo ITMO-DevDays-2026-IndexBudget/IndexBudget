@@ -1,13 +1,36 @@
 package ru.itmo.indexbudget.candidates
 
 import ru.itmo.indexbudget.domain.*
+import java.math.BigDecimal
 
 /** Spec v0.2 §5: consume one bounded scope, retain local survivors, then select across profiles. */
 class ProfileAwareCandidateGenerator(
     private val enumerator: CandidateEnumerator = BtreeCandidateEnumerator(),
 ) : CandidateGenerator {
-    override fun generate(workload: ResolvedWorkload, catalog: CatalogSnapshot, context: RunContext): CandidateBatch {
+    override fun generate(workload: ResolvedWorkload, catalog: CatalogSnapshot, context: RunContext): CandidateBatch =
+        generateInternal(workload, catalog, context, null)
+
+    override fun generate(
+        workload: ResolvedWorkload,
+        catalog: CatalogSnapshot,
+        context: RunContext,
+        baseline: EvaluationResult,
+    ): CandidateBatch = generateInternal(workload, catalog, context, baseline)
+
+    private fun generateInternal(
+        workload: ResolvedWorkload,
+        catalog: CatalogSnapshot,
+        context: RunContext,
+        baseline: EvaluationResult?,
+    ): CandidateBatch {
         context.checkDeadline()
+        if (workload.input.candidateRanking == CandidateRanking.BASELINE_COST) {
+            val expectedQueryIds = workload.queries.map { it.id }.toSet()
+            if (baseline == null || baseline.candidateIds.isNotEmpty() || baseline.costByQueryId.keys != expectedQueryIds) {
+                throw AnalysisException(AnalysisError(ErrorCode.INTERNAL_ERROR,
+                    "Baseline-cost candidate ranking requires a complete empty-set baseline"))
+            }
+        }
         val canonicalizer = BtreeCandidateCanonicalizer(catalog, context)
         val survivors = mutableListOf<IndexCandidate>()
         val scopes = mutableListOf<LocalGenerationStatistics>()
@@ -62,17 +85,29 @@ class ProfileAwareCandidateGenerator(
         }
         context.checkDeadline()
         val pool = canonicalizer.merge(survivors)
-        val orderedPool = select(pool, workload, context)
+        val selection = select(pool, workload, context, baseline)
+        val orderedPool = selection.candidates
         val selected = orderedPool.take(CandidatePreparationLimits.SHORTLIST)
         val reserve = orderedPool.drop(CandidatePreparationLimits.SHORTLIST)
-        if (pool.size > CandidatePreparationLimits.SHORTLIST) {
-            val details = mapOf("candidates_before" to pool.size.toString(),
+        val zeroSupportIds = if (workload.input.candidateRanking == CandidateRanking.BASELINE_COST) {
+            pool.filter { candidate ->
+                context.checkDeadline()
+                candidate.id !in selection.supportedCandidateIds
+            }.map { it.id }.toSet()
+        } else emptySet()
+        for (candidate in pool.filter { it.id in zeroSupportIds }) {
+            decisions += CandidateDecision(CandidateReason.ZERO_BASELINE_COST_SUPPORT, candidate.id,
+                table = candidate.definition.table, phase = AnalysisPhase.CANDIDATES)
+        }
+        val supportedCandidates = pool.size - zeroSupportIds.size
+        if (supportedCandidates > CandidatePreparationLimits.SHORTLIST) {
+            val details = mapOf("candidates_before" to supportedCandidates.toString(),
                 "candidates_after" to selected.size.toString(), "reserve_candidates" to reserve.size.toString(),
                 "preparation_pool_size" to orderedPool.size.toString(), "refill_after_budget_filter" to "true")
             val selectedIds = orderedPool.map { it.id }.toSet()
             for (candidate in pool) {
                 context.checkDeadline()
-                if (candidate.id !in selectedIds) decisions += CandidateDecision(
+                if (candidate.id !in selectedIds && candidate.id !in zeroSupportIds) decisions += CandidateDecision(
                     CandidateReason.GLOBAL_CANDIDATE_LIMIT, candidateId = candidate.id,
                     table = candidate.definition.table, phase = AnalysisPhase.CANDIDATES, details = details)
             }
@@ -94,31 +129,57 @@ class ProfileAwareCandidateGenerator(
         ), reserve = reserve)
     }
 
-    private fun select(pool: List<IndexCandidate>, workload: ResolvedWorkload, context: RunContext): List<IndexCandidate> {
+    private fun select(
+        pool: List<IndexCandidate>,
+        workload: ResolvedWorkload,
+        context: RunContext,
+        baseline: EvaluationResult?,
+    ): Selection {
         val queryIds = workload.queries.map { it.id }.toSet()
         val profiles = workload.input.profiles.sortedBy { it.id }
         require(profiles.size in 1..3 && profiles.map { it.id }.distinct().size == profiles.size) {
             "Expected 1–3 validated profiles with unique IDs"
         }
+        val supportedCandidateIds = mutableSetOf<String>()
         val queues = profiles.map { profile ->
             context.checkDeadline()
             val frequencies = normalizedFrequencies(profile, queryIds, context)
             val scores = pool.associate { candidate ->
                 context.checkDeadline()
-                var score = 0.0
-                for (id in candidate.sourceQueryIds.sorted()) {
-                    context.checkDeadline()
-                    score += frequencies.getValue(id)
+                val score = when (workload.input.candidateRanking) {
+                    CandidateRanking.FREQUENCY -> {
+                        var support = 0.0
+                        for (id in candidate.sourceQueryIds.sorted()) {
+                            context.checkDeadline()
+                            support += frequencies.getValue(id)
+                        }
+                        if (!support.isFinite()) numericError(profile.id, "Candidate support is not finite")
+                        BigDecimal.valueOf(support)
+                    }
+                    CandidateRanking.BASELINE_COST -> {
+                        // sum(u_s(q) * cost(q, empty)): the positive frequency total is common
+                        // to this profile's queue, so compare exact decimal numerators. This
+                        // avoids Double product overflow/underflow without computing profile metrics.
+                        candidate.sourceQueryIds.sorted().fold(BigDecimal.ZERO) { support, queryId ->
+                            context.checkDeadline()
+                            support + BigDecimal.valueOf(profile.callsPerHour.getValue(queryId)) *
+                                BigDecimal.valueOf(requireNotNull(baseline).costByQueryId.getValue(queryId))
+                        }
+                    }
                 }
-                if (!score.isFinite()) numericError(profile.id, "Candidate support is not finite")
                 candidate.id to score
             }
+            val positiveSupportIds = scores.filterValues {
+                context.checkDeadline()
+                it.signum() > 0
+            }.keys
+            supportedCandidateIds += positiveSupportIds
             fun queue(keyCount: Int): ArrayDeque<IndexCandidate> {
                 val order = compareByDescending<IndexCandidate> { scores.getValue(it.id) }
                     .thenBy { if (keyCount == 2) it.bestPairPriority() else null }.thenBy { it.id }
                 val candidates = pool.filter {
                     context.checkDeadline()
-                    it.definition.keys.size == keyCount && scores.getValue(it.id) > 0.0
+                    it.definition.keys.size == keyCount && it.id in positiveSupportIds
                 }.sortedWith(order)
                 context.checkDeadline()
                 return ArrayDeque(candidates)
@@ -139,8 +200,13 @@ class ProfileAwareCandidateGenerator(
             }
             if (!added) break
         }
-        return selected.values.toList()
+        return Selection(selected.values.toList(), supportedCandidateIds)
     }
+
+    private data class Selection(
+        val candidates: List<IndexCandidate>,
+        val supportedCandidateIds: Set<String>,
+    )
 
     private class ProfileQueues(val singles: ArrayDeque<IndexCandidate>, val pairs: ArrayDeque<IndexCandidate>) {
         private var preferSingles = true
