@@ -1,0 +1,89 @@
+{
+  "schema_version": 2,
+  "objective": "robust",
+  "queries": [
+    {
+      "id": "records_by_group",
+      "sql": "SELECT id, value FROM public.records WHERE group_id = 42 ORDER BY created_at DESC LIMIT 20"
+    },
+    {
+      "id": "records_by_value",
+      "sql": "SELECT id, value FROM public.records WHERE value = 7 ORDER BY created_at DESC LIMIT 20"
+    }
+  ],
+  "profiles": [
+    {
+      "id": "normal",
+      "weight": 0.9,
+      "calls_per_hour": {
+        "records_by_group": 3000,
+        "records_by_value": 100
+      }
+    },
+    {
+      "id": "campaign",
+      "weight": 0.1,
+      "calls_per_hour": {
+        "records_by_group": 100,
+        "records_by_value": 3000
+      }
+    }
+  ],
+  "table_write_rates": {
+    "public.records": {
+      "inserts_per_hour": 1000,
+      "updates_per_hour": 3000,
+      "deletes_per_hour": 100,
+      "source": "manual"
+    }
+  },
+  "constraints": {
+    "storage_budget_bytes": 67108864,
+    "write_budget_units_per_hour": 10000,
+    "max_indexes": 5
+  },
+  "provenance": {
+    "schema_version": 1,
+    "source": "pg_stat_statements",
+    "source_id": "00000000-0000-0000-0000-000000000068",
+    "selection_rule": "Синтетический пример: по убыванию total_exec_time, затем по идентичности записи; до 20 поддерживаемых SQL.",
+    "windows": [
+      {
+        "profile_id": "normal",
+        "started_at": "2026-11-10T08:00:00Z",
+        "finished_at": "2026-11-10T09:00:00Z",
+        "complete": true,
+        "coverage": {
+          "denominator": "available_complete_entries",
+          "selected_calls": 3100,
+          "available_calls": 4000,
+          "selected_exec_time_millis": 12000.0,
+          "available_exec_time_millis": 15000.0
+        }
+      },
+      {
+        "profile_id": "campaign",
+        "started_at": "2026-11-10T09:00:00Z",
+        "finished_at": "2026-11-10T10:00:00Z",
+        "complete": true,
+        "coverage": {
+          "denominator": "available_complete_entries",
+          "selected_calls": 3100,
+          "available_calls": 4000,
+          "selected_exec_time_millis": 12000.0,
+          "available_exec_time_millis": 15000.0
+        }
+      }
+    ],
+    "query_examples": [
+      {
+        "query_id": "records_by_group",
+        "source": "user_supplied_literals"
+      },
+      {
+        "query_id": "records_by_value",
+        "source": "user_supplied_literals"
+      }
+    ]
+  }
+}

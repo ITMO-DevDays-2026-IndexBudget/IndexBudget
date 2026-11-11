@@ -140,4 +140,10 @@ data class AnalysisReport(
     val candidateRanking: CandidateRanking = input?.candidateRanking ?: CandidateRanking.FREQUENCY,
     /** Critical-query planner-cost guard outcomes for the selected set; empty without guards or a selected set. */
     val costGuards: List<CostGuardOutcome> = emptyList(),
-)
+) {
+    // Derived once per immutable report, including copies used by render fixtures.
+    val summary: RecommendationSummary = ReportSummary.recommendation(this)
+    val profileComparisons: List<CostComparisonSeries> = ReportSummary.profiles(this)
+    val queryEffects: List<CostComparisonSeries> = ReportSummary.queries(this)
+    val workloadProvenance: WorkloadProvenance? = input?.provenance
+}

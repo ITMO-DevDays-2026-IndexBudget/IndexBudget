@@ -31,6 +31,9 @@ class ManualComparisonPipelineTest {
         assertNotEquals(result.bestRobust, result.bestMean)
         val report = run.report!!
         assertEquals(control.report!!.priceOfRobustness, report.priceOfRobustness)
+        assertEquals(control.report!!.summary, report.summary)
+        assertEquals(control.report!!.profileComparisons, report.profileComparisons)
+        assertEquals(control.report!!.queryEffects, report.queryEffects)
         val manual = report.manualComparison!!
         assertTrue(manual.admissible)
         assertTrue(manual.metrics!!.meanCost < result.bestMean!!.metrics.meanCost)

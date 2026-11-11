@@ -1,7 +1,7 @@
 # Формат отчёта v3
 
 Нормативные требования к поведению — [спецификация v0.2, §8](../IndexBudget-spec-v0.2.md#8-архитектура-cli-и-отчёты).
-Здесь зафиксирован JSON-контракт реализации #19 с расширением INCLUDE #79. `DefaultReportBuilder` собирает общий
+Здесь зафиксирован JSON-контракт реализации #19 с расширениями INCLUDE #79 и сводки #68. `DefaultReportBuilder` собирает общий
 `AnalysisReport`; `JsonReportWriter` переводит его в явно заданную схему, а `ReportRenderer`
 получает ту же модель для HTML. Сериализация внутренних Kotlin-классов не определяет wire-формат.
 
@@ -29,6 +29,9 @@ JSON записывается в UTF-8. Все перечисленные пол
 | `comparison_scope` | Всегда `evaluated_sets`: оба incumbents из одного исследованного пула |
 | `incumbents_coincide` | Совпадают ли отсортированные IDs двух наборов; `null` для failed |
 | `price_of_robustness` | Готовая разность `C_mean(best_robust) - C_mean(best_mean)`; `null` для failed |
+| `summary` | Сводка рекомендации из сохранённых данных; присутствует и при failed |
+| `profile_comparisons`, `query_effects` | Готовые серии baseline/selected/best_robust/best_mean по профилям и SQL |
+| `workload_provenance` | Метаданные наблюдений из входного `provenance`, либо `null` |
 | `profiles` | Исходный порядок профилей; поля `id`, `weight`, `normalized_weight`, `calls_per_hour` |
 | `budgets` | `storage_budget_bytes`, `write_budget_units_per_hour`, `max_indexes`, `query_cost_guards` (эхо заданных пределов) |
 | `cost_guards` | Ограничения критических SQL (#78): `basis: "planner_cost_ratio"`, подпись «не latency и не SLA», `max_ratio_by_query_id` и `outcomes` для выбранного набора: `query_id`, `max_ratio`, `baseline_cost`, `selected_cost`, `observed_ratio` (`null` при нулевом baseline), `zero_baseline`, `violated`. Пусто без guards; при failed без выбранного набора `outcomes` пуст |
@@ -47,7 +50,8 @@ JSON записывается в UTF-8. Все перечисленные пол
 Если вход недоступен, `profiles`, `queries`, `budgets` и `table_write_rates` равны `null`.
 При отсутствии корректного нормированного веса его поле — `null`. Для запроса `regression` равно
 `true`, только если сохранённый selected cost больше baseline cost, `false` — если сравнение
-выполнено и роста нет, `null` — если нет одного из costs. Per-query проценты ускорения не вычисляются.
+выполнено и роста нет, `null` — если нет одного из costs. Проценты снижения planner cost
+передаются отдельно в `query_effects`; это не проценты ускорения.
 
 `environment` содержит `application_version`, `java_version`, `kotlin_version`, `postgres_version`,
 `hypopg_version`. Неизвестные версии остаются `null`; PostgreSQL/HypoPG берутся из фактов сессии,
@@ -208,6 +212,113 @@ JSON и HTML получают один `AnalysisReport`; SQL содержит т
 В `candidate_diagnostics.local_scopes` обязательны `enumerated_include_definitions` и `retained_include_definitions` (целые, включая ноль). Отсечения INCLUDE имеют причины `INCLUDE_PAYLOAD_LIMIT` / `INCLUDE_VARIANT_LIMIT` с `excluded_variants` и `limit`; локальный cap содержит также `include_before`, `include_after`, `include_limit`. Глобальный cap относится ко всем кандидатам независимо от payload.
 
 Карточки и список кандидатов показывают INCLUDE, исходный и бюджетный размер и write units. Возможность index-only scan не обещает отсутствие обращений к таблице. SQL-экспорт использует общий DDL renderer, включая payload.
+
+## Сводка и данные сравнений (#68)
+
+Расширение **аддитивное**: версия отчёта остаётся 3, существующие поля не меняют смысл.
+Новый reader должен допускать отсутствие этих четырёх полей в ранее выпущенных отчётах v3;
+строгим readers с закрытым списком полей требуется обновить список. Внутри приложения
+`AnalysisReport.summary`, `profileComparisons`, `queryEffects`, `workloadProvenance` готовятся
+при создании модели, включая `copy`. JSON/HTML только отображают эти значения.
+
+`summary` содержит:
+
+| Поле | Смысл |
+| --- | --- |
+| `status` | Статус того же запуска |
+| `selected_index_ids` | Отсортированные ID выбранных индексов; `[]` для baseline-only, `null` при failed. Определения находятся в корневом `selected_indexes` |
+| `mean_effect` | Эффект по `B_mean`/`C_mean`; `ratio` — сохранённое M, не среднее отношений профилей |
+| `worst_ratio` | Сохранённое R; `null` при нулевых baseline или отсутствии решения |
+| `budget_usage`, `budget_limits` | Те же расходы из domain и ограничения, что в `selected.metrics.budget_usage` и `budgets`. Расходы `null` при failed, ограничения `null`, если вход отсутствует |
+| `write_limit_enabled` | `false` при отключённом лимите, `true` при любом числовом лимите, включая 0; `null`, если вход отсутствует |
+| `regressed_query_count` | Число общих SQL с `selected_cost > baseline_cost`; каждый SQL считается один раз независимо от профилей. `null` при отсутствии выбранной оценки |
+| `comparison_scope`, `incumbents_coincide`, `price_of_robustness` | Те же значения, что в корне; цена в абсолютных единицах взвешенного planner cost |
+| `stop_reasons`, `errors` | Сохранённые причины остановки и уникальные ошибки; основная ошибка failed также включена |
+
+`CostEffect` сериализуется как `baseline_cost`, `cost`, `gain`, `ratio`, `gain_percent`,
+`relative_status`. `gain = baseline_cost - cost`; положительное число означает снижение cost.
+`gain_percent = 100 * gain / baseline_cost` при положительном baseline. Профильные значения
+переносятся из готовых `ProfileMetrics` без повторного расчёта. Для среднего эффекта и SQL
+используется общий `domain.CostEffect.calculate`, который также использует `MetricsCalculatorImpl`.
+Ни builder, ни renderer не вызывают evaluator. Расходы не суммируются из отображаемых карточек
+и не получают повторный запас 1.2.
+
+| `relative_status` | Числовые значения |
+| --- | --- |
+| `available` | Отношение и процент известны; реальный 0 сохраняется |
+| `zero_baseline` | Отношение и процент `null`, абсолютные costs и gain сохранены |
+| `unavailable` | Нет одного из costs; имеющийся cost сохраняется, gain/ratio/процент `null` |
+| `out_of_range` | Производное отношение или процент не представимы конечным Double, включая потерю положительного отношения в ноль; только непредставимые поля `null`, абсолютные costs/gain сохранены |
+
+`out_of_range` относится к дополнительному представлению сохранённых costs: такой SQL может
+входить в корректный полный вектор, хотя его индивидуальный процент непредставим.
+Это не маскирует ошибки поиска: неконечные профильные метрики или underflow положительного
+профильного отношения либо общего M дают `NUMERIC_ERROR`, даже если отношения отдельных
+профилей представимы. Реальный M = 0 при C_mean = 0 остаётся допустимым. При `cost > 0` отношение, потерянное в ноль,
+сохраняется как `null`/`out_of_range`; представимые subnormal-отношения и реальный ноль
+при `cost = 0` остаются числовыми.
+Порядок операций процентов сохранён (`100 * gain / baseline`), включая проверку промежуточного
+переполнения. При failed численные профильные расчёты не повторяются: baseline costs SQL могут
+быть известны при неизвестных baseline-метриках профилей.
+
+`profile_comparisons` и `query_effects` — массивы в исходном порядке profiles/queries.
+Каждый элемент имеет `id` и четыре `CostEffect`: `baseline`, `selected`, `best_robust`, `best_mean`.
+Все четыре сравниваются с одним исходным baseline. Профильные costs учитывают частоты;
+per-query costs — стоимость одного планирования SQL, без умножения на частоты.
+При отсутствии входа массивы пусты. HTML при этом сохраняет известные абсолютные costs
+и признаки регрессии из `result.baseline`/`result.selected`; отсутствующий процент остаётся
+неизвестным. Эти серии предназначены для графиков #69; масштабирование
+отрисовки не должно менять числа или выдавать неизвестный эффект за нулевой.
+
+M — отношение ожидаемых стоимостей, R — худшее профильное отношение; R не даёт гарантий
+для каждого SQL. Сравнение ограничено `evaluated_sets`. Совпавшие incumbents, регрессии SQL,
+partial и failed отображаются явно. Никакой новый EXPLAIN при сборке/экспорте не нужен.
+
+## Происхождение нагрузки (#68)
+
+Необязательное поле `provenance` во входном workload v2 передаёт **метаданные для отчёта**.
+Отсутствие поля или `null` сохраняет обычный ручной ввод. CLI-флаги не меняются.
+Это не реализация извлечения частот/импорта #66/#67: importer отвечает за правильность
+наблюдений и соответствие примеров статистике; reader проверяет форму и связи метаданных.
+Импортёр может вложить этот объект из своего манифеста в воспроизводимый workload.
+Интеграция с фактическим выходом #67 пока не проверена: для закрытия #68 требуется
+сопоставить источник, окна, отбор, охват и происхождение примеров в отчёте с настоящим
+манифестом импортёра. Синтетические примеры и тесты передачи метаданных этого не заменяют.
+
+Объект имеет собственный `schema_version: 1` и в той же структуре экспортируется как
+`workload_provenance`. Неизвестные поля и иные версии отклоняются до анализа.
+
+- `source`: только `pg_stat_statements`.
+- `source_id`: канонический UUID источника снимков #65. URL, хосты, DSN и credentials сюда не передаются.
+- `selection_rule`: непустое описание фактически применённого правила, до 1000 символов;
+  без секретов. Отчёт не выполняет это правило и не отбирает запросы заново.
+- `windows`: ровно одно окно на каждый profile ID, без дубликатов. Каждое содержит `profile_id`,
+  `started_at`, `finished_at` (ISO-8601 с UTC offset; конец строго позже начала), `complete` (boolean)
+  и `coverage`. На выходе даты приводятся к UTC. `complete: false` явно показывает неполное
+  наблюдение и не подменяет статус выполнения анализа.
+- `coverage.denominator`: всегда `available_complete_entries`. Это доступные полные записи
+  конкретного окна **до отбора**, а не весь трафик сервера.
+- `coverage.selected_calls`, `available_calls`: неотрицательные целые int64 либо явный `null`.
+- `coverage.selected_exec_time_millis`, `available_exec_time_millis`: конечные неотрицательные
+  миллисекунды либо явный `null`. Положительное значение не должно теряться в ноль при чтении.
+  Известный selected не превышает известный available. Все четыре поля обязательны;
+  неизвестность не заменяется нулём. Охват показан парой «выбрано / доступно», без выдуманного
+  процента при неизвестном или нулевом знаменателе.
+- `query_examples`: ровно одна запись на каждый query ID, без дубликатов: `query_id`,
+  `source` (`user_supplied_literals` — репрезентативный пример пользователя;
+  `original_literal_sql` — исходный SQL уже содержит литералы).
+
+Поле входит в общий лимит входа 1 MiB и в исходный input hash. Оно не меняет SQL, частоты,
+write rates, критерий или бюджеты. Ошибки валидации не копируют значения произвольных полей.
+HTML экранирует описание отбора и IDs; исторические миллисекунды выводятся отдельной таблицей,
+без пересчёта в ожидаемое время с новыми индексами. При ручном вводе источник/охват неизвестны.
+
+Пример входа: [workload-v2-provenance.json](../examples/workload-v2-provenance.json).
+Пример полного **синтетического** отчёта: [report-v3-provenance.json](../examples/report-v3-provenance.json).
+`./gradlew reportPreview` создаёт согласованные HTML/JSON-варианты, включая `imported`,
+`zero-baseline`, `regression`, `partial`, `failed`, без обращения к БД. Фикстуры, меняющие
+результат или workload, пересобирают производные данные через `DefaultReportBuilder`;
+согласованность `queries`, `query_effects` и сохранённых оценок проверяется для всех вариантов.
 
 ## Ручное сравнение (#77)
 

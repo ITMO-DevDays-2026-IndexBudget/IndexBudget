@@ -14,6 +14,14 @@ import ru.itmo.indexbudget.domain.ProfileWeights
 import ru.itmo.indexbudget.domain.QueryInput
 import ru.itmo.indexbudget.domain.RunContext
 import ru.itmo.indexbudget.domain.TableWriteRates
+import ru.itmo.indexbudget.domain.WorkloadProvenance
+import ru.itmo.indexbudget.domain.ObservationWindow
+import ru.itmo.indexbudget.domain.ObservationCoverage
+import ru.itmo.indexbudget.domain.QueryExample
+import ru.itmo.indexbudget.domain.QueryExampleSource
+import java.time.Instant
+import java.time.format.DateTimeParseException
+import java.util.UUID
 import ru.itmo.indexbudget.domain.WorkloadInput
 import tools.jackson.core.JacksonException
 import tools.jackson.core.StreamReadFeature
@@ -57,8 +65,8 @@ class WorkloadReader {
                 ErrorCode.UNSUPPORTED_SCHEMA_VERSION)
         }
         objectNode(root, Location("workload"), setOf(
-            "schema_version", "objective", "queries", "profiles", "constraints", "table_write_rates", "analysis_mode",
-            "candidate_ranking", "manual_indexes",
+            "schema_version", "objective", "queries", "profiles", "constraints", "table_write_rates",
+            "analysis_mode", "candidate_ranking", "manual_indexes", "provenance",
         ))
         // query_cost_guards keys are cross-checked against queries below, after queries are parsed.
         val requestedMode = when (val value = root.get("analysis_mode")) {
@@ -103,6 +111,7 @@ class WorkloadReader {
             invalid(Location("table_write_rates"), "An enabled write budget requires a complete write profile.",
                 ErrorCode.INVALID_WRITE_PROFILE)
         }
+        val provenance = provenance(root.get("provenance"), queries, profiles)
         context?.checkDeadline()
         if (context != null) {
             val canonical = StringBuilder()
@@ -112,8 +121,9 @@ class WorkloadReader {
             context.checkDeadline()
             context.recordInputHash(HexFormat.of().formatHex(digest))
         }
-        return WorkloadInput(queries, profiles, constraints, objective = objective, tableWriteRates = writeRates, manualIndexes = manual,
-            analysisMode = analysisMode, candidateRanking = candidateRankingOverride ?: requestedRanking)
+        return WorkloadInput(queries, profiles, constraints, objective = objective, tableWriteRates = writeRates,
+            manualIndexes = manual, analysisMode = analysisMode, candidateRanking = candidateRankingOverride ?: requestedRanking,
+            provenance = provenance)
     }
 
     private fun manualIndexes(node: JsonNode?): List<IndexDefinition>? {
@@ -318,6 +328,94 @@ class WorkloadReader {
                 deletesPerHour = number(value.get("deletes_per_hour"), tableLocation.child("deletes_per_hour")),
             )
         }.toMap()
+    }
+
+    private fun provenance(node: JsonNode?, queries: List<QueryInput>, profiles: List<Profile>): WorkloadProvenance? {
+        if (node == null || node.isNull) return null
+        val location = Location("provenance")
+        val value = objectNode(node, location, setOf(
+            "schema_version", "source", "source_id", "selection_rule", "windows", "query_examples",
+        ))
+        if (integer(value.get("schema_version"), location.child("schema_version")) != 1L) {
+            invalid(location.child("schema_version"), "Expected provenance schema_version: 1.",
+                ErrorCode.UNSUPPORTED_SCHEMA_VERSION)
+        }
+        if (string(value.get("source"), location.child("source")) != "pg_stat_statements") {
+            invalid(location.child("source"), "Expected pg_stat_statements.")
+        }
+        val sourceIdText = string(value.get("source_id"), location.child("source_id"))
+        val sourceId = try { UUID.fromString(sourceIdText) } catch (_: IllegalArgumentException) {
+            invalid(location.child("source_id"), "Expected a source UUID, never a connection URL.")
+        }
+        if (!sourceId.toString().equals(sourceIdText, ignoreCase = true)) {
+            invalid(location.child("source_id"), "Expected a canonical source UUID.")
+        }
+        val rule = string(value.get("selection_rule"), location.child("selection_rule"))
+        if (rule.length > 1000) invalid(location.child("selection_rule"), "Selection rule must not exceed 1000 characters.")
+        val windows = array(value.get("windows"), location.child("windows"), 3).mapIndexed { index, entry ->
+            val at = location.child("windows[$index]")
+            val window = objectNode(entry, at, setOf("profile_id", "started_at", "finished_at", "complete", "coverage"))
+            val profileId = string(window.get("profile_id"), at.child("profile_id"))
+            val startedAt = instant(window.get("started_at"), at.child("started_at"))
+            val finishedAt = instant(window.get("finished_at"), at.child("finished_at"))
+            if (finishedAt <= startedAt) invalid(at.child("finished_at"), "Observation interval must be positive.")
+            val complete = window.get("complete")
+            if (complete == null || !complete.isBoolean) invalid(at.child("complete"), "Expected a boolean.")
+            ObservationWindow(profileId, startedAt, finishedAt, complete.booleanValue(),
+                coverage(window.get("coverage"), at.child("coverage")))
+        }
+        if (windows.map { it.profileId }.toSet() != profiles.map { it.id }.toSet() || windows.size != profiles.size) {
+            invalid(location.child("windows"), "Expected exactly one observation window per workload profile.")
+        }
+        val examples = array(value.get("query_examples"), location.child("query_examples"), 20).mapIndexed { index, entry ->
+            val at = location.child("query_examples[$index]")
+            val example = objectNode(entry, at, setOf("query_id", "source"))
+            val source = when (string(example.get("source"), at.child("source"))) {
+                "user_supplied_literals" -> QueryExampleSource.USER_SUPPLIED_LITERALS
+                "original_literal_sql" -> QueryExampleSource.ORIGINAL_LITERAL_SQL
+                else -> invalid(at.child("source"), "Expected user_supplied_literals or original_literal_sql.")
+            }
+            QueryExample(string(example.get("query_id"), at.child("query_id")), source)
+        }
+        if (examples.map { it.queryId }.toSet() != queries.map { it.id }.toSet() || examples.size != queries.size) {
+            invalid(location.child("query_examples"), "Expected exactly one example origin per workload query.")
+        }
+        return WorkloadProvenance(sourceId, rule, windows, examples)
+    }
+
+    private fun instant(node: JsonNode?, location: Location): Instant = try {
+        Instant.parse(string(node, location))
+    } catch (_: DateTimeParseException) {
+        invalid(location, "Expected an ISO-8601 timestamp with UTC offset.")
+    }
+
+    private fun coverage(node: JsonNode?, location: Location): ObservationCoverage {
+        val value = objectNode(node, location, setOf(
+            "denominator", "selected_calls", "available_calls", "selected_exec_time_millis", "available_exec_time_millis",
+        ))
+        if (string(value.get("denominator"), location.child("denominator")) != "available_complete_entries") {
+            invalid(location.child("denominator"), "Expected available_complete_entries.")
+        }
+        fun count(name: String): Long? {
+            val entry = value.get(name) ?: invalid(location.child(name), "Value is required; use null for unknown.")
+            if (entry.isNull) return null
+            val count = integer(entry, location.child(name))
+            if (count < 0) invalid(location.child(name), "Count must be nonnegative.")
+            return count
+        }
+        fun time(name: String): Double? {
+            val entry = value.get(name) ?: invalid(location.child(name), "Value is required; use null for unknown.")
+            return if (entry.isNull) null else number(entry, location.child(name))
+        }
+        val selectedCalls = count("selected_calls")
+        val availableCalls = count("available_calls")
+        val selectedTime = time("selected_exec_time_millis")
+        val availableTime = time("available_exec_time_millis")
+        if (selectedCalls != null && availableCalls != null && selectedCalls > availableCalls ||
+            selectedTime != null && availableTime != null && selectedTime > availableTime) {
+            invalid(location, "Selected observations cannot exceed available observations.")
+        }
+        return ObservationCoverage(selectedCalls, availableCalls, selectedTime, availableTime)
     }
 
     private fun objectNode(node: JsonNode?, location: Location, allowed: Set<String>): JsonNode {

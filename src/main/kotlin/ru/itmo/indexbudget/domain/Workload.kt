@@ -16,6 +16,7 @@ data class WorkloadInput(
     val manualIndexes: List<IndexDefinition>? = null,
     val analysisMode: AnalysisMode = AnalysisMode.NORMAL,
     val candidateRanking: CandidateRanking = CandidateRanking.FREQUENCY,
+    val provenance: WorkloadProvenance? = null,
 )
 
 data class QueryInput(val id: String, val sql: String)

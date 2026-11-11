@@ -1,0 +1,629 @@
+{
+  "schema_version" : 3,
+  "spec_version" : "0.2",
+  "run_id" : "00000000-0000-0000-0000-000000000001",
+  "input_hash" : "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+  "duration_millis" : 100,
+  "environment" : {
+    "application_version" : "fixture",
+    "java_version" : "fixture",
+    "kotlin_version" : null,
+    "postgres_version" : null,
+    "hypopg_version" : null
+  },
+  "status" : "completed",
+  "analysis_mode" : "normal",
+  "candidate_ranking" : "frequency",
+  "selected_objective" : "robust",
+  "comparison_scope" : "evaluated_sets",
+  "incumbents_coincide" : false,
+  "price_of_robustness" : 88900.0,
+  "summary" : {
+    "status" : "completed",
+    "selected_index_ids" : [ "records_created_at" ],
+    "mean_effect" : {
+      "baseline_cost" : 310000.0,
+      "cost" : 155000.0,
+      "gain" : 155000.0,
+      "ratio" : 0.5,
+      "gain_percent" : 50.0,
+      "relative_status" : "available"
+    },
+    "worst_ratio" : 0.5,
+    "budget_usage" : {
+      "estimated_bytes" : 262144,
+      "budgeted_bytes" : 314573,
+      "write_units_per_hour" : 4100.0,
+      "index_count" : 1,
+      "size_safety_factor" : 1.2
+    },
+    "budget_limits" : {
+      "storage_budget_bytes" : 67108864,
+      "write_budget_units_per_hour" : 10000.0,
+      "max_indexes" : 5
+    },
+    "write_limit_enabled" : true,
+    "regressed_query_count" : 0,
+    "comparison_scope" : "evaluated_sets",
+    "incumbents_coincide" : false,
+    "price_of_robustness" : 88900.0,
+    "stop_reasons" : [ "SEARCH_COMPLETE" ],
+    "errors" : [ ]
+  },
+  "profile_comparisons" : [ {
+    "id" : "normal",
+    "baseline" : {
+      "baseline_cost" : 310000.0,
+      "cost" : 310000.0,
+      "gain" : 0.0,
+      "ratio" : 1.0,
+      "gain_percent" : 0.0,
+      "relative_status" : "available"
+    },
+    "selected" : {
+      "baseline_cost" : 310000.0,
+      "cost" : 155000.0,
+      "gain" : 155000.0,
+      "ratio" : 0.5,
+      "gain_percent" : 50.0,
+      "relative_status" : "available"
+    },
+    "best_robust" : {
+      "baseline_cost" : 310000.0,
+      "cost" : 155000.0,
+      "gain" : 155000.0,
+      "ratio" : 0.5,
+      "gain_percent" : 50.0,
+      "relative_status" : "available"
+    },
+    "best_mean" : {
+      "baseline_cost" : 310000.0,
+      "cost" : 40000.0,
+      "gain" : 270000.0,
+      "ratio" : 0.12903225806451613,
+      "gain_percent" : 87.09677419354838,
+      "relative_status" : "available"
+    }
+  }, {
+    "id" : "campaign",
+    "baseline" : {
+      "baseline_cost" : 310000.0,
+      "cost" : 310000.0,
+      "gain" : 0.0,
+      "ratio" : 1.0,
+      "gain_percent" : 0.0,
+      "relative_status" : "available"
+    },
+    "selected" : {
+      "baseline_cost" : 310000.0,
+      "cost" : 155000.0,
+      "gain" : 155000.0,
+      "ratio" : 0.5,
+      "gain_percent" : 50.0,
+      "relative_status" : "available"
+    },
+    "best_robust" : {
+      "baseline_cost" : 310000.0,
+      "cost" : 155000.0,
+      "gain" : 155000.0,
+      "ratio" : 0.5,
+      "gain_percent" : 50.0,
+      "relative_status" : "available"
+    },
+    "best_mean" : {
+      "baseline_cost" : 310000.0,
+      "cost" : 301000.0,
+      "gain" : 9000.0,
+      "ratio" : 0.9709677419354839,
+      "gain_percent" : 2.903225806451613,
+      "relative_status" : "available"
+    }
+  } ],
+  "query_effects" : [ {
+    "id" : "records_by_group",
+    "baseline" : {
+      "baseline_cost" : 100.0,
+      "cost" : 100.0,
+      "gain" : 0.0,
+      "ratio" : 1.0,
+      "gain_percent" : 0.0,
+      "relative_status" : "available"
+    },
+    "selected" : {
+      "baseline_cost" : 100.0,
+      "cost" : 50.0,
+      "gain" : 50.0,
+      "ratio" : 0.5,
+      "gain_percent" : 50.0,
+      "relative_status" : "available"
+    },
+    "best_robust" : {
+      "baseline_cost" : 100.0,
+      "cost" : 50.0,
+      "gain" : 50.0,
+      "ratio" : 0.5,
+      "gain_percent" : 50.0,
+      "relative_status" : "available"
+    },
+    "best_mean" : {
+      "baseline_cost" : 100.0,
+      "cost" : 10.0,
+      "gain" : 90.0,
+      "ratio" : 0.1,
+      "gain_percent" : 90.0,
+      "relative_status" : "available"
+    }
+  }, {
+    "id" : "records_by_value",
+    "baseline" : {
+      "baseline_cost" : 100.0,
+      "cost" : 100.0,
+      "gain" : 0.0,
+      "ratio" : 1.0,
+      "gain_percent" : 0.0,
+      "relative_status" : "available"
+    },
+    "selected" : {
+      "baseline_cost" : 100.0,
+      "cost" : 50.0,
+      "gain" : 50.0,
+      "ratio" : 0.5,
+      "gain_percent" : 50.0,
+      "relative_status" : "available"
+    },
+    "best_robust" : {
+      "baseline_cost" : 100.0,
+      "cost" : 50.0,
+      "gain" : 50.0,
+      "ratio" : 0.5,
+      "gain_percent" : 50.0,
+      "relative_status" : "available"
+    },
+    "best_mean" : {
+      "baseline_cost" : 100.0,
+      "cost" : 100.0,
+      "gain" : 0.0,
+      "ratio" : 1.0,
+      "gain_percent" : 0.0,
+      "relative_status" : "available"
+    }
+  } ],
+  "workload_provenance" : {
+    "schema_version" : 1,
+    "source" : "pg_stat_statements",
+    "source_id" : "00000000-0000-0000-0000-000000000068",
+    "selection_rule" : "Синтетический пример: по убыванию total_exec_time, затем по идентичности записи; до 20 поддерживаемых SQL.",
+    "windows" : [ {
+      "profile_id" : "normal",
+      "started_at" : "2026-11-10T08:00:00Z",
+      "finished_at" : "2026-11-10T09:00:00Z",
+      "complete" : true,
+      "coverage" : {
+        "denominator" : "available_complete_entries",
+        "selected_calls" : 3100,
+        "available_calls" : 4000,
+        "selected_exec_time_millis" : 12000.0,
+        "available_exec_time_millis" : 15000.0
+      }
+    }, {
+      "profile_id" : "campaign",
+      "started_at" : "2026-11-10T09:00:00Z",
+      "finished_at" : "2026-11-10T10:00:00Z",
+      "complete" : true,
+      "coverage" : {
+        "denominator" : "available_complete_entries",
+        "selected_calls" : 3100,
+        "available_calls" : 4000,
+        "selected_exec_time_millis" : 12000.0,
+        "available_exec_time_millis" : 15000.0
+      }
+    } ],
+    "query_examples" : [ {
+      "query_id" : "records_by_group",
+      "source" : "user_supplied_literals"
+    }, {
+      "query_id" : "records_by_value",
+      "source" : "user_supplied_literals"
+    } ]
+  },
+  "profiles" : [ {
+    "id" : "normal",
+    "weight" : 0.9,
+    "normalized_weight" : 0.9,
+    "calls_per_hour" : {
+      "records_by_group" : 3000.0,
+      "records_by_value" : 100.0
+    }
+  }, {
+    "id" : "campaign",
+    "weight" : 0.1,
+    "normalized_weight" : 0.1,
+    "calls_per_hour" : {
+      "records_by_group" : 100.0,
+      "records_by_value" : 3000.0
+    }
+  } ],
+  "budgets" : {
+    "storage_budget_bytes" : 67108864,
+    "write_budget_units_per_hour" : 10000.0,
+    "max_indexes" : 5
+  },
+  "write_proxy_model" : "row_changes_times_key_and_include_columns",
+  "table_write_rates" : {
+    "public.records" : {
+      "inserts_per_hour" : 1000.0,
+      "updates_per_hour" : 3000.0,
+      "deletes_per_hour" : 100.0,
+      "source" : "manual"
+    }
+  },
+  "queries" : [ {
+    "id" : "records_by_group",
+    "sql" : "SELECT id, value FROM public.records WHERE group_id = 42 ORDER BY created_at DESC LIMIT 20",
+    "baseline_cost" : 100.0,
+    "selected_cost" : 50.0,
+    "regression" : false
+  }, {
+    "id" : "records_by_value",
+    "sql" : "SELECT id, value FROM public.records WHERE value = 7 ORDER BY created_at DESC LIMIT 20",
+    "baseline_cost" : 100.0,
+    "selected_cost" : 50.0,
+    "regression" : false
+  } ],
+  "baseline" : {
+    "candidate_ids" : [ ],
+    "cost_by_query_id" : {
+      "records_by_group" : 100.0,
+      "records_by_value" : 100.0
+    },
+    "plans_by_query_id" : {
+      "records_by_group" : [ {
+        "Plan" : {
+          "Node Type" : "Fixture Scan",
+          "Total Cost" : 100.0
+        }
+      } ],
+      "records_by_value" : [ {
+        "Plan" : {
+          "Node Type" : "Fixture Scan",
+          "Total Cost" : 100.0
+        }
+      } ]
+    },
+    "metrics" : {
+      "profiles" : [ {
+        "profile_id" : "campaign",
+        "normalized_weight" : 0.1,
+        "baseline_cost" : 310000.0,
+        "cost" : 310000.0,
+        "gain" : 0.0,
+        "ratio" : 1.0,
+        "gain_percent" : 0.0
+      }, {
+        "profile_id" : "normal",
+        "normalized_weight" : 0.9,
+        "baseline_cost" : 310000.0,
+        "cost" : 310000.0,
+        "gain" : 0.0,
+        "ratio" : 1.0,
+        "gain_percent" : 0.0
+      } ],
+      "baseline_mean_cost" : 310000.0,
+      "mean_cost" : 310000.0,
+      "mean_ratio" : 1.0,
+      "worst_ratio" : 1.0,
+      "budget_usage" : {
+        "estimated_bytes" : 0,
+        "budgeted_bytes" : 0,
+        "write_units_per_hour" : 0.0,
+        "index_count" : 0,
+        "size_safety_factor" : 1.2
+      }
+    }
+  },
+  "selected" : {
+    "candidate_ids" : [ "records_created_at" ],
+    "cost_by_query_id" : {
+      "records_by_group" : 50.0,
+      "records_by_value" : 50.0
+    },
+    "plans_by_query_id" : {
+      "records_by_group" : [ {
+        "Plan" : {
+          "Node Type" : "Fixture Scan",
+          "Total Cost" : 50.0
+        }
+      } ],
+      "records_by_value" : [ {
+        "Plan" : {
+          "Node Type" : "Fixture Scan",
+          "Total Cost" : 50.0
+        }
+      } ]
+    },
+    "metrics" : {
+      "profiles" : [ {
+        "profile_id" : "campaign",
+        "normalized_weight" : 0.1,
+        "baseline_cost" : 310000.0,
+        "cost" : 155000.0,
+        "gain" : 155000.0,
+        "ratio" : 0.5,
+        "gain_percent" : 50.0
+      }, {
+        "profile_id" : "normal",
+        "normalized_weight" : 0.9,
+        "baseline_cost" : 310000.0,
+        "cost" : 155000.0,
+        "gain" : 155000.0,
+        "ratio" : 0.5,
+        "gain_percent" : 50.0
+      } ],
+      "baseline_mean_cost" : 310000.0,
+      "mean_cost" : 155000.0,
+      "mean_ratio" : 0.5,
+      "worst_ratio" : 0.5,
+      "budget_usage" : {
+        "estimated_bytes" : 262144,
+        "budgeted_bytes" : 314573,
+        "write_units_per_hour" : 4100.0,
+        "index_count" : 1,
+        "size_safety_factor" : 1.2
+      }
+    }
+  },
+  "best_robust" : {
+    "candidate_ids" : [ "records_created_at" ],
+    "cost_by_query_id" : {
+      "records_by_group" : 50.0,
+      "records_by_value" : 50.0
+    },
+    "plans_by_query_id" : {
+      "records_by_group" : [ {
+        "Plan" : {
+          "Node Type" : "Fixture Scan",
+          "Total Cost" : 50.0
+        }
+      } ],
+      "records_by_value" : [ {
+        "Plan" : {
+          "Node Type" : "Fixture Scan",
+          "Total Cost" : 50.0
+        }
+      } ]
+    },
+    "metrics" : {
+      "profiles" : [ {
+        "profile_id" : "campaign",
+        "normalized_weight" : 0.1,
+        "baseline_cost" : 310000.0,
+        "cost" : 155000.0,
+        "gain" : 155000.0,
+        "ratio" : 0.5,
+        "gain_percent" : 50.0
+      }, {
+        "profile_id" : "normal",
+        "normalized_weight" : 0.9,
+        "baseline_cost" : 310000.0,
+        "cost" : 155000.0,
+        "gain" : 155000.0,
+        "ratio" : 0.5,
+        "gain_percent" : 50.0
+      } ],
+      "baseline_mean_cost" : 310000.0,
+      "mean_cost" : 155000.0,
+      "mean_ratio" : 0.5,
+      "worst_ratio" : 0.5,
+      "budget_usage" : {
+        "estimated_bytes" : 262144,
+        "budgeted_bytes" : 314573,
+        "write_units_per_hour" : 4100.0,
+        "index_count" : 1,
+        "size_safety_factor" : 1.2
+      }
+    }
+  },
+  "best_mean" : {
+    "candidate_ids" : [ "records_group_created_at" ],
+    "cost_by_query_id" : {
+      "records_by_group" : 10.0,
+      "records_by_value" : 100.0
+    },
+    "plans_by_query_id" : {
+      "records_by_group" : [ {
+        "Plan" : {
+          "Node Type" : "Fixture Scan",
+          "Total Cost" : 10.0
+        }
+      } ],
+      "records_by_value" : [ {
+        "Plan" : {
+          "Node Type" : "Fixture Scan",
+          "Total Cost" : 100.0
+        }
+      } ]
+    },
+    "metrics" : {
+      "profiles" : [ {
+        "profile_id" : "campaign",
+        "normalized_weight" : 0.1,
+        "baseline_cost" : 310000.0,
+        "cost" : 301000.0,
+        "gain" : 9000.0,
+        "ratio" : 0.9709677419354839,
+        "gain_percent" : 2.903225806451613
+      }, {
+        "profile_id" : "normal",
+        "normalized_weight" : 0.9,
+        "baseline_cost" : 310000.0,
+        "cost" : 40000.0,
+        "gain" : 270000.0,
+        "ratio" : 0.12903225806451613,
+        "gain_percent" : 87.09677419354838
+      } ],
+      "baseline_mean_cost" : 310000.0,
+      "mean_cost" : 66100.0,
+      "mean_ratio" : 0.2132258064516129,
+      "worst_ratio" : 0.9709677419354839,
+      "budget_usage" : {
+        "estimated_bytes" : 524288,
+        "budgeted_bytes" : 629146,
+        "write_units_per_hour" : 8200.0,
+        "index_count" : 1,
+        "size_safety_factor" : 1.2
+      }
+    }
+  },
+  "selected_indexes" : [ {
+    "id" : "records_created_at",
+    "definition" : {
+      "table" : {
+        "schema" : "public",
+        "name" : "records"
+      },
+      "method" : "btree",
+      "included_columns" : [ ],
+      "unique" : false,
+      "keys" : [ {
+        "column" : {
+          "table" : {
+            "schema" : "public",
+            "name" : "records"
+          },
+          "name" : "created_at"
+        },
+        "direction" : "desc",
+        "nulls" : "first",
+        "collation" : null,
+        "operator_class" : "pg_catalog.timestamp_ops"
+      } ]
+    },
+    "source_query_ids" : [ "records_by_group", "records_by_value" ],
+    "source_branches" : [ ],
+    "generation_reasons" : [ "SINGLE_COLUMN" ],
+    "ddl" : "CREATE INDEX \"ib_4bc70e6e93cd6e0637dc14534d2fe295874e625166396f2c3de3b78b7377\" ON \"public\".\"records\" USING btree (\"created_at\" \"pg_catalog\".\"timestamp_ops\" DESC NULLS FIRST);",
+    "estimated_bytes" : 262144,
+    "budgeted_bytes" : 314573,
+    "write_units_per_hour" : 4100.0
+  } ],
+  "candidates" : [ {
+    "id" : "records_created_at",
+    "definition" : {
+      "table" : {
+        "schema" : "public",
+        "name" : "records"
+      },
+      "method" : "btree",
+      "included_columns" : [ ],
+      "unique" : false,
+      "keys" : [ {
+        "column" : {
+          "table" : {
+            "schema" : "public",
+            "name" : "records"
+          },
+          "name" : "created_at"
+        },
+        "direction" : "desc",
+        "nulls" : "first",
+        "collation" : null,
+        "operator_class" : "pg_catalog.timestamp_ops"
+      } ]
+    },
+    "source_query_ids" : [ "records_by_group", "records_by_value" ],
+    "source_branches" : [ ],
+    "generation_reasons" : [ "SINGLE_COLUMN" ],
+    "ddl" : "CREATE INDEX \"ib_4bc70e6e93cd6e0637dc14534d2fe295874e625166396f2c3de3b78b7377\" ON \"public\".\"records\" USING btree (\"created_at\" \"pg_catalog\".\"timestamp_ops\" DESC NULLS FIRST);",
+    "estimated_bytes" : 262144,
+    "budgeted_bytes" : 314573,
+    "write_units_per_hour" : 4100.0
+  }, {
+    "id" : "records_group_created_at",
+    "definition" : {
+      "table" : {
+        "schema" : "public",
+        "name" : "records"
+      },
+      "method" : "btree",
+      "included_columns" : [ ],
+      "unique" : false,
+      "keys" : [ {
+        "column" : {
+          "table" : {
+            "schema" : "public",
+            "name" : "records"
+          },
+          "name" : "group_id"
+        },
+        "direction" : "asc",
+        "nulls" : "last",
+        "collation" : null,
+        "operator_class" : "pg_catalog.int4_ops"
+      }, {
+        "column" : {
+          "table" : {
+            "schema" : "public",
+            "name" : "records"
+          },
+          "name" : "created_at"
+        },
+        "direction" : "desc",
+        "nulls" : "first",
+        "collation" : null,
+        "operator_class" : "pg_catalog.timestamp_ops"
+      } ]
+    },
+    "source_query_ids" : [ "records_by_group" ],
+    "source_branches" : [ ],
+    "generation_reasons" : [ "EQUALITY_AND_ORDER" ],
+    "ddl" : "CREATE INDEX \"ib_3f6f88416e95fa4497a1f7f760158b3011f867dfbeba72e8264218af7428\" ON \"public\".\"records\" USING btree (\"group_id\" \"pg_catalog\".\"int4_ops\" ASC NULLS LAST, \"created_at\" \"pg_catalog\".\"timestamp_ops\" DESC NULLS FIRST);",
+    "estimated_bytes" : 524288,
+    "budgeted_bytes" : 629146,
+    "write_units_per_hour" : 8200.0
+  } ],
+  "manual_requested_indexes" : null,
+  "manual_comparison" : null,
+  "candidate_diagnostics" : {
+    "column_limit_per_query_table" : 16,
+    "local_candidate_limit" : 32,
+    "global_candidate_limit" : 16,
+    "candidates_before_global_deduplication" : 2,
+    "candidates_after_global_deduplication" : 2,
+    "shortlisted_candidates" : 2,
+    "initial_shortlisted_candidates" : 2,
+    "reserve_candidates" : 0,
+    "reserve_candidate_limit" : 48,
+    "max_size_attempts" : 32,
+    "preparation_scope" : "run",
+    "fixed_pool_selection" : null,
+    "preparation" : null,
+    "ungenerated_definitions" : null,
+    "local_scopes" : [ ],
+    "decisions" : [ ],
+    "warnings" : [ ]
+  },
+  "diagnostics" : {
+    "completed_phases" : [ "validation", "introspection", "baseline", "candidates", "greedy", "repair" ],
+    "stop_reasons" : [ "SEARCH_COMPLETE" ],
+    "statistics" : {
+      "explain_attempts" : 6,
+      "evaluation_attempts" : 3,
+      "completed_evaluations" : 3,
+      "cache_hits" : 0,
+      "repair_attempts" : 0
+    },
+    "limits" : {
+      "command_timeout_millis" : 90000,
+      "search_timeout_millis" : 60000,
+      "explain_timeout_millis" : 2000,
+      "connect_timeout_millis" : 5000,
+      "max_explain_attempts" : 2000,
+      "max_repair_attempts" : 28
+    },
+    "warnings" : [ ],
+    "errors" : [ ],
+    "candidate_decisions" : [ ],
+    "unexamined_configurations" : null
+  },
+  "error" : null
+}
