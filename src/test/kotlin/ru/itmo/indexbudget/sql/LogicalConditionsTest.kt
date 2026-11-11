@@ -56,6 +56,58 @@ class LogicalConditionsTest {
     }
 
     @Test
+    fun `reports associate exact origins with candidate IDs and selected indexes and escape query IDs`() {
+        val specialId = "q<&\"'>"
+        val queries = listOf(QueryInput(specialId, "SELECT * FROM records WHERE a=1 OR b=2"),
+            QueryInput("plain", "SELECT * FROM records WHERE c=3"))
+        val input = WorkloadInput(queries, listOf(Profile("p", 1.0, queries.associate { it.id to 1.0 })),
+            Constraints(1024 * 1024, null))
+        val context = RunContext()
+        val resolved = analyzer.resolve(analyzer.parse(input, context), catalog, context)
+        val generated = ProfileAwareCandidateGenerator().generate(resolved, catalog, context)
+        fun id(column: String) = CanonicalIndex.id(BtreeCandidateCanonicalizer(catalog, context).canonicalize(
+            IndexDefinition(table, listOf(IndexKey(ColumnRef(table, column))))))
+        val expected = mapOf(id("a") to listOf(specialId to "condition/L"),
+            id("b") to listOf(specialId to "condition/R"), id("c") to emptyList())
+        val batch = generated.copy(candidates = generated.candidates.map { it.copy(estimatedBytes = 100, budgetedBytes = 120) })
+        val chosen = batch.candidates.filter { it.id in setOf(id("a"), id("c")) }
+        assertEquals(2, chosen.size)
+        val baseline = EvaluationResult(emptyList(), queries.associate { it.id to 10.0 },
+            queries.associate { it.id to ExplainPlan("{}") })
+        val evaluation = baseline.copy(candidateIds = chosen.map { it.id }.sorted(),
+            costByQueryId = queries.associate { it.id to 5.0 })
+        val calculator = MetricsCalculatorImpl()
+        val selected = EvaluatedConfiguration(evaluation,
+            calculator.calculate(input, baseline, evaluation, calculator.assessBudget(chosen, input).usage))
+        val report = DefaultReportBuilder().build(input, batch,
+            SearchResult.Completed(input.objective, baseline, selected, selected), context)
+        val json = JsonMapper().readTree(JsonReportWriter().render(report))
+        for (field in listOf("candidates", "selected_indexes")) {
+            val actual = json[field].associate { candidate -> candidate["id"].asString() to
+                candidate["source_branches"].toList().map {
+                    assertTrue(it.has("query_id") && it.has("condition_path"), it.toString())
+                    it["query_id"].asString() to it["condition_path"].asString()
+                } }
+            assertEquals(if (field == "candidates") expected else expected.filterKeys { it in evaluation.candidateIds }, actual, field)
+        }
+        val html = HtmlReportRenderer().render(report)
+        val escapedId = "q&lt;&amp;&quot;&#39;&gt;"
+        assertFalse(html.contains(specialId))
+        for ((candidateId, origins) in expected) {
+            val row = Regex("<tr>.*?</tr>", RegexOption.DOT_MATCHES_ALL).findAll(html)
+                .map { it.value }.single { it.contains("$candidateId /") }
+            val branchCell = Regex("<td>.*?</td>", RegexOption.DOT_MATCHES_ALL).findAll(row).last().value
+            assertEquals("<td>" + (origins.singleOrNull()?.let { "$escapedId: ${it.second}" }
+                ?: "Нет OR-происхождения") + "</td>", branchCell)
+        }
+        val card = Regex("<article class=\"index-card\" data-selected-index=\"${id("a")}\">.*?</article>",
+            RegexOption.DOT_MATCHES_ALL).find(html)?.value
+        assertNotNull(card)
+        assertTrue(card!!.contains("<dt>Ветви условий</dt><dd>$escapedId: condition/L</dd>"))
+        assertFalse(card.contains("condition/R"))
+    }
+
+    @Test
     fun `AND OR precedence and parenthesized grouping survive as resolved trees`() {
         val a = ResolvedCondition.Predicate(0)
         val b = ResolvedCondition.Predicate(1)
@@ -173,6 +225,43 @@ class LogicalConditionsTest {
     }
 
     @Test
+    fun `three physical tables retain left associated WHERE and JOIN trees and exact scoped origins`() {
+        val second = TableRef("public", "second")
+        val third = TableRef("public", "third")
+        val snapshot = catalog.copy(tables = listOf(catalog.tables.single(),
+            catalog.tables.single().copy(ref = second), catalog.tables.single().copy(ref = third)))
+        val sql = "SELECT * FROM records r INNER JOIN second s ON r.a=s.a OR r.b=s.b " +
+            "INNER JOIN third t ON s.a=t.a OR s.b=t.b WHERE r.c=1 OR s.c=2"
+        val context = RunContext()
+        val resolved = analyzer.resolve(analyzer.parse(input(sql), context), snapshot, context)
+        fun leaf(index: Int) = ResolvedCondition.Predicate(index)
+        assertEquals(ResolvedCondition.And(ResolvedCondition.And(ResolvedCondition.Or(leaf(0), leaf(1)),
+            ResolvedCondition.Or(leaf(2), leaf(3))), ResolvedCondition.Or(leaf(4), leaf(5))),
+            resolved.queries.single().condition)
+        assertEquals(listOf(PredicateSource.WHERE, PredicateSource.WHERE) + List(4) { PredicateSource.JOIN },
+            resolved.queries.single().predicates.map { it.source })
+        val scopes = mutableListOf<CandidateScope>()
+        BtreeCandidateEnumerator().forEachScope(resolved, context, scopes::add)
+        val paths = listOf("condition/L/L/L", "condition/L/L/R", "condition/L/R/L",
+            "condition/L/R/R", "condition/R/L", "condition/R/R")
+        val expected = mapOf(
+            table to mapOf(listOf("a") to listOf(2), listOf("b") to listOf(3), listOf("c") to listOf(0),
+                listOf("a", "c") to listOf(0, 2), listOf("c", "a") to listOf(0, 2),
+                listOf("b", "c") to listOf(0, 3), listOf("c", "b") to listOf(0, 3)),
+            second to mapOf(listOf("a") to listOf(2, 4), listOf("b") to listOf(3, 5), listOf("c") to listOf(1),
+                listOf("a", "b") to listOf(2, 3, 4, 5), listOf("b", "a") to listOf(2, 3, 4, 5),
+                listOf("a", "c") to listOf(1, 2, 4), listOf("c", "a") to listOf(1, 2, 4),
+                listOf("b", "c") to listOf(1, 3, 5), listOf("c", "b") to listOf(1, 3, 5)),
+            third to mapOf(listOf("a") to listOf(4), listOf("b") to listOf(5)))
+        assertEquals(expected.mapValues { (_, variants) -> variants.mapValues { (_, indices) ->
+            indices.map { CandidateSourceBranch("q", paths[it]) }.toSet() } }, scopes.associate { scope ->
+            scope.table to scope.variants.associate { variant -> variant.definition.keys.map { it.column.name } to variant.sourceBranches } })
+        assertEquals(1, scopes.flatMap { it.warnings }.count { it.code == WarningCode.OR_BRANCH_AWARE_GENERATION })
+        val batch = ProfileAwareCandidateGenerator().generate(resolved, snapshot, RunContext())
+        assertEquals(1, batch.diagnostics.warnings.count { it.code == WarningCode.OR_BRANCH_AWARE_GENERATION })
+    }
+
+    @Test
     fun `wide OR keeps all source conditions and caps generation before pairs`() {
         val condition = (1..100).joinToString(" OR ") { "x$it=$it" }
         val workload = resolve(condition)
@@ -206,6 +295,23 @@ class LogicalConditionsTest {
             val error = assertThrows(AnalysisException::class.java) { resolve(condition) }.error
             assertEquals(ErrorCode.INPUT_LIMIT_EXCEEDED, error.code)
             assertEquals("q", error.queryId)
+        }
+    }
+
+    @Test
+    fun `real parser accepts exact condition depth and node boundaries and rejects one beyond`() {
+        val depthBoundary = "(".repeat(511) + "a=1" + ")".repeat(511)
+        // 256 leaves + 255 AND nodes + 512 leaf wrappers + one outer wrapper = 1024.
+        val nodesBoundary = "(" + (1..256).joinToString(" AND ") { "((a=$it))" } + ")"
+        for ((name, condition) in listOf("depth" to depthBoundary, "nodes" to nodesBoundary)) {
+            val sql = "SELECT * FROM records WHERE $condition"
+            val parsed = analyzer.parse(input(sql), RunContext())
+            assertEquals(sql, parsed.input.queries.single().sql, name)
+            val error = assertThrows(AnalysisException::class.java) {
+                analyzer.parse(input("SELECT * FROM records WHERE ($condition)"), RunContext())
+            }.error
+            assertEquals(ErrorCode.INPUT_LIMIT_EXCEEDED, error.code, name)
+            assertEquals("q", error.queryId, name)
         }
     }
 
