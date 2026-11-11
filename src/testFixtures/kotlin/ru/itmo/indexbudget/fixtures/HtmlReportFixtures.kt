@@ -129,6 +129,23 @@ object HtmlReportFixtures {
             priceOfRobustness = baselineConfig.metrics.meanCost - chosen.metrics.meanCost).rebuild()
     }
 
+    /** Different label lengths must never change the physical chart scale. */
+    fun fractional(): AnalysisReport {
+        val source = completed(objective = Objective.MEAN)
+        val input = requireNotNull(source.input)
+        val baseline = requireNotNull(source.result.baseline)
+        val evaluation = ContractFixtures.meanEvaluation().copy(
+            costByQueryId = mapOf("records_by_group" to 100.0 / 3, "records_by_value" to 400.0 / 3),
+            plansByQueryId = mapOf("records_by_group" to ExplainPlan("""[{"Plan":{"Total Cost":33.333333333333336}}]"""),
+                "records_by_value" to ExplainPlan("""[{"Plan":{"Total Cost":133.33333333333334}}]""")),
+        )
+        val calculator = MetricsCalculatorImpl()
+        val configuration = EvaluatedConfiguration(evaluation, calculator.calculate(input, baseline, evaluation,
+            calculator.assessBudget(source.candidates.candidates.filter { it.id in evaluation.candidateIds }, input).usage))
+        val result = source.result as SearchResult.Completed
+        return source.copy(result = result.copy(bestMean = configuration)).rebuild()
+    }
+
     fun imported(): AnalysisReport {
         val input = WorkloadReader().read(Path.of("examples/workload-v2-provenance.json"))
         return completed().copy(input = input).rebuild()
@@ -141,6 +158,7 @@ object HtmlReportFixtures {
 
     fun all(): Map<String, AnalysisReport> = linkedMapOf(
         "different" to completed(),
+        "fractional" to fractional(),
         "include" to covering(),
         "imported" to imported(),
         "same" to completed(sameIncumbents = true),

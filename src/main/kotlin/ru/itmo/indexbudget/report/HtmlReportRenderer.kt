@@ -7,16 +7,22 @@ import java.math.RoundingMode
 import java.text.DecimalFormat
 import java.text.DecimalFormatSymbols
 import java.util.Locale
+import java.util.Base64
+import java.security.MessageDigest
 
-/** A read-only view of the shared report. No metric calculation, database calls or JavaScript. */
+/** A read-only view of the shared report. No metric calculation or database calls; the static script only controls the view. */
 @Component
 class HtmlReportRenderer : ReportRenderer {
     private val stylesheet = checkNotNull(javaClass.getResource("/report/report.css")).readText()
 
+    private val script = checkNotNull(javaClass.getResource("/report/report.js")).readText()
+    private val scriptHash = Base64.getEncoder().encodeToString(
+        MessageDigest.getInstance("SHA-256").digest(script.toByteArray(Charsets.UTF_8)))
+
     override fun render(report: AnalysisReport): String = buildString {
         append("""<!doctype html><html lang="ru"><head><meta charset="utf-8">
             <meta name="viewport" content="width=device-width, initial-scale=1">
-            <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
+            <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-$scriptHash'; base-uri 'none'; form-action 'none'">
             <title>IndexBudget · Отчёт анализа</title><style>""")
         append(stylesheet)
         append("""</style></head><body><a class="skip" href="#main">К содержанию</a>
@@ -41,7 +47,9 @@ class HtmlReportRenderer : ReportRenderer {
         provenance(report)
         append("""<footer>IndexBudget · Спецификация """)
         append(h(report.specVersion))
-        append(" · Оценки помогают выбрать набор для отдельной физической проверки.</footer></main></div></body></html>")
+        append(" · Оценки помогают выбрать набор для отдельной физической проверки.</footer></main></div><script>")
+        append(script)
+        append("</script></body></html>")
     }
 
     private fun StringBuilder.manualComparison(report: AnalysisReport) {
@@ -99,25 +107,46 @@ class HtmlReportRenderer : ReportRenderer {
         if (report.environment.applicationVersion == "fixture") {
             append("<p class=\"notice demo\"><strong>Демонстрационные данные.</strong> Синтетическая фикстура для проверки отчёта; это не результат анализа PostgreSQL.</p>")
         }
-        append("<div class=\"run-strip\"><span>Режим анализа <strong>")
-        text(modeName(report.analysisMode))
-        append("</strong></span><span>Критерий поиска <strong>")
-        text(result.selectedObjective.name.lowercase(Locale.ROOT))
-        append("</strong></span><span>Длительность <strong>").append(h(number(report.durationMillis))).append(" мс</strong></span>")
-        append("<span>Причина остановки <strong>")
-        text(result.diagnostics.stopReasons.takeIf { it.isNotEmpty() }?.joinToString { stopLabel(it) } ?: "Нет данных")
-        append("</strong></span></div><div class=\"metric-grid\">")
-        metric("Худшая нормированная стоимость", setRatio(metrics, summary.worstRatio), "R · меньше — лучше", "accent")
-        metric("Средняя нормированная стоимость", setRatio(metrics, summary.meanEffect.ratio), "M · меньше — лучше")
-        metric("Выбранные индексы", number(summary.budgetUsage?.indexCount), "Лимит: ${number(summary.budgetLimits?.maxIndexes)}")
-        metric("Снижение взвешенной стоимости планов", effectPercent(summary.meanEffect), "Положительный процент — снижение cost")
-        metric("SQL с ростом стоимости", number(summary.regressedQueryCount), "R не гарантирует улучшение каждого SQL")
-        metric("Полностью оценённые наборы", number(result.diagnostics.statistics.completedEvaluations), if (report.manualComparison == null) "Один общий пул для robust и mean" else "Включая отдельную ручную оценку")
-        append("</div>")
-        if (selected != null && selected.evaluation.candidateIds.isEmpty()) {
-            append("<p class=\"notice\">Выбран пустой набор: новые индексы не предлагаются. Baseline включает уже существующие реальные индексы.</p>")
+        append("<div class=\"recommendation\"><h2>Рекомендация</h2>")
+        when {
+            selected == null -> append("<p>Пригодный результат не сохранён. Индексы не предлагаются.</p>")
+            selected.evaluation.candidateIds.isEmpty() -> append("<p>Выбран пустой набор: новые индексы не предлагаются. Baseline включает уже существующие реальные индексы.</p>")
+            else -> {
+                append("<ul class=\"recommended-indexes\">")
+                selected.evaluation.candidateIds.forEach { id ->
+                    val candidate = report.candidates.candidates.firstOrNull { it.id == id }
+                    append("<li><a href=\"#indexes\"><code>")
+                    text(candidate?.let(::shortDefinition) ?: id)
+                    append("</code></a></li>")
+                }
+                append("</ul><p class=\"muted\">Эффект ниже относится ко всему выбранному набору.</p>")
+            }
         }
-        append("<p class=\"muted\">Нормированная стоимость: 1 — уровень baseline, ниже 1 — уменьшение planner cost, выше 1 — регрессия. «Нет данных» и «Неприменимо» не означают ноль. M — отношение ожидаемых стоимостей, а не среднее профильных отношений. R — худшее отношение среди профилей, а не гарантия для каждого SQL.</p></section>")
+        append("</div><div class=\"metric-grid\">")
+        metric("Снижение взвешенной стоимости планов", effectPercent(summary.meanEffect), "Средний эффект · оценка планировщика", "accent")
+        metric("Худший профиль · после", normalized(summary.worstRatio, metrics?.baselineMeanCost), "До = 100 · меньше — лучше; не гарантия для каждого SQL")
+        metric("Место с запасом", mib(summary.budgetUsage?.budgetedBytes), "Бюджет: ${mib(summary.budgetLimits?.storageBudgetBytes)}")
+        metric("Выбранные индексы", number(summary.budgetUsage?.indexCount), "Лимит: ${number(summary.budgetLimits?.maxIndexes)}")
+        append("</div>")
+        when (val count = summary.regressedQueryCount) {
+            null -> append("<p class=\"notice\">Регрессии SQL: нет данных.</p>")
+            0 -> append("<p class=\"muted\">SQL с ростом оценки планировщика: 0. Фактическое время запросов не измерялось.</p>")
+            else -> append("<p class=\"notice error\"><strong>Есть регрессии SQL: ").append(h(count))
+                .append(".</strong> Улучшение набора не гарантирует улучшение каждого запроса. <a href=\"#queries\">Посмотреть ухудшения и планы →</a></p>")
+        }
+        if (result.status != RunStatus.COMPLETED) {
+            append("<p class=\"notice warning\">Причина остановки: ")
+            text(summary.stopReasons.joinToString { stopLabel(it) }.ifEmpty { "Нет данных" })
+            summary.errors.forEach { append("<br>").append(h(it.code.name)).append(": ").append(h(it.message)) }
+            append("</p>")
+        }
+        append("<details><summary>Как читать метрики</summary><dl class=\"values\">")
+        entry("Худшая нормированная стоимость", setRatio(metrics, summary.worstRatio))
+        entry("Средняя нормированная стоимость", setRatio(metrics, summary.meanEffect.ratio))
+        append("</dl><p>M = C_mean / B_mean — отношение ожидаемых стоимостей, а не среднее профильных отношений. ")
+        append("R = max(C_s / B_s) — худшее отношение среди профилей с положительным baseline. ")
+        append("На графиках baseline = 100; ниже 100 — снижение оценки планировщика, выше — рост. ")
+        append("«Нет данных» и «Неприменимо» не означают ноль. Cost не является временем или SLA. Цена устойчивости = C_mean(best_robust) − C_mean(best_mean).</p></details></section>")
     }
 
     private fun StringBuilder.comparison(report: AnalysisReport) {
@@ -136,15 +165,22 @@ class HtmlReportRenderer : ReportRenderer {
             })
             append("</p>")
         }
+        val chartScale = listOfNotNull(robust?.metrics?.meanRatio, robust?.metrics?.worstRatio,
+            mean?.metrics?.meanRatio, mean?.metrics?.worstRatio, 1.0).max()
+        append("<p class=\"muted\">До = 100. Средняя стоимость учитывает веса профилей; худший профиль — наименее выгодное отношение к baseline. Общая шкала для обоих наборов.</p>")
         append("<div class=\"comparison-grid\">")
-        configuration("best_robust", "Robust", "Сдерживает худшее отношение к baseline", robust, report.result.selectedObjective == Objective.ROBUST)
-        configuration("best_mean", "Mean", "Минимизирует ожидаемую стоимость", mean, report.result.selectedObjective == Objective.MEAN)
-        append("</div><div class=\"price\"><div><strong>Цена устойчивости</strong><p>C_mean(best_robust) − C_mean(best_mean), в единицах взвешенного planner cost</p></div><strong class=\"price-value\">")
+        if (report.summary.incumbentsCoincide == true) {
+            configuration("best_robust best_mean", "Robust = Mean", "Один набор для обоих критериев", robust, true, chartScale)
+        } else {
+            configuration("best_robust", "Robust", "Сдерживает худшее отношение к baseline", robust, report.result.selectedObjective == Objective.ROBUST, chartScale)
+            configuration("best_mean", "Mean", "Минимизирует ожидаемую стоимость", mean, report.result.selectedObjective == Objective.MEAN, chartScale)
+        }
+        append("</div><div class=\"price\"><div><strong>Цена устойчивости</strong><p>Дополнительная средняя оценка планировщика при выборе robust вместо mean</p></div><strong class=\"price-value\">")
         text(number(report.priceOfRobustness))
         append("</strong></div><p class=\"muted\">Это сравнение найденных решений, а не два независимых поиска. Гарантии глобального оптимума нет.</p></section>")
     }
 
-    private fun StringBuilder.configuration(key: String, title: String, description: String, value: EvaluatedConfiguration?, selected: Boolean) {
+    private fun StringBuilder.configuration(key: String, title: String, description: String, value: EvaluatedConfiguration?, selected: Boolean, chartScale: Double) {
         append("<article class=\"configuration")
         if (selected) append(" chosen")
         append("\" data-configuration=\"").append(key).append("\"><div class=\"title-row\"><h3>").append(title).append("</h3>")
@@ -154,7 +190,9 @@ class HtmlReportRenderer : ReportRenderer {
             append("<p>Нет сохранённого решения.</p></article>")
             return
         }
-        append("<dl class=\"values\">")
+        ratioChart(listOf("Средняя стоимость" to value.metrics.meanRatio, "Худший профиль" to value.metrics.worstRatio),
+            value.metrics.baselineMeanCost, chartScale)
+        append("<details><summary>Набор, расходы и точные метрики</summary><dl class=\"values\">")
         entry("Худшее отношение R", setRatio(value.metrics, value.metrics.worstRatio))
         entry("Среднее отношение M", setRatio(value.metrics, value.metrics.meanRatio))
         entry("Ожидаемая стоимость C_mean", number(value.metrics.meanCost))
@@ -169,7 +207,7 @@ class HtmlReportRenderer : ReportRenderer {
                 row(profile.profileId, number(profile.cost), ratio(profile.ratio, profile.baselineCost), percent(profile.gainPercent, profile.baselineCost))
             }
         }
-        append("</article>")
+        append("</details></article>")
     }
 
     private fun StringBuilder.profiles(report: AnalysisReport) {
@@ -177,6 +215,15 @@ class HtmlReportRenderer : ReportRenderer {
         val metrics = report.result.selected?.metrics
         val profileIds = (report.input?.profiles.orEmpty().map { it.id } + metrics?.profiles.orEmpty().map { it.profileId }).distinct()
         append("<p>Нормированный вес задаёт вклад в среднюю стоимость. Каждый профиль участвует в худшем критерии независимо от веса.</p>")
+        append("<p class=\"muted\">До = 100 · после — оценка планировщика для выбранного набора. Общая шкала для профилей.</p>")
+        val chartScale = maxOf(1.0, report.profileComparisons.mapNotNull { it.selected.ratio }.maxOrNull() ?: 1.0)
+        append("<div class=\"profile-charts\">")
+        report.profileComparisons.forEach { series ->
+            append("<article class=\"profile-chart\"><h3>").append(h(series.id)).append("</h3>")
+            ratioChart(listOf("После" to series.selected.ratio), series.selected.baselineCost, chartScale)
+            append("<p class=\"muted\">Снижение стоимости: ").append(h(effectPercent(series.selected))).append("</p></article>")
+        }
+        append("</div><details><summary>Точные стоимости, веса и формулы</summary>")
         table(listOf("Профиль", "Вес", "Baseline cost", "Final cost", "Отношение", "Выигрыш, cost", "Выигрыш, %")) {
             profileIds.forEach { id ->
                 val profile = metrics?.profiles?.firstOrNull { it.profileId == id }
@@ -184,6 +231,7 @@ class HtmlReportRenderer : ReportRenderer {
                     ratio(profile?.ratio, profile?.baselineCost), number(profile?.gain), percent(profile?.gainPercent, profile?.baselineCost))
             }
         }
+        append("<p class=\"muted\">C_s = сумма частота SQL × cost SQL; снижение = baseline − после.</p></details>")
         append("<details><summary>Сравнение всех сохранённых наборов по профилям</summary>")
         table(listOf("Профиль", "Baseline cost", "Selected cost", "Best robust cost", "Best mean cost")) {
             report.profileComparisons.forEach { series ->
@@ -195,6 +243,49 @@ class HtmlReportRenderer : ReportRenderer {
         if (profileIds.isEmpty()) append("<p class=\"empty\">Профили отсутствуют в сохранённой модели.</p>")
         append("<p class=\"muted\">Cost — единицы планировщика с учётом частот. Это не миллисекунды, не измеренное ускорение и не SLA. При нулевом baseline отношение и процент неприменимы.</p></section>")
     }
+
+    /** Chart coordinates only: domain ratios and budget totals are never recomputed here. */
+    private fun StringBuilder.ratioChart(values: List<Pair<String, Double?>>, baseline: Double?, scale: Double) {
+        append("<div class=\"ratio-chart\">")
+        chartBar("До", if (baseline != null && baseline > 0) 1.0 else null, scale, baseline, "baseline")
+        values.forEach { (label, value) -> chartBar(label, value, scale, baseline, if (value != null && value > 1) "regressed" else "after") }
+        append("</div>")
+    }
+
+    private fun StringBuilder.chartBar(label: String, value: Double?, scale: Double, baseline: Double?, style: String) {
+        append("<div class=\"chart-row\"><span>").append(h(label)).append("</span><div class=\"chart-track\" aria-hidden=\"true\">")
+        if (value != null) append("<span class=\"chart-fill ").append(style).append("\" style=\"width:")
+            .append(width(value, scale)).append("%\"></span>")
+        append("</div><strong>").append(h(normalized(value, baseline))).append("</strong></div>")
+    }
+
+    private fun normalized(value: Double?, baseline: Double?): String = when {
+        value != null -> number(BigDecimal.valueOf(value).movePointRight(2))
+        baseline == 0.0 -> "Неприменимо: нулевой baseline"
+        else -> "Нет данных"
+    }
+
+    private fun width(value: Number, limit: Number): String = BigDecimal(value.toString())
+        .divide(BigDecimal(limit.toString()), 8, RoundingMode.HALF_EVEN)
+        .movePointRight(2).coerceIn(BigDecimal.ZERO, BigDecimal(100)).stripTrailingZeros().toPlainString()
+
+    private fun StringBuilder.budgetBar(label: String, value: Number?, limit: Number?) {
+        append("<div class=\"budget-meter\"><span>").append(h(label)).append("</span>")
+        when {
+            value == null || limit == null -> append("<span>Нет данных · заполнение неизвестно</span>")
+            limit.toDouble() == 0.0 -> append("<span>Нулевой лимит · ").append(if (value.toDouble() == 0.0) "расход 0" else "превышен").append("</span>")
+            else -> {
+                append("<span class=\"chart-track\" aria-hidden=\"true\"><span class=\"chart-fill after\" style=\"width:")
+                    .append(width(value, limit)).append("%\"></span></span>")
+                append("<span>").append(h(number(value))).append(" / ").append(h(number(limit))).append("</span>")
+            }
+        }
+        append("</div>")
+    }
+
+    private fun shortDefinition(candidate: IndexCandidate): String =
+        "${tableName(candidate.definition.table)}(" + candidate.definition.keys.joinToString { it.column.name } + ")" +
+            candidate.definition.includedColumns.takeIf { it.isNotEmpty() }?.joinToString(", ", " INCLUDE (", ")") { it.name }.orEmpty()
 
     private fun effectPercent(effect: CostEffect): String = when {
         effect.gainPercent != null -> "${number(effect.gainPercent)} %"
@@ -250,11 +341,18 @@ class HtmlReportRenderer : ReportRenderer {
         text("${mib(usage?.budgetedBytes)} / ${mib(constraints?.storageBudgetBytes)}")
         append("</p><p>Оценка HypoPG: ")
         text(storageSize(usage?.estimatedBytes))
-        append(". Коэффициент запаса: ").append(h(number(usage?.sizeSafetyFactor))).append(".</p></div>")
+        append(". Коэффициент запаса: ").append(h(number(usage?.sizeSafetyFactor))).append(".</p>")
+        budgetBar("Оценка HypoPG", usage?.estimatedBytes, constraints?.storageBudgetBytes)
+        budgetBar("С запасом", usage?.budgetedBytes, constraints?.storageBudgetBytes)
+        append("</div>")
         append("<div class=\"budget-card\"><h3>Запись</h3><p class=\"budget-number\">").append(h(number(usage?.writeUnitsPerHour)))
         append(" <small>write units/час</small></p><p>Бюджет: ")
         text(if (constraints == null) "Нет данных" else constraints.writeBudgetUnitsPerHour?.let { "${number(it)} units/час" } ?: "Отключён")
-        append(".</p></div></div><p class=\"muted\">Место учитывается с запасом для каждого индекса. Write units — вспомогательная модель изменений строк × (число ключей + число INCLUDE-колонок), а не измеренное замедление INSERT/UPDATE/DELETE.</p>")
+        append(".</p>")
+        if (constraints != null && constraints.writeBudgetUnitsPerHour == null) {
+            append("<p class=\"budget-state\">Лимит отключён · заполнение неприменимо</p>")
+        } else budgetBar("Write proxy", usage?.writeUnitsPerHour, constraints?.writeBudgetUnitsPerHour)
+        append("</div></div><p class=\"muted\">Место учитывается с запасом для каждого индекса. Write units — вспомогательная модель изменений строк × (число ключей + число INCLUDE-колонок), а не измеренное замедление INSERT/UPDATE/DELETE.</p>")
         val selected = report.result.selected
         if (selected == null) {
             append("<p class=\"empty\">Рекомендованные индексы отсутствуют: пригодный результат не сохранён.</p>")
@@ -262,11 +360,12 @@ class HtmlReportRenderer : ReportRenderer {
             append("<p class=\"empty\">Пустой набор. Новые индексы не нужны для сохранённого решения.</p>")
         } else {
             selected.evaluation.candidateIds.forEach { id ->
-                append("<article class=\"index-card\" data-selected-index=\"").append(h(id)).append("\"><h3><code>").append(h(id)).append("</code></h3>")
+                append("<article class=\"index-card\" data-selected-index=\"").append(h(id)).append("\">")
                 val candidate = report.candidates.candidates.firstOrNull { it.id == id }
                 if (candidate == null) {
                     append("<p>Описание индекса отсутствует в модели.</p>")
                 } else {
+                    append("<h3><code>").append(h(shortDefinition(candidate))).append("</code></h3><p class=\"muted\">ID: ").append(h(id)).append("</p>")
                     append("<p class=\"muted\">").append(h(definition(candidate))).append("</p><dl class=\"values\">")
                     entry("Оценка", storageSize(candidate.estimatedBytes))
                     entry("С запасом", storageSize(candidate.budgetedBytes))
@@ -278,7 +377,7 @@ class HtmlReportRenderer : ReportRenderer {
                         .sortedWith(compareBy({ it.queryId }, { it.conditionPath }))
                         .joinToString { "${it.queryId}: ${it.conditionPath}" })
                     entry("Происхождение", candidate.generationReasons.sortedBy { it.name }.joinToString { it.name })
-                    append("</dl>")
+                    append("</dl><p class=\"muted\">Источники SQL объясняют происхождение кандидата, а не измеренную индивидуальную пользу индекса.</p>")
                     if (candidate.definition.includedColumns.isNotEmpty()) {
                         append("<p>INCLUDE позволяет рассмотреть index-only scan; обращения к таблице зависят от visibility map и не исключены.</p>")
                     }
@@ -307,14 +406,24 @@ class HtmlReportRenderer : ReportRenderer {
         val effects = report.queryEffects.associateBy { it.id }
         val profiles = report.input?.profiles.orEmpty()
         val queryIds = (report.input?.queries.orEmpty().map { it.id } + baseline?.costByQueryId.orEmpty().keys + selected?.costByQueryId.orEmpty().keys).distinct()
+        append("<div class=\"query-controls\" hidden><label for=\"query-sort\">Порядок запросов</label> ")
+        append("<select id=\"query-sort\"><option value=\"regression\">Сначала ухудшения</option><option value=\"gain\">Сначала наибольшее снижение, %</option><option value=\"cost\">Сначала высокая стоимость после</option><option value=\"original\">Исходный порядок</option></select></div>")
+        append("<div id=\"query-comparison\">")
         table(listOf("SQL") + profiles.map { "${it.id}, вызовов/час" } + listOf("Baseline cost", "Final cost", "Снижение cost, %", "Изменение")) {
-            queryIds.forEachIndexed { index, id ->
+            queryIds.withIndex().sortedWith(compareBy<IndexedValue<String>> {
+                val before = baseline?.costByQueryId?.get(it.value)
+                val after = selected?.costByQueryId?.get(it.value)
+                if (before != null && after != null && after > before) 0 else 1
+            }.thenBy { it.index }).forEach { (index, id) ->
                 val effect = effects[id]?.selected
                 val before = baseline?.costByQueryId?.get(id)
                 val after = selected?.costByQueryId?.get(id)
                 val regression = before != null && after != null && after > before
-                append(if (regression) "<tr class=\"regression\">" else "<tr>")
-                append("<th scope=\"row\"><a href=\"#query-").append(index).append("\">").append(h(id)).append("</a></th>")
+                append("<tr data-order=\"").append(index).append("\" data-regression=\"").append(if (regression) 1 else 0)
+                    .append("\" data-gain=\"").append(h(effect?.gainPercent ?: ""))
+                    .append("\" data-cost=\"").append(h(after ?: "")).append("\"")
+                if (regression) append(" class=\"regression\"")
+                append("><th scope=\"row\"><a href=\"#query-").append(index).append("\">").append(h(id)).append("</a></th>")
                 profiles.forEach { cell(number(it.callsPerHour[id])) }
                 cell(number(before))
                 cell(number(after))
@@ -328,6 +437,7 @@ class HtmlReportRenderer : ReportRenderer {
                 append("</tr>")
             }
         }
+        append("</div>")
         costGuards(report)
         queryIds.forEachIndexed { index, id ->
             append("<details id=\"query-").append(index).append("\"><summary>SQL и сохранённые планы · ").append(h(id)).append("</summary><h4>Исходный SQL</h4>")
@@ -499,6 +609,7 @@ class HtmlReportRenderer : ReportRenderer {
         entry("SHA-256 входа", report.inputHash ?: "Нет данных")
         entry("Schema / spec", "${report.schemaVersion} / ${report.specVersion}")
         entry("Статус", report.result.status.name.lowercase(Locale.ROOT))
+        entry("Длительность анализа, мс", number(report.durationMillis))
         entry("Режим анализа", modeName(report.analysisMode))
         entry("Рейтинг shortlist", rankingName(report.candidateRanking))
         entry("Причины остановки", report.result.diagnostics.stopReasons.joinToString { it.name }.ifEmpty { "Нет данных" })

@@ -57,9 +57,9 @@ class ReportSummaryTest {
             assertEquals(series.bestRobust.cost, series.baseline.cost)
         }
         val html = HtmlReportRenderer().render(report)
-        assertTrue(html.contains("SQL с ростом стоимости"))
-        assertTrue(html.contains("M — отношение ожидаемых стоимостей"))
-        assertTrue(html.contains("R — худшее отношение среди профилей"))
+        assertTrue(html.contains("Есть регрессии SQL: 1"))
+        assertTrue(html.contains("M = C_mean / B_mean — отношение ожидаемых стоимостей"))
+        assertTrue(html.contains("R = max(C_s / B_s) — худшее отношение среди профилей"))
         assertTrue(html.contains("-100 %"))
     }
 
@@ -152,7 +152,7 @@ class ReportSummaryTest {
         assertEquals(12000.0, json["windows"][0]["coverage"]["selected_exec_time_millis"].doubleValue())
         assertEquals("user_supplied_literals", json["query_examples"][0]["source"].stringValue())
         val html = HtmlReportRenderer().render(report)
-        assertFalse(html.contains("<script>"))
+        assertFalse(html.contains("<script>alert("))
         assertTrue(html.contains("&lt;script&gt;"))
         assertTrue(html.contains("Историческое время выполнения"))
         assertTrue(html.contains("не являются прогнозом времени с новыми индексами"))
