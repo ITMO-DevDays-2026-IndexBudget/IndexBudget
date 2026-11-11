@@ -16,6 +16,7 @@ import ru.itmo.indexbudget.candidates.quoteIdentifier
 import ru.itmo.indexbudget.domain.AnalysisError
 import ru.itmo.indexbudget.domain.AnalysisException
 import ru.itmo.indexbudget.domain.CatalogSnapshot
+import ru.itmo.indexbudget.domain.DatabaseVersions
 import ru.itmo.indexbudget.domain.ErrorCode
 import ru.itmo.indexbudget.domain.EvaluationResult
 import ru.itmo.indexbudget.domain.ExplainPlan
@@ -33,6 +34,37 @@ class JdbcAnalysisSession(
     private val connection: Connection,
     private val ddlRenderer: DdlRenderer = PostgresDdlRenderer(),
 ) : AnalysisSession {
+    private var capturedVersions = DatabaseVersions()
+    override val databaseVersions: DatabaseVersions get() = capturedVersions
+
+    override fun readDatabaseVersions(context: RunContext): DatabaseVersions {
+        enter(context)
+        return try {
+            query("SELECT pg_catalog.current_setting('server_version'), e.extversion " +
+                "FROM pg_catalog.pg_extension e WHERE e.extname OPERATOR(pg_catalog.=) 'hypopg'",
+                context, ErrorCode.DB_CONNECTION_ERROR) { rows ->
+                if (!rows.next()) fail(ErrorCode.DB_CONNECTION_ERROR, "HypoPG extension is not installed")
+                DatabaseVersions(rows.getString(1), rows.getString(2)).also {
+                    capturedVersions = it
+                    context.recordDatabaseVersions(it)
+                }
+            }
+        } catch (error: AnalysisException) {
+            throw mapExistingError(error, context)
+        }
+    }
+
+    override val sourceFingerprint: String?
+        get() = try {
+            // pgJDBC metadata reads these connection facts locally, without issuing SQL.
+            val metadata = connection.metaData
+            val source = org.postgresql.ds.PGSimpleDataSource().apply { setURL(metadata.url) }
+            val identity = mapper.writeValueAsString(listOf(source.serverNames.toList(), source.portNumbers.toList(),
+                source.databaseName, metadata.userName))
+            java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                .digest(identity.toByteArray(Charsets.UTF_8)))
+        } catch (_: Exception) { null }
+
     private val closed = AtomicBoolean()
     private val operationLock = Any()
     private var activeOperation: Operation? = null

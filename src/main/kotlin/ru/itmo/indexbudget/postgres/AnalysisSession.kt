@@ -17,6 +17,12 @@ interface AnalysisSession : ConfigurationEvaluator, AutoCloseable {
     /** Already captured versions, with no SQL/getConnection call; unknown values remain null. */
     val databaseVersions: DatabaseVersions get() = DatabaseVersions()
 
+    /** Credential-free endpoint/database/user identity, hashed by the adapter; null if unavailable. */
+    val sourceFingerprint: String? get() = null
+
+    /** Optional bounded metadata refresh on this session for cross-run condition checks. */
+    fun readDatabaseVersions(context: RunContext): DatabaseVersions = databaseVersions
+
     /** Unqualified names are resolved against this connection's PostgreSQL search path. */
     fun readCatalog(tables: Set<TableName>, context: RunContext): CatalogSnapshot
 

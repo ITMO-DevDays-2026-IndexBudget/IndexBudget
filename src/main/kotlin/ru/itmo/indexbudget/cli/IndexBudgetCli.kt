@@ -26,6 +26,7 @@ class IndexBudgetCli(
     private val outputDirectoryValidator: OutputDirectoryValidator = OutputDirectoryValidator(),
     private val analysisRunner: AnalysisRunner = UnavailableAnalysisRunner(),
     private val statisticsCommand: StatisticsCommand = StatisticsCommand(),
+    private val budgetSeriesCommand: BudgetSeriesCommand = BudgetSeriesCommand(workloadReader),
 ) {
     private val diagnosticMapper = JsonMapper.builder().build()
 
@@ -36,6 +37,7 @@ class IndexBudgetCli(
         context: RunContext = RunContext(),
     ): Int {
         if (args.firstOrNull() == "stats") return statisticsCommand.execute(args, out, err)
+        if (args.firstOrNull() == "analyze-series") return budgetSeriesCommand.execute(args, out, err, context)
         context.observeProgress { progress ->
             val counters = progress.statistics
             err.println("stage=${progress.phase.name.lowercase()} explain_attempts=${counters.explainAttempts} " +
@@ -51,7 +53,7 @@ class IndexBudgetCli(
             return 0
         }
         if (args.first() != "analyze") {
-            return fail(err, ErrorCode.INVALID_INPUT, "Expected analyze, --help or --version.")
+            return fail(err, ErrorCode.INVALID_INPUT, "Expected analyze, analyze-series, stats, --help or --version.")
         }
         val options = linkedMapOf<String, String>()
         var offset = 1
@@ -190,6 +192,7 @@ class IndexBudgetCli(
               indexbudget --help
               indexbudget --version
               indexbudget analyze --workload <path> --output-dir <path> [--analysis-mode fast|normal|deep] [--candidate-ranking frequency|baseline_cost]
+              indexbudget analyze-series --help
               indexbudget stats --help
 
             Validates JSON v2, shared queries, frequency profiles and budgets.

@@ -25,7 +25,69 @@ class AnalysisPipeline(
     private val reportExporter: ReportExporter,
     private val resolvedValidator: ResolvedWorkloadValidator = ResolvedWorkloadValidator(),
     private val shutdownCancellation: ShutdownCancellation = JvmShutdownCancellation(),
-) : AnalysisRunner {
+) : AnalysisRunner, SeriesAnalysisRunner {
+    override fun prepareSeriesPool(input: WorkloadInput, context: RunContext): SeriesPreparation {
+        var session: AnalysisSession? = null
+        val active = AtomicReference<AnalysisSession?>()
+        val registration = shutdownCancellation.register {
+            context.cancel()
+            try { active.get()?.cancel() } catch (_: Exception) { }
+        }
+        var primary: Throwable? = null
+        try {
+            context.selectAnalysisMode(input.analysisMode)
+            context.enterPhase(AnalysisPhase.INTROSPECTION)
+            val parsed = checked(context) { sqlAnalyzer.parse(input, context) }
+            session = sessionFactory.open(context)
+            active.set(session)
+            context.recordDatabaseVersions(session.databaseVersions)
+            val catalog = checked(context) { session.readCatalog(parsed.referencedTables, context) }
+            context.recordDatabaseVersions(checked(context) { session.readDatabaseVersions(context) })
+            val resolved = checked(context) { sqlAnalyzer.resolve(parsed, catalog, context) }
+            require(resolved.input == input && resolved.queries.map { it.id to it.sql } == input.queries.map { it.id to it.sql })
+            resolvedValidator.validate(resolved, context)
+            context.completePhase()
+            context.startSearch()
+            context.enterPhase(AnalysisPhase.BASELINE)
+            val baseline = session.evaluate(emptyList(), resolved, context)
+            requireCoverage(baseline, input.queries.map { it.id }.toSet())
+            require(baseline.candidateIds.isEmpty())
+            val assessment = metrics.assessEvaluation(input, baseline, baseline, metrics.assessBudget(emptyList(), input).usage)
+            require(assessment is EvaluationAssessment.Accepted)
+            context.checkDeadline()
+            context.completePhase()
+            context.enterPhase(AnalysisPhase.CANDIDATES)
+            val batch = if (input.constraints.storageBudgetBytes == 0L || input.constraints.maxIndexes == 0 ||
+                !assessment.searchRequired) CandidateBatch(emptyList()) else
+                candidateGenerator.generate(resolved, catalog, context, baseline)
+            val pool = CandidatePreparation(metrics).prepareFixedPool(batch, session, input, context)
+            context.checkDeadline()
+            context.completePhase()
+            val conditions = checked(context) {
+                SeriesConditionCapture.capture(catalog, baseline, session.databaseVersions, session.sourceFingerprint)
+            }
+            return SeriesPreparation(pool, conditions)
+        } catch (error: Throwable) {
+            primary = error
+            throw error
+        } finally {
+            active.set(null)
+            var cleanup: Throwable? = null
+            try {
+                if (context.isCancelled || context.remainingTime().isZero) session?.cancel()
+            } catch (_: Exception) { cleanup = AnalysisException(cleanupError()) }
+            try { session?.close() } catch (_: Exception) { cleanup = AnalysisException(cleanupError()) }
+            try { registration.close() } catch (_: Exception) { cleanup = AnalysisException(cleanupError()) }
+            cleanup?.let { if (primary != null) primary.addSuppressed(it) else throw it }
+        }
+    }
+
+    override fun runSeriesPoint(input: WorkloadInput, outputDirectory: Path, context: RunContext,
+        pool: PreparedCandidatePool): SeriesPointRun {
+        var conditions: SeriesConditions? = null
+        val result = runInternal(input, outputDirectory, context, pool) { conditions = it }
+        return SeriesPointRun(result, conditions)
+    }
     override fun run(input: WorkloadInput, outputDirectory: Path, context: RunContext): SearchResult =
         runInternal(input, outputDirectory, context, null)
 
@@ -42,6 +104,7 @@ class AnalysisPipeline(
         outputDirectory: Path,
         context: RunContext,
         fixedPool: PreparedCandidatePool?,
+        onConditions: (SeriesConditions) -> Unit = {},
     ): SearchResult {
         var manual: ManualComparison? = input.manualIndexes?.let { ManualComparison(ManualComparisonStatus.NOT_EVALUATED) }
         val manualEvaluator = ManualIndexEvaluator()
@@ -73,6 +136,7 @@ class AnalysisPipeline(
             context.recordDatabaseVersions(session.databaseVersions)
             context.checkDeadline()
             val catalog = checked(context) { session.readCatalog(parsed.referencedTables, context) }
+            if (fixedPool != null) context.recordDatabaseVersions(checked(context) { session.readDatabaseVersions(context) })
             catalogWarnings += catalog.warnings
             val resolved = checked(context) { sqlAnalyzer.resolve(parsed, catalog, context) }
             require(resolved.input == input) { "Resolution must preserve the validated input" }
@@ -92,6 +156,7 @@ class AnalysisPipeline(
             requireCoverage(evaluatedBaseline, input.queries.map { it.id }.toSet())
             require(evaluatedBaseline.candidateIds.isEmpty()) { "Baseline must be the empty index set" }
             baseline = evaluatedBaseline
+            if (fixedPool != null) onConditions(SeriesConditionCapture.capture(catalog, evaluatedBaseline, session.databaseVersions, session.sourceFingerprint))
             val budget = metrics.assessBudget(emptyList(), input)
             require(budget.admissible) { "The empty set must be admissible" }
             val baselineAssessment = metrics.assessEvaluation(input, evaluatedBaseline, evaluatedBaseline, budget.usage)

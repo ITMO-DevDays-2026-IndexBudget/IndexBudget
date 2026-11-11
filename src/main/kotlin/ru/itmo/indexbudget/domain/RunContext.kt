@@ -58,9 +58,11 @@ class RunContext(
     private val clock: NanoClock = NanoClock(System::nanoTime),
     private var onProgress: (RunProgress) -> Unit = {},
     analysisMode: AnalysisMode = AnalysisMode.NORMAL,
+    private val parent: RunContext? = null,
 ) {
     // Explicit limits support deterministic tests and offline tools; always report effective values.
     private val limitsOverride = limits
+    private var seriesCommandTimeout: Duration? = null
     var limits: RunLimits = limits ?: analysisMode.limits
         private set
     var analysisMode: AnalysisMode = analysisMode
@@ -75,7 +77,18 @@ class RunContext(
     private val completed = linkedSetOf<AnalysisPhase>()
     private val cancelled = AtomicBoolean()
 
-    val isCancelled: Boolean get() = cancelled.get()
+    val isCancelled: Boolean get() = cancelled.get() || parent?.isCancelled == true
+
+    /** Series control has its own budget; children retain independent clocks and counters. */
+    fun selectSeriesTimeout(timeout: Duration) {
+        check(phase == AnalysisPhase.VALIDATION && evaluationAttempts == 0)
+        require(!timeout.isZero && !timeout.isNegative && timeout <= Duration.ofDays(1))
+        seriesCommandTimeout = timeout
+        limits = limits.copy(commandTimeout = timeout)
+        checkDeadline()
+    }
+
+    fun child(mode: AnalysisMode): RunContext = RunContext(clock = clock, onProgress = onProgress, analysisMode = mode, parent = this)
 
     /** Select during validation, retaining time already spent since command startup. */
     fun selectAnalysisMode(mode: AnalysisMode) {
@@ -84,6 +97,7 @@ class RunContext(
         }
         analysisMode = mode
         limits = limitsOverride ?: mode.limits
+        seriesCommandTimeout?.let { limits = limits.copy(commandTimeout = it) }
         checkDeadline()
     }
 
@@ -148,9 +162,10 @@ class RunContext(
         searchStartedAt = clock.nanoTime()
     }
 
-    fun remainingCommandTime(): Duration = Duration.ofNanos(
-        (limits.commandTimeout.toNanos() - elapsedNanos(commandStartedAt)).coerceAtLeast(0),
-    )
+    fun remainingCommandTime(): Duration {
+        val own = Duration.ofNanos((limits.commandTimeout.toNanos() - elapsedNanos(commandStartedAt)).coerceAtLeast(0))
+        return parent?.let { minOf(own, it.remainingTime()) } ?: own
+    }
 
     /** REPORT uses the remaining command budget, even after the search budget expires. */
     fun remainingTime(): Duration {
