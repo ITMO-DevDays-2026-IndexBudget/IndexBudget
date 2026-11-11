@@ -30,6 +30,33 @@ JSON использует `snake_case` и регистрозависимые з�
 
 ### SQL resolution (#8/#9)
 
+Расширение #73 добавляет WHERE-формы `IN` (1–256 скалярных литералов), обычный положительный
+`BETWEEN`, `IS NULL` / `IS NOT NULL`, соединяемые AND. Общий лимит 256 для WHERE/JOIN считает
+каждый элемент IN, обе границы BETWEEN и один null-test; лимит проверяется до JDBC.
+Неподдержанные варианты (NOT IN/NOT BETWEEN, SYMMETRIC/ASYMMETRIC, подзапрос/выражение в IN,
+ISNULL/NOTNULL, null-test над выражением) дают `UNSUPPORTED_SQL` с `query_id`; превышение —
+`INPUT_LIMIT_EXCEEDED`. JOIN по-прежнему допускает только равенство колонок.
+
+`ResolvedPredicate.operator` различает `IN`, `BETWEEN`, `IS_NULL`, `IS_NOT_NULL`; `literalCount`
+содержит длину списка, 2 или 0 соответственно (для прежних сравнений остаётся `null`).
+Предикат не хранит копию SQL/значений и не расширяет IN до нескольких AND-признаков.
+Генератор использует `equalityFeature`: IN/IS NULL — equality-like, BETWEEN/IS NOT NULL — range-like.
+Это признак для ограниченной генерации, не вывод о селективности, полезности или плане.
+
+`CatalogType.arrayTypeOid` передаёт `pg_type.typarray`, а `elementTypeOid` проверяет тип элемента.
+Для многоэлементного IN SQL-адаптер повторяет выбор общего типа RHS массива, но сохраняет
+исходный тип левой колонки при разрешении видимого `=`. Если PostgreSQL не может использовать
+массив, проверяются отдельные сравнения. Для BETWEEN проверяются обе видимые сигнатуры,
+для null-tests — только сама физическая колонка. Исходные SQL, NULL, порядок границ/списка
+и приведения остаются нетронутыми; SQL проверяется настоящим EXPLAIN, не симуляцией значений.
+Существующий внешний JSON v2 не меняется; новые поля относятся к внутренним DTO.
+
+Исправления quoted-имён/модификаторов из #33/PR #62 остаются отдельной реализацией:
+новые формы используют те же `validateColumn`/проверку литералов и `resolveColumn`, а не свой
+нормализатор имён. Полный HypoPG → search → HTML/JSON/SQL сценарий новых форм включён в
+`JdbcAnalysisSessionIntegrationTest`; обычные real-catalog/EXPLAIN проверки — в
+`SqlResolutionIntegrationTest`.
+
 `JSqlParserSqlAnalyzer.resolve(parsed, catalog, context)` разрешает проверенный AST без JDBC
 и возвращает настоящий `ResolvedWorkload`. Таблицы сопоставляются по физическим именам из
 `CatalogSnapshot`; для unqualified-ссылки обязателен эффективный `searchPath` сессии.

@@ -52,6 +52,8 @@ data class CatalogType(
     val elementTypeOid: Long = 0,
     /** Immediate base type of a domain (pg_type.typbasetype); zero for other types. */
     val baseTypeOid: Long = 0,
+    /** pg_type.typarray, needed for PostgreSQL's scalar-array IN type resolution. */
+    val arrayTypeOid: Long = 0,
 )
 
 /** Only binary comparison operators visible according to PostgreSQL are included. */
