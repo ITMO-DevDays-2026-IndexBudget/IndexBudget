@@ -14,6 +14,7 @@ import net.sf.jsqlparser.expression.StringValue
 import net.sf.jsqlparser.expression.TimeValue
 import net.sf.jsqlparser.expression.TimestampValue
 import net.sf.jsqlparser.expression.operators.conditional.AndExpression
+import net.sf.jsqlparser.expression.operators.conditional.OrExpression
 import net.sf.jsqlparser.expression.operators.relational.EqualsTo
 import net.sf.jsqlparser.expression.operators.relational.GreaterThan
 import net.sf.jsqlparser.expression.operators.relational.GreaterThanEquals
@@ -36,8 +37,10 @@ import ru.itmo.indexbudget.domain.AnalysisError
 import ru.itmo.indexbudget.domain.AnalysisException
 import ru.itmo.indexbudget.domain.ErrorCode
 import ru.itmo.indexbudget.domain.RunContext
+import ru.itmo.indexbudget.domain.ConditionLimits
 
 internal class JSqlParserAstValidator(private val queryId: String, private val context: RunContext) {
+    private var conditionNodes = 0
     fun validate(select: PlainSelect): List<Table> {
         validateStructureClauses(select)
         validateRowSelectionClauses(select)
@@ -161,16 +164,35 @@ internal class JSqlParserAstValidator(private val queryId: String, private val c
         expression: Expression,
         joinCondition: Boolean,
     ): Int {
-        context.checkDeadline()
-        return when (expression) {
-            is ParenthesedExpressionList<*> -> {
-                if (expression.size != 1) {
-                    fail(ErrorCode.UNSUPPORTED_SQL, "Parenthesized conditions must contain one expression.")
-                }
-                validateCondition(expression.single(), joinCondition)
+        val pending = ArrayDeque<Pair<Expression, Int>>()
+        pending.addLast(expression to 1)
+        var complexity = 0
+        while (pending.isNotEmpty()) {
+            context.checkDeadline()
+            val (current, depth) = pending.removeLast()
+            if (++conditionNodes > ConditionLimits.MAX_NODES || depth > ConditionLimits.MAX_DEPTH) {
+                fail(ErrorCode.INPUT_LIMIT_EXCEEDED, "Condition tree exceeds 1024 nodes or depth 512.")
             }
-            is AndExpression -> validateCondition(expression.leftExpression, joinCondition) +
-                validateCondition(expression.rightExpression, joinCondition)
+            when (current) {
+                is ParenthesedExpressionList<*> -> {
+                    if (current.size != 1) {
+                        fail(ErrorCode.UNSUPPORTED_SQL, "Parenthesized conditions must contain one expression.")
+                    }
+                    pending.addLast(current.single() to depth + 1)
+                }
+                is AndExpression, is OrExpression -> {
+                    pending.addLast(current.rightExpression to depth + 1)
+                    pending.addLast(current.leftExpression to depth + 1)
+                }
+                else -> complexity += validatePredicate(current, joinCondition)
+            }
+            if (complexity > MAX_COMPARISONS) fail(ErrorCode.INPUT_LIMIT_EXCEEDED, "WHERE/JOIN complexity exceeds 256 units.")
+        }
+        return complexity
+    }
+
+    private fun validatePredicate(expression: Expression, joinCondition: Boolean): Int =
+        when (expression) {
             is InExpression -> {
                 requireScalarWhere(joinCondition, expression.leftExpression, expression)
                 if (expression.isNot || expression.isGlobal) {
@@ -207,9 +229,8 @@ internal class JSqlParserAstValidator(private val queryId: String, private val c
                 validateComparison(comparison.leftExpression, comparison.rightExpression, joinCondition)
                 1
             }
-            else -> fail(ErrorCode.UNSUPPORTED_SQL, "Only AND-connected supported comparisons are allowed.")
+            else -> fail(ErrorCode.UNSUPPORTED_SQL, "Only AND/OR-connected supported predicates are allowed.")
         }
-    }
 
     private fun requireScalarWhere(join: Boolean, left: Expression, modifiers: SupportsOldOracleJoinSyntax) {
         if (join || left !is Column) {
@@ -379,7 +400,7 @@ internal class JSqlParserAstValidator(private val queryId: String, private val c
         throw AnalysisException(AnalysisError(code, message, queryId = queryId))
 
     private companion object {
-        const val MAX_COMPARISONS = 256
+        const val MAX_COMPARISONS = ConditionLimits.MAX_COMPLEXITY
         const val MAX_TABLES = 3
         const val MAX_ORDER_BY_COLUMNS = 2
     }

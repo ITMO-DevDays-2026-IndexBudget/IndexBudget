@@ -96,7 +96,12 @@ JSON сохранённого EXPLAIN, а не строку с JSON внутри
 ## Индексы и диагностика
 
 Элемент `candidates`/`selected_indexes` содержит `id`, `definition`, `source_query_ids`,
-`generation_reasons`, `ddl`, `estimated_bytes`, `budgeted_bytes`, `write_units_per_hour`.
+`generation_reasons`, `source_branches`, `ddl`, `estimated_bytes`, `budgeted_bytes`, `write_units_per_hour`.
+`source_branches` (#74) — массив `{query_id, condition_path}` по query ID / пути: `condition/L/R/...`
+для листа разрешённого AND/OR-дерева, `order_by` для безусловной сортировки. Это объединение
+породивших вхождений, не один совместный DNF-терм. Без OR массив пуст. INCLUDE-вариант
+наследует источники своих ключей; payload обозначен отдельно в определении и причине
+`COVERING_PROJECTION`. Добавление provenance не меняет ID/DDL или рейтинг по уникальным SQL.
 `definition` содержит `table: {schema, name}`, `method`, `unique`, `keys`, `included_columns`. Ключ содержит
 `column: {table: {schema, name}, name}`, `direction`, `nulls`, `collation`, `operator_class`.
 Порядок ключей сохраняется. `source_query_ids` и `generation_reasons` отсортированы.

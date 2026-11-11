@@ -179,6 +179,9 @@ class HtmlReportRenderer : ReportRenderer {
                         ?.joinToString { it.name } ?: "Нет")
                     entry("Write units/час", number(candidate.writeUnitsPerHour))
                     entry("Источники SQL", candidate.sourceQueryIds.sorted().joinToString())
+                    if (candidate.sourceBranches.isNotEmpty()) entry("Ветви условий", candidate.sourceBranches
+                        .sortedWith(compareBy({ it.queryId }, { it.conditionPath }))
+                        .joinToString { "${it.queryId}: ${it.conditionPath}" })
                     entry("Происхождение", candidate.generationReasons.sortedBy { it.name }.joinToString { it.name })
                     append("</dl>")
                     if (candidate.definition.includedColumns.isNotEmpty()) {
@@ -298,10 +301,12 @@ class HtmlReportRenderer : ReportRenderer {
             }
         }
         append("</details><details><summary>Все сохранённые кандидаты и оценки</summary>")
-        table(listOf("ID / определение", "Оценка, байт и MiB", "С запасом, байт и MiB", "Write units/час", "Источники SQL")) {
+        table(listOf("ID / определение", "Оценка, байт и MiB", "С запасом, байт и MiB", "Write units/час", "Источники SQL", "Ветви условий")) {
             report.candidates.candidates.forEach { candidate ->
                 row("${candidate.id} / ${definition(candidate)}", storageSize(candidate.estimatedBytes), storageSize(candidate.budgetedBytes),
-                    number(candidate.writeUnitsPerHour), candidate.sourceQueryIds.sorted().joinToString())
+                    number(candidate.writeUnitsPerHour), candidate.sourceQueryIds.sorted().joinToString(),
+                    candidate.sourceBranches.sortedWith(compareBy({ it.queryId }, { it.conditionPath }))
+                        .joinToString { "${it.queryId}: ${it.conditionPath}" }.ifEmpty { "Нет OR-происхождения" })
             }
         }
         append("</details>")

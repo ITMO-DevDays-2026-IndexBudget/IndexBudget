@@ -1,6 +1,7 @@
 package ru.itmo.indexbudget.candidates
 
 import ru.itmo.indexbudget.domain.*
+import java.util.BitSet
 
 /** Bounded structural generation from spec v0.2 §5, independent of AST, JDBC and canonical IDs. */
 class BtreeCandidateEnumerator : CandidateEnumerator {
@@ -15,6 +16,7 @@ class BtreeCandidateEnumerator : CandidateEnumerator {
         }
         require(workload.queries.map { it.id }.toSet().size == workload.queries.size) { "Query IDs must be unique" }
         val queries = workload.queries.sortedBy { it.id }
+        val contextsByQuery = queries.associate { it.id to PredicateContexts(it, context) }
         val featuresByQuery = queries.associate { query ->
             context.checkDeadline()
             query.id to features(query, context)
@@ -22,11 +24,12 @@ class BtreeCandidateEnumerator : CandidateEnumerator {
         val support = columnSupport(workload.input.profiles, featuresByQuery, context)
 
         for (query in queries) {
-            for (table in query.tables.sortedWith(tableOrder)) {
+            for ((tableIndex, table) in query.tables.sortedWith(tableOrder).withIndex()) {
                 context.checkDeadline()
                 val features = featuresByQuery.getValue(query.id).filterKeys { it.table == table }
                 val shortlist = shortlistColumns(query, table, features, support)
-                val variants = variants(query, table, shortlist.retainedColumns, features, context)
+                val contexts = contextsByQuery.getValue(query.id)
+                val variants = variants(query, table, shortlist.retainedColumns, features, contexts, context)
                 val covering = coveringVariants(query, table, variants, context)
                 context.checkDeadline()
                 consume(CandidateScope(
@@ -37,7 +40,7 @@ class BtreeCandidateEnumerator : CandidateEnumerator {
                     excludedColumns = shortlist.excludedColumns,
                     variants = variants + covering.variants,
                     decisions = shortlist.decisions + covering.decisions,
-                    warnings = shortlist.warnings + covering.warnings,
+                    warnings = shortlist.warnings + covering.warnings + if (tableIndex == 0) contexts.warnings() else emptyList(),
                 ))
                 // The synchronous consumer may also spend the remaining analysis budget.
                 context.checkDeadline()
@@ -46,10 +49,12 @@ class BtreeCandidateEnumerator : CandidateEnumerator {
     }
 
     private data class Features(
-        var equality: Boolean = false,
-        var range: Boolean = false,
+        val equalities: BitSet = BitSet(),
+        val ranges: BitSet = BitSet(),
         val directions: MutableSet<SortDirection> = linkedSetOf(),
-    )
+    ) {
+        val equality: Boolean get() = !equalities.isEmpty
+    }
 
     private data class ColumnShortlist(
         val retainedColumns: List<ColumnRef>,
@@ -109,11 +114,11 @@ class BtreeCandidateEnumerator : CandidateEnumerator {
             require(column.table in query.tables) { "Feature must reference a resolved query table" }
             return result.getOrPut(column) { Features() }
         }
-        for (predicate in query.predicates) {
+        for ((index, predicate) in query.predicates.withIndex()) {
             context.checkDeadline()
             for (column in listOfNotNull(predicate.leftColumn, predicate.rightColumn)) {
                 val value = feature(column)
-                if (predicate.operator.equalityFeature) value.equality = true else value.range = true
+                if (predicate.operator.equalityFeature) value.equalities.set(index) else value.ranges.set(index)
             }
         }
         for (order in query.orderBy) {
@@ -161,20 +166,27 @@ class BtreeCandidateEnumerator : CandidateEnumerator {
         table: TableRef,
         retained: List<ColumnRef>,
         features: Map<ColumnRef, Features>,
+        contexts: PredicateContexts,
         context: RunContext,
     ): List<CandidateVariant> {
         val result = mutableListOf<CandidateVariant>()
         val columns = retained.sortedWith(columnOrder)
-        fun emit(keys: List<IndexKey>, reasons: Set<GenerationReason>) {
+        fun emit(keys: List<IndexKey>, reasons: Set<GenerationReason>, branches: Set<CandidateSourceBranch>) {
             context.checkDeadline()
-            result += CandidateVariant(IndexDefinition(table, keys), setOf(query.id), reasons)
+            result += CandidateVariant(IndexDefinition(table, keys), setOf(query.id), reasons, branches)
         }
-        for (column in columns) emit(listOf(IndexKey(column)), setOf(GenerationReason.SINGLE_COLUMN))
+        for (column in columns) {
+            val value = features.getValue(column)
+            val leaves = value.equalities.clone() as BitSet
+            leaves.or(value.ranges)
+            emit(listOf(IndexKey(column)), setOf(GenerationReason.SINGLE_COLUMN),
+                contexts.branches(leaves, value.directions.isNotEmpty()))
+        }
         for (first in columns) {
             for (second in columns) {
                 context.checkDeadline()
                 if (first == second) continue
-                val reasons = generationReasonsForPair(query, first, second, features)
+                val (reasons, branches) = generationReasonsForPair(query, first, second, features, contexts)
                 if (reasons.isEmpty()) continue
                 val firstFeatures = features.getValue(first)
                 val secondFeatures = features.getValue(second)
@@ -182,7 +194,7 @@ class BtreeCandidateEnumerator : CandidateEnumerator {
                 val secondDirections = secondFeatures.directions.ifEmpty { setOf(SortDirection.ASC) }.sortedBy { it.ordinal }
                 for (firstDirection in firstDirections) {
                     for (secondDirection in secondDirections) {
-                        emit(listOf(IndexKey(first, firstDirection), IndexKey(second, secondDirection)), reasons.toSet())
+                        emit(listOf(IndexKey(first, firstDirection), IndexKey(second, secondDirection)), reasons, branches)
                     }
                 }
             }
@@ -246,17 +258,29 @@ class BtreeCandidateEnumerator : CandidateEnumerator {
         first: ColumnRef,
         second: ColumnRef,
         features: Map<ColumnRef, Features>,
-    ): Set<GenerationReason> = buildSet {
+        contexts: PredicateContexts,
+    ): Pair<Set<GenerationReason>, Set<CandidateSourceBranch>> {
+        val reasons = linkedSetOf<GenerationReason>()
+        val leaves = BitSet()
+        var includeOrder = false
         val firstFeatures = features.getValue(first)
         val secondFeatures = features.getValue(second)
         if (query.orderBy.size == 2 && query.orderBy[0].column == first && query.orderBy[1].column == second) {
-            add(GenerationReason.ORDER_BY_PAIR)
+            reasons += GenerationReason.ORDER_BY_PAIR
+            includeOrder = true
         }
         if (firstFeatures.equality) {
-            if (secondFeatures.directions.isNotEmpty()) add(GenerationReason.EQUALITY_AND_ORDER)
-            if (secondFeatures.range) add(GenerationReason.EQUALITY_AND_RANGE)
-            if (secondFeatures.equality) add(GenerationReason.TWO_EQUALITIES)
+            if (secondFeatures.directions.isNotEmpty()) {
+                reasons += GenerationReason.EQUALITY_AND_ORDER
+                leaves.or(firstFeatures.equalities)
+                includeOrder = true
+            }
+            val rangeSources = contexts.pair(firstFeatures.equalities, secondFeatures.ranges)
+            if (!rangeSources.isEmpty) { reasons += GenerationReason.EQUALITY_AND_RANGE; leaves.or(rangeSources) }
+            val equalitySources = contexts.pair(firstFeatures.equalities, secondFeatures.equalities)
+            if (!equalitySources.isEmpty) { reasons += GenerationReason.TWO_EQUALITIES; leaves.or(equalitySources) }
         }
+        return reasons to contexts.branches(leaves, includeOrder)
     }
 
     private fun numericError(profileId: String, message: String): Nothing = throw AnalysisException(

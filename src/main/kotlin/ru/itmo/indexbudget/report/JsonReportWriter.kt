@@ -126,6 +126,9 @@ class JsonReportWriter {
             ) },
         ),
         "source_query_ids" to value.sourceQueryIds.sorted(),
+        "source_branches" to value.sourceBranches.sortedWith(compareBy({ it.queryId }, { it.conditionPath })).map {
+            linkedMapOf("query_id" to it.queryId, "condition_path" to it.conditionPath)
+        },
         "generation_reasons" to value.generationReasons.map { it.name }.sorted(),
         "ddl" to value.ddl,
         "estimated_bytes" to value.estimatedBytes,
