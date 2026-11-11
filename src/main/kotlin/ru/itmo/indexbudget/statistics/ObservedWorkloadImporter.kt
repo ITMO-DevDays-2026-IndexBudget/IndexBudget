@@ -126,7 +126,10 @@ class ObservedWorkloadImporter(private val catalog: ImportCatalog) {
         val periods = profiles.mapIndexed { i, profile ->
             val available = profile.observations.filter { it.key.toplevel && it.state != ObservationState.UNKNOWN }
             fun total(rows: List<FrequencyObservation>, value: (FrequencyObservation) -> Double?): Double {
-                val sum = rows.fold(java.math.BigDecimal.ZERO) { acc, row -> acc + java.math.BigDecimal.valueOf(requireNotNull(value(row))) }.toDouble()
+                val sum = rows.fold(java.math.BigDecimal.ZERO) { acc, row ->
+                    context.checkDeadline()
+                    acc + java.math.BigDecimal.valueOf(requireNotNull(value(row)))
+                }.toDouble()
                 if (!sum.isFinite()) ImportJson.fail("Coverage arithmetic overflow.", ErrorCode.NUMERIC_ERROR)
                 return sum
             }
@@ -136,7 +139,7 @@ class ObservedWorkloadImporter(private val catalog: ImportCatalog) {
             val selectedCalls = total(chosen) { it.callsPerHour }
             val selectedTime = total(chosen) { it.totalExecTimeMillis }
             fun calls(rows: List<FrequencyObservation>): Long = try {
-                rows.fold(0L) { sum, row -> Math.addExact(sum, requireNotNull(row.deltaCalls)) }
+                rows.fold(0L) { sum, row -> context.checkDeadline(); Math.addExact(sum, requireNotNull(row.deltaCalls)) }
             } catch (_: ArithmeticException) { ImportJson.fail("Coverage call counts exceed signed bigint.", ErrorCode.NUMERIC_ERROR) }
             mapOf("profile_id" to profile.id, "before_snapshot_id" to profile.beforeSnapshotId.toString(),
                 "after_snapshot_id" to profile.afterSnapshotId.toString(), "start" to profile.period.start.toString(),

@@ -32,12 +32,20 @@ class ObservedImportIntegrationTest {
         val (workload, manifest) = importActualSnapshots()
         val input = WorkloadReader().read(workload)
         assertEquals(1, input.queries.size)
-        val metadata = ImportJson.mapper.readTree(input.observedWorkload!!.json)
-        assertTrue(metadata["periods"][0]["calls_coverage"].doubleValue() in 0.0..1.0)
-        assertEquals(input.profiles.single().callsPerHour.values.single(),
-            metadata["periods"][0]["selected_calls_per_hour"].doubleValue())
-        assertEquals(ObservedWorkloadImporter.hash(Files.readAllBytes(manifest)), metadata["manifest_sha256"].asString())
+        val metadata = requireNotNull(input.provenance)
+        assertEquals(7L, metadata.windows.single().coverage.selectedCalls)
+        assertTrue(requireNotNull(metadata.windows.single().coverage.availableCalls) >= 7)
+        assertTrue(metadata.selectionRule.endsWith(ObservedWorkloadImporter.hash(Files.readAllBytes(manifest))))
         assertTrue(input.profiles.single().callsPerHour.values.single() > 0)
+    }
+
+    @Test
+    fun `no eligible examples publishes a failed manifest without a successful workload`() {
+        val (workload, manifest) = importActualSnapshots("DELETE FROM public.records", success = false)
+        assertFalse(Files.exists(workload))
+        val json = ImportJson.mapper.readTree(Files.readAllBytes(manifest))
+        assertEquals("failed", json["status"].asString())
+        assertTrue(json["entries"].any { it["reason"].asString() == "SQL_REJECTED" })
     }
 
     @Test
@@ -46,7 +54,8 @@ class ObservedImportIntegrationTest {
         connection().use { c -> c.createStatement().use { it.execute("CREATE EXTENSION IF NOT EXISTS hypopg") } }
         val (workload, _) = importActualSnapshots()
         val input = WorkloadReader().read(workload)
-        val pipeline = AnalysisPipeline(JSqlParserSqlAnalyzer(), JdbcAnalysisSessionFactory({ url }),
+        val analysisUrl = url + (if ('?' in url) "&" else "?") + "user=postgres"
+        val pipeline = AnalysisPipeline(JSqlParserSqlAnalyzer(), JdbcAnalysisSessionFactory({ analysisUrl }),
             ProfileAwareCandidateGenerator(), MetricsCalculatorImpl(), ObjectiveComparatorImpl(), LimitedRepairOptimizer(),
             DefaultReportBuilder(), AtomicReportExporter(HtmlReportRenderer()))
         val destination = directory.resolve("analysis")
@@ -56,16 +65,17 @@ class ObservedImportIntegrationTest {
             workload.toString(), "--output-dir", destination.toString()), PrintWriter(out, true), PrintWriter(err, true), context)
         assertEquals(0, exit, err.toString())
         val json = ImportJson.mapper.readTree(Files.readAllBytes(destination.resolve("report.json")))
-        val provenance = ImportJson.mapper.readTree(input.observedWorkload!!.json)
-        assertEquals(provenance, json["observed_workload"])
+        val provenance = requireNotNull(input.provenance)
+        assertEquals(provenance.sourceId.toString(), json["workload_provenance"]["source_id"].asString())
+        assertEquals(provenance.selectionRule, json["workload_provenance"]["selection_rule"].asString())
         assertEquals(context.runId, json["run_id"].asString())
         assertEquals(input.queries.map { it.id }.toSet(), json["queries"].toList().map { it["id"].asString() }.toSet())
         assertTrue(context.statistics().explainAttempts > 0)
-        assertTrue(Files.readString(destination.resolve("report.html")).contains("pg_stat_statements_import_provenance"))
+        assertTrue(Files.readString(destination.resolve("report.html")).contains("import-manifest.json"))
         assertTrue(Files.readString(destination.resolve("indexes.sql")).contains(context.runId))
     }
 
-    private fun importActualSnapshots(): Pair<Path, Path> {
+    private fun importActualSnapshots(exampleOverride: String? = null, success: Boolean = true): Pair<Path, Path> {
         val source = UUID.fromString("d0d60c19-eb9d-42ee-9e01-935560eb7e20")
         val schema = "import_probe_" + UUID.randomUUID().toString().replace("-", "")
         connection().use { c -> c.createStatement().use { statement ->
@@ -91,7 +101,7 @@ class ObservedImportIntegrationTest {
         Files.write(directory.resolve("after.json"), SnapshotJson().render(after))
         Files.write(directory.resolve("examples.json"), ImportJson.mapper.writeValueAsBytes(mapOf("schema_version" to 1,
             "kind" to "pg_stat_statements_examples", "examples" to listOf(mapOf("key" to ImportJson.key(key),
-                "sql" to "SELECT value FROM $schema.records WHERE value = 7", "search_path" to listOf("pg_catalog", schema))))))
+                "sql" to (exampleOverride ?: "SELECT value FROM $schema.records WHERE value = 7"), "search_path" to listOf("pg_catalog", schema))))))
         Files.write(directory.resolve("config.json"), ImportJson.mapper.writeValueAsBytes(mapOf("schema_version" to 1,
             "kind" to "pg_stat_statements_import_config", "windows" to listOf(mapOf("id" to "observed", "weight" to 1,
                 "before" to "before.json", "after" to "after.json")), "examples" to "examples.json",
@@ -102,7 +112,7 @@ class ObservedImportIntegrationTest {
         val err = StringWriter()
         val status = command.execute(arrayOf("import-workload", "--config", directory.resolve("config.json").toString(),
             "--output-dir", output.toString()), PrintWriter(StringWriter(), true), PrintWriter(err, true))
-        assertEquals(0, status, err.toString())
+        assertEquals(if (success) 0 else 2, status, err.toString())
         assertTrue(opened.isNotEmpty() && opened.all { it.isClosed })
         return output.resolve("workload.json") to output.resolve("import-manifest.json")
     }

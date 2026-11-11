@@ -32,7 +32,7 @@ python3 - <<'PY'
 from pathlib import Path
 import xml.etree.ElementTree as ET
 root = ET.parse(Path('build/test-results/test/TEST-ru.itmo.indexbudget.statistics.ObservedImportIntegrationTest.xml')).getroot()
-if int(root.attrib['tests']) != 2 or any(int(root.attrib[name]) != 0 for name in ('skipped', 'failures', 'errors')):
-    raise SystemExit('Both actual importer scenarios must execute without skips or failures.')
+if int(root.attrib['tests']) != 3 or any(int(root.attrib[name]) != 0 for name in ('skipped', 'failures', 'errors')):
+    raise SystemExit('All actual importer scenarios must execute without skips or failures.')
 print('Snapshots -> import -> analyze -> HTML/JSON/SQL executed on disposable PostgreSQL/HypoPG.')
 PY

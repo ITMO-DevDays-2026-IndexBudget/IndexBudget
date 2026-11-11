@@ -631,11 +631,13 @@ EXPLAIN, deadline без нового cleanup SQL, rollback, повтор пос
 владеет JDBC lifetime, сохраняет файлы и запускает существующие input/write validators.
 Успешный workload не содержит зависимостей от живого коллектора.
 
-`WorkloadInput.observedWorkload: ObservedWorkloadProvenance?` — валидированный opaque
-JSON provenance v1, не альтернативная модель метрик. Builder сохраняет его через input;
-writer JSON v3 переносит объект, HTML выводит экранированный текст. Ручной ввод без
+Импортёр формирует существующий `WorkloadInput.provenance: WorkloadProvenance?` (#68),
+не вводя альтернативный DTO/renderer. Ссылка на полный манифест и его SHA-256 входят
+в `selectionRule`; окна используют фактические Δcalls, не calls/hour. Ручной ввод без
 блока совместим. Точные форматы, лимиты, отбор, знаменатели и replay описаны в
 [observed-workload-import.md](observed-workload-import.md).
+
+### Сбор снимков #65
 
 `StatisticsCollector.collect(sourceId, limits, context)` владеет отдельным физическим
 соединением только на время чтения. Возвращает `StatisticsSnapshot` с областью текущей БД,

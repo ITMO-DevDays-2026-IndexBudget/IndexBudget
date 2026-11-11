@@ -70,11 +70,11 @@ class ObservedWorkloadImporterTest {
         assertEquals(2, node["schema_version"].intValue())
         assertEquals(3600.0, node["profiles"][0]["calls_per_hour"][ObservedWorkloadImporter.id(key())].doubleValue())
         assertTrue(node["queries"][0]["sql"].asString().contains("\"public\".records"))
-        val provenance = node["observed_workload"]
-        assertEquals(ObservedWorkloadImporter.hash(ImportJson.mapper.writeValueAsBytes(result.manifest)), provenance["manifest_sha256"].asString())
-        assertEquals(1.0, provenance["periods"][0]["calls_coverage"].doubleValue())
+        val provenance = node["provenance"]
+        assertTrue(provenance["selection_rule"].asString().endsWith(ObservedWorkloadImporter.hash(ImportJson.mapper.writeValueAsBytes(result.manifest))))
+        assertEquals(60L, provenance["windows"][0]["coverage"]["selected_calls"].longValue())
         val workload = read(result)
-        assertNotNull(workload.observedWorkload)
+        assertNotNull(workload.provenance)
         assertEquals(1, workload.queries.size)
         assertEquals(ObservedWorkloadImporter.id(key()), workload.queries.single().id)
         val baseline = EvaluationResult(emptyList(), workload.queries.associate { it.id to 10.0 },
@@ -84,10 +84,10 @@ class ObservedWorkloadImporterTest {
         val report = DefaultReportBuilder().build(workload, CandidateBatch(emptyList()),
             SearchResult.Completed(workload.objective, baseline, empty, empty), RunContext())
         val json = ImportJson.mapper.readTree(JsonReportWriter().render(report))
-        assertEquals(provenance, json["observed_workload"])
+        assertEquals(provenance, json["workload_provenance"])
         assertEquals(10.0, json["baseline"]["cost_by_query_id"][workload.queries.single().id].doubleValue())
-        assertTrue(HtmlReportRenderer().render(report).contains("Происхождение наблюдаемой нагрузки"))
-        assertTrue(HtmlReportRenderer().render(report).contains("representative_example"))
+        assertTrue(HtmlReportRenderer().render(report).contains("Происхождение нагрузки"))
+        assertTrue(HtmlReportRenderer().render(report).contains("import-manifest.json"))
     }
 
     @ParameterizedTest
@@ -184,7 +184,7 @@ class ObservedWorkloadImporterTest {
         assertTrue(workload.profiles.all { it.callsPerHour.size == 20 })
     }
 
-    @Test fun `missing examples duplicate identities empty profiles and modified replay SQL are errors`() {
+    @Test fun `missing examples duplicate identities empty profiles and modified replay identity are errors`() {
         assertThrows(AnalysisException::class.java) { build(frequencies(), emptyList()) }
         val example = SqlExample(key(), exampleSql, listOf("pg_catalog", "public"))
         assertThrows(AnalysisException::class.java) { build(frequencies(), listOf(example, example)) }
@@ -192,7 +192,7 @@ class ObservedWorkloadImporterTest {
         assertThrows(AnalysisException::class.java) { build(frequencies().copy(profiles = listOf(profile,
             profile.copy(id = "empty", observations = profile.observations.map { it.copy(state = ObservationState.ZERO, callsPerHour = 0.0) })))) }
         val result = build(frequencies())
-        val altered = result.workload + ("queries" to listOf(mapOf("id" to ObservedWorkloadImporter.id(key()), "sql" to exampleSql)))
+        val altered = result.workload + ("queries" to listOf(mapOf("id" to "edited", "sql" to exampleSql)))
         assertThrows(AnalysisException::class.java) { read(result.copy(workload = altered)) }
     }
 
@@ -202,6 +202,32 @@ class ObservedWorkloadImporterTest {
         assertEquals(0, command.execute(arrayOf("import-workload", "--help"), PrintWriter(out, true), PrintWriter(err, true)))
         assertTrue(out.toString().contains("search_path"))
         assertEquals(2, command.execute(arrayOf("import-workload", "--config", "missing"), PrintWriter(out, true), PrintWriter(err, true)))
+    }
+
+    @Test fun `coverage call counts cannot silently overflow the report contract`() {
+        val before = listOf(row(0), row(0).copy(queryid = 2))
+        val after = before.map { it.copy(calls = Long.MAX_VALUE) }
+        val input = FrequencyCalculator().calculate(listOf(FrequencyWindow("day", 1.0, capture(0, before), capture(60, after))))
+        val examples = (1L..2L).map { SqlExample(key().copy(queryid = it), exampleSql, listOf("pg_catalog", "public")) }
+        assertEquals(ErrorCode.NUMERIC_ERROR, assertThrows(AnalysisException::class.java) { build(input, examples) }.error.code)
+    }
+
+    @Test fun `deadline is not downgraded to a rejected SQL or an empty workload`() {
+        var ticks = 0L
+        val context = RunContext(limits = RunLimits(commandTimeout = java.time.Duration.ofNanos(20)), clock = NanoClock { ticks++ })
+        val input = frequencies()
+        assertEquals(ErrorCode.DEADLINE_EXCEEDED, assertThrows(AnalysisException::class.java) {
+            ObservedWorkloadImporter(loader).build(input, listOf(SqlExample(key(), exampleSql, listOf("pg_catalog", "public"))), options, context)
+        }.error.code)
+    }
+
+    @Test fun `excluded SQL text is not copied into manifests or diagnostics`() {
+        val input = frequencies(query = "CREATE ROLE example PASSWORD 'secret-marker'")
+        val result = ObservedWorkloadImporter(loader).build(input, emptyList(), options)
+        val json = ImportJson.mapper.writeValueAsString(result.manifest)
+        assertEquals("failed", tree(result.manifest)["status"].asString())
+        assertTrue(json.contains("UNSUPPORTED_STATEMENT"))
+        assertFalse(json.contains("secret-marker"))
     }
 
     private fun key() = StatisticsKey(source.sourceId, 42, 10, 1, true)

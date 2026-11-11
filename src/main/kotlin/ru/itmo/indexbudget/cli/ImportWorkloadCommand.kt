@@ -21,6 +21,7 @@ class ImportWorkloadCommand(
     fun execute(args: Array<String>, out: PrintWriter, err: PrintWriter): Int {
         if (args.contentEquals(arrayOf("import-workload", "--help"))) { out.println(HELP); return 0 }
         var staging: Path? = null
+        var publishing = false
         try {
             val values = linkedMapOf<String, String>()
             var index = 1
@@ -36,7 +37,7 @@ class ImportWorkloadCommand(
             val configPath = Path.of(values.getValue("--config")).toAbsolutePath()
             val output = Path.of(values.getValue("--output-dir")).toAbsolutePath()
             if (Files.exists(output, NOFOLLOW_LINKS)) ImportJson.fail("Import output directory must be new.")
-            val context = RunContext()
+            val context = RunContext(limits = RunLimits()) // Import budget is independent of the future analyze preset.
             val config = ImportJson.read(configPath, 1024 * 1024, context)
             ImportJson.fields(config, setOf("schema_version", "kind", "windows", "examples", "constraints", "objective",
                 "table_write_rates", "analysis_mode", "candidate_ranking"))
@@ -67,7 +68,7 @@ class ImportWorkloadCommand(
             val imported = open(context).use { connection ->
                 connection.isReadOnly = true
                 connection.autoCommit = false
-                connection.prepareStatement("SELECT oid FROM pg_catalog.pg_database WHERE datname = pg_catalog.current_database()").use { statement ->
+                connection.prepareStatement("SELECT oid FROM pg_catalog.pg_database WHERE datname OPERATOR(pg_catalog.=) pg_catalog.current_database()").use { statement ->
                     statement.queryTimeout = context.remainingTime().seconds.coerceAtLeast(1).toInt()
                     statement.executeQuery().use { rows ->
                         if (!rows.next() || rows.getLong(1) != frequencies.source.databaseOid)
@@ -88,6 +89,7 @@ class ImportWorkloadCommand(
                 }).build(frequencies, examples, options, context)
                 // Closing rolls back transaction-local context; no statements from the observed workload execute.
             }
+            publishing = true
             Files.createDirectories(output.parent)
             val temp = Files.createTempDirectory(output.parent, ".import-")
             staging = temp
@@ -99,6 +101,7 @@ class ImportWorkloadCommand(
                 }
             } else null
             context.checkDeadline()
+            if (Files.exists(output, NOFOLLOW_LINKS)) ImportJson.fail("Import output was created concurrently.", ErrorCode.OUTPUT_DIRECTORY_NOT_EMPTY)
             Files.move(temp, output, ATOMIC_MOVE)
             staging = null
             imported.error?.let { err.println("${it.code.name}: ${it.message}"); return it.code.defaultExitCode }
@@ -106,8 +109,14 @@ class ImportWorkloadCommand(
             out.println("workload.json + import-manifest.json: ${input.queries.size} queries, ${input.profiles.size} profiles")
             return 0
         } catch (failure: Exception) {
-            val error = (failure as? AnalysisException)?.error ?: AnalysisError(ErrorCode.INVALID_INPUT,
-                "Cannot import saved observations, examples or publish output; check input formats and database access.")
+            val error = when (failure) {
+                is AnalysisException -> failure.error
+                is java.sql.SQLException -> AnalysisError(ErrorCode.CATALOG_ERROR, "Cannot read the import database context or catalog.")
+                is java.io.IOException, is SecurityException -> AnalysisError(if (publishing) ErrorCode.EXPORT_FAILED else ErrorCode.INVALID_INPUT,
+                    if (publishing) "Cannot publish imported workload and manifest." else "Cannot read import configuration, examples or snapshots.")
+                is IllegalArgumentException -> AnalysisError(ErrorCode.INVALID_INPUT, "Invalid import metadata or configuration.")
+                else -> AnalysisError(ErrorCode.INTERNAL_ERROR, "Workload import failed unexpectedly.")
+            }
             err.println("${error.code.name}: ${error.message}")
             return error.code.defaultExitCode
         } finally {
