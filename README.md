@@ -205,6 +205,13 @@ baseline/selected/best_robust/best_mean для профилей и отдель�
 нагрузки из окон относится к #66/#67. Ручные файлы продолжают работать без метаданных.
 [Пример отчёта](examples/report-v3-provenance.json) синтетический, воспроизводится через `reportPreview`.
 
+Проверка сводки с настоящим результатом импортёра #67: `bash demo/check-import.sh`
+(JDK 25 и Docker). Два окна наблюдения проходят импорт, обычный `analyze` и экспорт;
+источник, периоды, охват, примеры и числа сводки сверяются с манифестом и общей моделью.
+Отчёт строится после закрытия JDBC-сессии без дополнительных EXPLAIN. Реальные примеры
+файлов сохраняются в `build/report-import-verification/`; CI прикладывает их к
+`observed-import-test-results`. [Описание комплекта](examples/observed-import/README.md).
+
 ## HTML-отчёт (#20)
 
 `HtmlReportRenderer` отображает готовый `AnalysisReport v3`: выбранный набор,
