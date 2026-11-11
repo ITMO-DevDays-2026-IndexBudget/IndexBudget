@@ -2,6 +2,10 @@ package ru.itmo.indexbudget.domain
 
 /** Shared calculations owned by the metrics module; callers must not duplicate these formulas. */
 interface MetricsCalculator {
+    /** Check write/max-index limits without inventing a size for an unmeasured candidate. */
+    fun assessKnownBudget(candidates: List<IndexCandidate>, workload: WorkloadInput): KnownBudgetAssessment =
+        KnownBudgetCalculator.assess(candidates, workload)
+
     /**
      * Only new candidates consume budgets; existing indexes belong to the baseline.
      * Uses estimatedBytes as the source of truth, rounding the 20% reserve per index before summing.

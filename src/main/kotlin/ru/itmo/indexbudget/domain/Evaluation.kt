@@ -43,6 +43,14 @@ data class BudgetAssessment(
     val admissible: Boolean get() = violations.isEmpty()
 }
 
+/** Expenses available before requesting a size; storage admissibility remains unknown. */
+data class KnownBudgetAssessment(
+    val writeUnitsPerHour: Double?,
+    val violations: Set<BudgetViolation>,
+) {
+    val admissible: Boolean get() = violations.isEmpty()
+}
+
 data class ProfileMetrics(
     val profileId: String,
     val normalizedWeight: Double,

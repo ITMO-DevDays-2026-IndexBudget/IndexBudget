@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "kind": "pg_stat_statements_snapshot",
+  "snapshot_id": "00000000-0000-4000-8000-000000000001",
+  "source_id": "d0d60c19-eb9d-42ee-9e01-935560eb7e20",
+  "scope": {
+    "database_oid": 16384,
+    "reader_userid": 10,
+    "rows": "current_database_all_users",
+    "all_query_texts_visible": true,
+    "ranking": "none",
+    "track": "top"
+  },
+  "postgres_version": "16.15",
+  "extension_version": "1.10",
+  "started_at": "2026-11-11T10:00:00Z",
+  "finished_at": "2026-11-11T10:00:00.100Z",
+  "before": {
+    "stats_reset": "2026-11-11T09:00:00Z",
+    "dealloc": 0
+  },
+  "after": {
+    "stats_reset": "2026-11-11T09:00:00Z",
+    "dealloc": 0
+  },
+  "status": "completed",
+  "reasons": [],
+  "row_count": 1,
+  "unavailable_text_count": 0,
+  "limits": {
+    "max_rows": 10000,
+    "max_bytes": 8388608,
+    "max_query_bytes": 65536,
+    "timeout_millis": 30000
+  },
+  "entries": [
+    {
+      "dbid": 16384,
+      "userid": 10,
+      "queryid": "-1234567890123456789",
+      "toplevel": true,
+      "query": "SELECT count(*) FROM public.records WHERE group_id = $1",
+      "text_status": "available",
+      "calls": 7,
+      "total_exec_time": 2.5,
+      "rows": 7
+    }
+  ]
+}

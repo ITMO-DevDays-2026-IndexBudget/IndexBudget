@@ -14,6 +14,8 @@ data class WorkloadInput(
     val tableWriteRates: Map<String, TableWriteRates>? = null,
     /** Optional separate evaluation; never contributes candidates or incumbents to ordinary search. */
     val manualIndexes: List<IndexDefinition>? = null,
+    val analysisMode: AnalysisMode = AnalysisMode.NORMAL,
+    val candidateRanking: CandidateRanking = CandidateRanking.FREQUENCY,
 )
 
 data class QueryInput(val id: String, val sql: String)

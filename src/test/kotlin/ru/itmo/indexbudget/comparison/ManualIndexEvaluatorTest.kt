@@ -78,7 +78,7 @@ class ManualIndexEvaluatorTest {
     @Test fun `failed evaluation has no partial vector and preserves safe error`() {
         val prepared = service.prepare(listOf(definition), catalog, workload, RunContext())
         val result = service.evaluate(prepared, workload, baseline, FakeSession(fail = true), metrics, RunContext()) {}
-        assertEquals("failed", result.status)
+        assertEquals(ManualComparisonStatus.FAILED, result.status)
         assertEquals(ErrorCode.EXPLAIN_FAILED, result.error!!.code)
         assertNull(result.evaluation)
         assertNull(result.metrics)
@@ -95,6 +95,31 @@ class ManualIndexEvaluatorTest {
         assertEquals(NullsOrder.FIRST, input.manualIndexes!!.single().keys.single().nulls)
         Files.writeString(path, text.replace("\"column\":\"value\"", "\"column\":\"value\",\"operator_class\":\"injected\""))
         assertThrows(AnalysisException::class.java) { WorkloadReader().read(path) }
+    }
+
+    @Test fun `manual identifiers allow whitespace and preserve exact Unicode values`() {
+        val path = directory.resolve("identifiers.json")
+        val source = Files.readString(Path.of("examples/workload-v2.json")).trim().dropLast(1)
+        for (name in listOf(" ", "\t", " Mixed Имя ", "😀")) {
+            val quoted = JsonMapper().writeValueAsString(name)
+            Files.writeString(path, source + ",\"manual_indexes\":[{\"schema\":$quoted,\"table\":$quoted,\"keys\":[{\"column\":$quoted}]}]}")
+            val definition = WorkloadReader().read(path).manualIndexes!!.single()
+            assertEquals(TableRef(name, name), definition.table)
+            assertEquals(name, definition.keys.single().column.name)
+        }
+        for (field in listOf("schema", "table", "column")) {
+            for (bad in listOf("\"\"", "\"\\u0000\"", "\"\\ud800\"")) {
+                val values = listOf("schema", "table", "column").associateWith { if (it == field) bad else "\"valid\"" }
+                Files.writeString(path, source + ",\"manual_indexes\":[{\"schema\":${values.getValue("schema")},\"table\":${values.getValue("table")},\"keys\":[{\"column\":${values.getValue("column")}}]}]}")
+                val error = assertThrows(AnalysisException::class.java) { WorkloadReader().read(path) }.error
+                assertEquals(ErrorCode.INVALID_INPUT, error.code)
+            }
+        }
+    }
+
+    @Test fun `completed manual model requires full evaluation and metrics`() {
+        assertThrows(IllegalArgumentException::class.java) { ManualComparison(ManualComparisonStatus.COMPLETED) }
+        assertThrows(IllegalArgumentException::class.java) { ManualComparison(ManualComparisonStatus.FAILED) }
     }
 
     private class FakeSession(private val fail: Boolean = false) : AnalysisSession {

@@ -60,7 +60,7 @@ class LimitedRepairPipelineTest {
 
             override fun estimateSize(candidate: IndexCandidate, context: RunContext): Long {
                 assertFalse(closed)
-                return requireNotNull(candidate.estimatedBytes)
+                return requireNotNull(candidates.single { it.id == candidate.id }.estimatedBytes)
             }
 
             override fun evaluate(candidates: List<IndexCandidate>, workload: ResolvedWorkload,

@@ -11,14 +11,24 @@ import java.util.UUID
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
+import java.nio.file.Files
+import java.nio.file.Path
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable
 import ru.itmo.indexbudget.candidates.BtreeCandidateCanonicalizer
 import ru.itmo.indexbudget.candidates.CandidateScope
 import ru.itmo.indexbudget.candidates.CandidateVariant
+import ru.itmo.indexbudget.candidates.ProfileAwareCandidateGenerator
+import ru.itmo.indexbudget.application.AnalysisPipeline
+import ru.itmo.indexbudget.application.WorkloadReader
+import ru.itmo.indexbudget.optimizer.LimitedRepairOptimizer
+import ru.itmo.indexbudget.report.AtomicReportExporter
+import ru.itmo.indexbudget.report.DefaultReportBuilder
+import ru.itmo.indexbudget.report.HtmlReportRenderer
 import ru.itmo.indexbudget.domain.*
 import ru.itmo.indexbudget.sql.JSqlParserSqlAnalyzer
 import tools.jackson.databind.json.JsonMapper
@@ -76,6 +86,183 @@ class JdbcAnalysisSessionIntegrationTest {
         if (::admin.isInitialized) admin.use {
             if (::schema.isInitialized) sql(it, "DROP SCHEMA IF EXISTS $schema CASCADE")
             if (::role.isInitialized) sql(it, "DROP ROLE IF EXISTS $role")
+        }
+    }
+
+    @Test
+    fun `generated INCLUDE uses real sizes costs budgets catalog and retains no benefit case`() {
+        // Visibility preparation belongs to the disposable fixture, never to analyze.
+        sql(admin, "VACUUM (ANALYZE) $schema.records")
+        val input = WorkloadInput(listOf(
+            QueryInput("positive", "SELECT b FROM $schema.records WHERE a = 314"),
+            QueryInput("negative", "SELECT payload FROM $schema.records WHERE a > 0"),
+        ), listOf(Profile("p", 1.0, mapOf("positive" to 1.0, "negative" to 1.0))),
+            Constraints(100_000_000, 300.0), tableWriteRates = mapOf(
+                "$schema.records" to TableWriteRates(10.0, 20.0, 30.0)))
+        val context = RunContext().apply { startSearch() }
+        val analyzer = JSqlParserSqlAnalyzer()
+        val parsed = analyzer.parse(input, context)
+        val catalog = session.readCatalog(parsed.referencedTables, context)
+        val resolved = analyzer.resolve(parsed, catalog, context)
+        val generated = ru.itmo.indexbudget.candidates.ProfileAwareCandidateGenerator().generate(resolved, catalog, context)
+        val covering = generated.candidates.filter { it.definition.includedColumns.isNotEmpty() }
+        assertEquals(2, covering.size)
+        val baseline = session.evaluate(emptyList(), resolved, context)
+        val metrics = MetricsCalculatorImpl()
+        val samples = covering.sortedBy { it.sourceQueryIds.single() }.map { candidate ->
+            val size = session.estimateSize(candidate, context)
+            val measured = candidate.copy(estimatedBytes = size)
+            val assessment = metrics.assessBudget(listOf(measured), input)
+            assertTrue(assessment.admissible)
+            assertEquals(120.0, assessment.usage.writeUnitsPerHour)
+            assertEquals(setOf(BudgetViolation.WRITE_BUDGET), metrics.assessBudget(listOf(measured),
+                input.copy(constraints = input.constraints.copy(writeBudgetUnitsPerHour = 119.0))).violations)
+            assertEquals(setOf(BudgetViolation.STORAGE_BUDGET), metrics.assessBudget(listOf(measured),
+                input.copy(constraints = input.constraints.copy(storageBudgetBytes = assessment.usage.budgetedBytes - 1))).violations)
+            val evaluated = session.evaluate(listOf(measured), resolved, context)
+            val source = candidate.sourceQueryIds.single()
+            val cost = evaluated.costByQueryId.getValue(source)
+            if (source == "positive") {
+                assertTrue(cost < baseline.costByQueryId.getValue(source))
+                assertTrue(evaluated.plansByQueryId.getValue(source).json.contains("Index Only Scan"))
+            } else {
+                assertEquals(baseline.costByQueryId.getValue(source), cost)
+            }
+            assertTrue(size > 0)
+            assertEquals(0, hypothesisCount(connection))
+            mapOf("query_id" to source, "ddl" to candidate.ddl!!.replace(schema, "include_demo"),
+                "estimated_bytes" to size, "budgeted_bytes" to assessment.usage.budgetedBytes,
+                "write_units_per_hour" to assessment.usage.writeUnitsPerHour,
+                "storage_budget_bytes" to input.constraints.storageBudgetBytes,
+                "write_budget_units_per_hour" to input.constraints.writeBudgetUnitsPerHour,
+                "baseline_cost" to baseline.costByQueryId.getValue(source), "covering_cost" to cost)
+        }
+        // Real catalog distinguishes included positions from search keys, then exact dedup consumes it.
+        val positive = covering.single { "positive" in it.sourceQueryIds }
+        sql(admin, positive.ddl!!)
+        val after = session.readCatalog(parsed.referencedTables, context)
+        assertTrue(after.tables.single().existingIndexes.any {
+            it.includedColumns == positive.definition.includedColumns &&
+                it.keys.map { key -> key.column } == positive.definition.keys.map { key -> key.column }
+        })
+        val deduped = ru.itmo.indexbudget.candidates.ProfileAwareCandidateGenerator().generate(resolved, after, context)
+        assertFalse(deduped.candidates.any { it.id == positive.id })
+        assertTrue(deduped.candidates.any { it.definition.includedColumns.isEmpty() })
+        fun version(sql: String) = connection.createStatement().use { statement ->
+            statement.executeQuery(sql).use { rows -> check(rows.next()); rows.getString(1) }
+        }
+        val sample = mapOf("postgres_version" to version("SHOW server_version"),
+            "hypopg_version" to version("SELECT extversion FROM pg_extension WHERE extname = 'hypopg'"),
+            "fixture_rows" to 50000, "samples" to samples)
+        val output = java.nio.file.Path.of("build", "include-demo", "real-costs.json")
+        java.nio.file.Files.createDirectories(output.parent)
+        java.nio.file.Files.writeString(output, mapper.writerWithDefaultPrettyPrinter().writeValueAsString(sample) + "\n")
+    }
+
+    @Test
+    fun `OR workload completes real search with exact EXPLAIN and branch origins in artifacts`(@TempDir directory: Path) {
+        val text = """
+            {"schema_version":2,"queries":[
+              {"id":"alternatives","sql":"SELECT id FROM records WHERE a IN (1, 2) OR b BETWEEN 49999 AND 50000"},
+              {"id":"mixed","sql":"SELECT id FROM records WHERE (a = 1 AND b > 1) OR (a > 2 AND b = 3)"}],
+             "profiles":[
+              {"id":"day","weight":2,"calls_per_hour":{"alternatives":10,"mixed":1}},
+              {"id":"night","weight":1,"calls_per_hour":{"alternatives":1,"mixed":10}}],
+             "constraints":{"storage_budget_bytes":8388608,"write_budget_units_per_hour":null,"max_indexes":3}}
+        """.trimIndent()
+        val path = directory.resolve("workload.json")
+        Files.writeString(path, text)
+        val context = RunContext()
+        val input = WorkloadReader().read(path, context)
+        val observed = mutableListOf<ExplainObservation>()
+        session = JdbcAnalysisSession(observingConnection(observed))
+        val pipeline = AnalysisPipeline(JSqlParserSqlAnalyzer(), object : AnalysisSessionFactory {
+            override fun open(context: RunContext): AnalysisSession = session
+        }, ProfileAwareCandidateGenerator(), MetricsCalculatorImpl(), ObjectiveComparatorImpl(),
+            LimitedRepairOptimizer(), DefaultReportBuilder(), AtomicReportExporter(HtmlReportRenderer()))
+        val output = directory.resolve("result")
+        val result = pipeline.run(input, output, context)
+        assertEquals(RunStatus.COMPLETED, result.status)
+        assertEquals(setOf("alternatives", "mixed"), result.baseline?.costByQueryId?.keys)
+        assertTrue(observed.isNotEmpty())
+        assertTrue(observed.all { event -> input.queries.any { event.sql.endsWith(it.sql) } })
+        assertEquals(2, result.diagnostics.warnings.count { it.code == WarningCode.OR_BRANCH_AWARE_GENERATION })
+        val json = Files.readString(output.resolve("report.json"))
+        assertTrue(json.contains("source_branches"))
+        assertTrue(json.contains("condition/L"))
+        assertTrue(json.contains("dnf_expanded"))
+        val html = Files.readString(output.resolve("report.html"))
+        assertTrue(html.contains("Ветви условий"))
+        assertTrue(html.contains("condition/L"))
+        for (name in listOf("report.json", "report.html", "indexes.sql")) {
+            assertTrue(Files.readString(output.resolve(name)).contains(context.runId))
+        }
+    }
+
+    @Test
+    fun `json null tests do not fail real pipeline or suppress integer search`(@TempDir directory: Path) {
+        sql(admin, "ALTER TABLE $schema.records ADD COLUMN nullable_json json")
+        sql(admin, "UPDATE $schema.records SET nullable_json = '{}'::json WHERE id % 2 = 0")
+        val text = """
+            {"schema_version":2,"queries":[
+              {"id":"null","sql":"SELECT id FROM records WHERE nullable_json IS NULL AND a = 1"},
+              {"id":"not_null","sql":"SELECT id FROM records WHERE nullable_json IS NOT NULL AND a = 2"}],
+             "profiles":[{"id":"observed","weight":1,"calls_per_hour":{"null":1,"not_null":1}}],
+             "constraints":{"storage_budget_bytes":8388608,"write_budget_units_per_hour":null,"max_indexes":3}}
+        """.trimIndent()
+        val path = directory.resolve("workload.json")
+        Files.writeString(path, text)
+        val context = RunContext()
+        val input = WorkloadReader().read(path, context)
+        val pipeline = AnalysisPipeline(JSqlParserSqlAnalyzer(), object : AnalysisSessionFactory {
+            override fun open(context: RunContext): AnalysisSession = session
+        }, ProfileAwareCandidateGenerator(), MetricsCalculatorImpl(), ObjectiveComparatorImpl(),
+            LimitedRepairOptimizer(), DefaultReportBuilder(), AtomicReportExporter(HtmlReportRenderer()))
+        val output = directory.resolve("result")
+        val result = pipeline.run(input, output, context)
+        assertEquals(RunStatus.COMPLETED, result.status)
+        assertEquals(setOf("null", "not_null"), result.baseline?.costByQueryId?.keys)
+        assertTrue(result.selected?.evaluation?.candidateIds.orEmpty().isNotEmpty(), "Integer index must still reach search")
+        assertEquals(2, result.diagnostics.candidateDecisions.count { it.reason == CandidateReason.NO_BTREE_OPERATOR_CLASS })
+        val json = Files.readString(output.resolve("report.json"))
+        assertTrue(json.contains("NO_BTREE_OPERATOR_CLASS"))
+        assertTrue(json.contains("nullable_json IS NULL AND a = 1"))
+        assertTrue(json.contains("nullable_json IS NOT NULL AND a = 2"))
+        assertTrue(Files.readString(output.resolve("report.html")).contains("Нет подходящего B-tree opclass"))
+        assertFalse(Files.readString(output.resolve("indexes.sql")).contains("nullable_json"))
+    }
+
+    @Test
+    fun `new scalar forms complete real analysis and export consistent artifacts`(@TempDir directory: Path) {
+        val source = """
+            {"schema_version":2,"queries":[
+              {"id":"in","sql":"SELECT id FROM records WHERE a IN (1, 2, NULL)"},
+              {"id":"between","sql":"SELECT id FROM records WHERE b BETWEEN 100 AND 200"},
+              {"id":"null","sql":"SELECT id FROM records WHERE payload IS NULL"},
+              {"id":"not_null","sql":"SELECT id FROM records WHERE payload IS NOT NULL"}],
+             "profiles":[{"id":"observed","weight":1,"calls_per_hour":{"in":10,"between":10,"null":1,"not_null":1}}],
+             "constraints":{"storage_budget_bytes":8388608,"write_budget_units_per_hour":null,"max_indexes":3}}
+        """.trimIndent()
+        val path = directory.resolve("workload.json")
+        Files.writeString(path, source)
+        val context = RunContext()
+        val input = WorkloadReader().read(path, context)
+        val pipeline = AnalysisPipeline(JSqlParserSqlAnalyzer(), object : AnalysisSessionFactory {
+            override fun open(context: RunContext): AnalysisSession = session
+        }, ProfileAwareCandidateGenerator(), MetricsCalculatorImpl(), ObjectiveComparatorImpl(),
+            LimitedRepairOptimizer(), DefaultReportBuilder(), AtomicReportExporter(HtmlReportRenderer()))
+        val output = directory.resolve("result")
+        val result = pipeline.run(input, output, context)
+        assertEquals(RunStatus.COMPLETED, result.status)
+        assertEquals(setOf("in", "between", "null", "not_null"), result.baseline?.costByQueryId?.keys)
+        assertTrue(connection.isClosed)
+        for (name in listOf("report.json", "report.html", "indexes.sql")) {
+            assertTrue(Files.isRegularFile(output.resolve(name)), name)
+            assertTrue(Files.readString(output.resolve(name)).contains(context.runId), name)
+        }
+        val json = Files.readString(output.resolve("report.json"))
+        for (predicate in listOf("IN (1, 2, NULL)", "BETWEEN 100 AND 200", "IS NULL", "IS NOT NULL")) {
+            assertTrue(json.contains(predicate), predicate)
         }
     }
 

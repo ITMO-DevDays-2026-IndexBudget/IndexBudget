@@ -50,6 +50,49 @@ class AtomicReportExporterTest {
     }
 
     @Test
+    fun `covering payload survives JSON HTML and SQL export with explicit report version`() {
+        val fixture = ContractFixtures.report(sameIncumbents = true)
+        val selectedId = fixture.result.selected!!.evaluation.candidateIds.single()
+        val original = fixture.candidates.candidates.single { it.id == selectedId }
+        val definition = original.definition.copy(includedColumns = listOf(ColumnRef(original.definition.table, "payload<\"x>")))
+        val covering = original.copy(definition = definition, ddl = PostgresDdlRenderer().render(definition),
+            generationReasons = original.generationReasons + GenerationReason.COVERING_PROJECTION)
+        val calculator = MetricsCalculatorImpl()
+        val input = requireNotNull(fixture.input)
+        val assessment = calculator.assessBudget(listOf(covering), input)
+        assertTrue(assessment.admissible)
+        assertEquals(8200.0, assessment.usage.writeUnitsPerHour)
+        val measured = covering.copy(writeUnitsPerHour = assessment.usage.writeUnitsPerHour,
+            budgetedBytes = assessment.usage.budgetedBytes)
+        val result = fixture.result as SearchResult.Completed
+        val incumbent = result.bestRobust.copy(metrics = calculator.calculate(
+            input, result.baseline, result.bestRobust.evaluation, assessment.usage))
+        val report = fixture.copy(
+            result = result.copy(bestRobust = incumbent, bestMean = incumbent),
+            candidates = fixture.candidates.copy(candidates = listOf(measured)),
+        )
+        val output = directory.resolve("covering")
+        AtomicReportExporter(HtmlReportRenderer()).export(report, output, context(report))
+        val json = JsonMapper().readTree(Files.readString(output.resolve("report.json")))
+        assertEquals(3, json["schema_version"].intValue())
+        assertEquals("row_changes_times_key_and_include_columns", json["write_proxy_model"].stringValue())
+        assertEquals(8200.0, json["selected_indexes"][0]["write_units_per_hour"].doubleValue())
+        assertEquals(8200.0, json["candidates"][0]["write_units_per_hour"].doubleValue())
+        for (configuration in listOf("selected", "best_robust", "best_mean")) {
+            assertEquals(8200.0, json[configuration]["metrics"]["budget_usage"]["write_units_per_hour"].doubleValue())
+        }
+        assertEquals(0.0, json["baseline"]["metrics"]["budget_usage"]["write_units_per_hour"].doubleValue())
+        assertEquals("payload<\"x>", json["selected_indexes"][0]["definition"]["included_columns"][0]["name"].stringValue())
+        val html = Files.readString(output.resolve("report.html"))
+        assertTrue(html.contains("INCLUDE"))
+        assertTrue(html.contains("payload&lt;&quot;x&gt;"))
+        assertTrue(html.contains("visibility map"))
+        assertTrue(html.contains("<dt>Write units/час</dt><dd>8\u202f200</dd>"))
+        assertFalse(html.contains("payload<\"x>"))
+        assertTrue(Files.readString(output.resolve("indexes.sql")).contains(" INCLUDE (\"payload<\"\"x>\");"))
+    }
+
+    @Test
     fun `partial survives exhausted command budget and cancellation without losing saved plans`() {
         val report = ContractFixtures.report(status = RunStatus.PARTIAL)
         var elapsed = 0L

@@ -4,6 +4,8 @@ import org.springframework.stereotype.Component
 import ru.itmo.indexbudget.domain.*
 import ru.itmo.indexbudget.domain.AnalysisError
 import ru.itmo.indexbudget.domain.AnalysisException
+import ru.itmo.indexbudget.domain.AnalysisMode
+import ru.itmo.indexbudget.domain.CandidateRanking
 import ru.itmo.indexbudget.domain.Constraints
 import ru.itmo.indexbudget.domain.ErrorCode
 import ru.itmo.indexbudget.domain.Objective
@@ -36,7 +38,16 @@ class WorkloadReader {
         .enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS)
         .build()
 
-    fun read(path: Path, context: RunContext? = null): WorkloadInput {
+    fun read(
+        path: Path,
+        context: RunContext? = null,
+        analysisModeOverride: AnalysisMode? = null,
+        candidateRankingOverride: CandidateRanking? = null,
+    ): WorkloadInput {
+        // Until the JSON mode is known, allow the largest preset while reading/parsing the source.
+        // The clock is never restarted: selecting the actual mode below immediately checks its
+        // own command budget, and every remaining validation/analysis operation uses that preset.
+        context?.selectAnalysisMode(analysisModeOverride ?: AnalysisMode.DEEP)
         context?.checkDeadline()
         val root = readJsonObject(path, context)
         val version = root.get("schema_version")
@@ -46,8 +57,28 @@ class WorkloadReader {
                 ErrorCode.UNSUPPORTED_SCHEMA_VERSION)
         }
         objectNode(root, Location("workload"), setOf(
-            "schema_version", "objective", "queries", "profiles", "constraints", "table_write_rates", "manual_indexes",
+            "schema_version", "objective", "queries", "profiles", "constraints", "table_write_rates", "analysis_mode",
+            "candidate_ranking", "manual_indexes",
         ))
+        val requestedMode = when (val value = root.get("analysis_mode")) {
+            null -> AnalysisMode.NORMAL
+            else -> when (string(value, Location("analysis_mode"))) {
+                "fast" -> AnalysisMode.FAST
+                "normal" -> AnalysisMode.NORMAL
+                "deep" -> AnalysisMode.DEEP
+                else -> invalid(Location("analysis_mode"), "Expected fast, normal or deep.")
+            }
+        }
+        val analysisMode = analysisModeOverride ?: requestedMode
+        context?.selectAnalysisMode(analysisMode)
+        val requestedRanking = when (val value = root.get("candidate_ranking")) {
+            null -> CandidateRanking.FREQUENCY
+            else -> {
+                val name = string(value, Location("candidate_ranking"))
+                CandidateRanking.entries.firstOrNull { it.wireName == name }
+                    ?: invalid(Location("candidate_ranking"), "Expected frequency or baseline_cost.")
+            }
+        }
         val objective = when (val value = root.get("objective")) {
             null -> Objective.ROBUST
             else -> when (string(value, Location("objective"))) {
@@ -79,7 +110,8 @@ class WorkloadReader {
             context.checkDeadline()
             context.recordInputHash(HexFormat.of().formatHex(digest))
         }
-        return WorkloadInput(queries, profiles, constraints, objective = objective, tableWriteRates = writeRates, manualIndexes = manual)
+        return WorkloadInput(queries, profiles, constraints, objective = objective, tableWriteRates = writeRates, manualIndexes = manual,
+            analysisMode = analysisMode, candidateRanking = candidateRankingOverride ?: requestedRanking)
     }
 
     private fun manualIndexes(node: JsonNode?): List<IndexDefinition>? {
@@ -88,11 +120,11 @@ class WorkloadReader {
         return array(node, location, 5).mapIndexed { index, value ->
             val at = location.child(index.toString())
             objectNode(value, at, setOf("schema", "table", "keys"))
-            val table = TableRef(string(value.get("schema"), at.child("schema")), string(value.get("table"), at.child("table")))
+            val table = TableRef(identifier(value.get("schema"), at.child("schema")), identifier(value.get("table"), at.child("table")))
             val keys = array(value.get("keys"), at.child("keys"), 2).mapIndexed { position, key ->
                 val keyAt = at.child("keys").child(position.toString())
                 objectNode(key, keyAt, setOf("column", "direction", "nulls"))
-                val column = string(key.get("column"), keyAt.child("column"))
+                val column = identifier(key.get("column"), keyAt.child("column"))
                 val direction = when (key.get("direction")?.let { string(it, keyAt.child("direction")) } ?: "asc") {
                     "asc" -> SortDirection.ASC
                     "desc" -> SortDirection.DESC
@@ -104,7 +136,6 @@ class WorkloadReader {
                     "last" -> NullsOrder.LAST
                     else -> invalid(keyAt.child("nulls"), "Expected first or last.")
                 }
-                if (listOf(table.schema, table.name, column).any { '\u0000' in it }) invalid(keyAt, "Identifiers cannot contain NUL.")
                 IndexKey(ColumnRef(table, column), direction, nulls)
             }
             if (keys.map { it.column }.distinct().size != keys.size) invalid(at, "Repeated index key.")
@@ -271,10 +302,16 @@ class WorkloadReader {
         return node.toList()
     }
 
-    private fun string(node: JsonNode?, location: Location): String {
+    private fun identifier(node: JsonNode?, location: Location): String {
+        val value = string(node, location, allowBlank = true)
+        if (value.isEmpty() || '\u0000' in value) invalid(location, "Expected a nonempty identifier without NUL.")
+        return value
+    }
+
+    private fun string(node: JsonNode?, location: Location, allowBlank: Boolean = false): String {
         if (node == null || !node.isString) invalid(location, "Expected a nonblank string.")
         val value = node.stringValue()
-        if (value.isBlank()) invalid(location, "Expected a nonblank string.")
+        if (!allowBlank && value.isBlank()) invalid(location, "Expected a nonblank string.")
         try {
             Charsets.UTF_8.newEncoder().onMalformedInput(CodingErrorAction.REPORT)
                 .encode(java.nio.CharBuffer.wrap(value))

@@ -58,3 +58,22 @@ tasks.register<JavaExec>("reportPreview") {
     args(layout.projectDirectory.file("index.html").asFile.absolutePath,
         layout.buildDirectory.dir("report-previews").get().asFile.absolutePath)
 }
+
+tasks.register<JavaExec>("analysisModeExperiments") {
+    group = "verification"
+    description = "Compare analysis modes on one frozen PostgreSQL candidate pool"
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass.set("ru.itmo.indexbudget.experiments.AnalysisModeExperimentsKt")
+    javaLauncher.set(javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(25)) })
+}
+
+
+tasks.register<JavaExec>("candidateRankingExperiments") {
+    group = "verification"
+    description = "Compare shortlist rankings on deterministic complete-cost fixtures without PostgreSQL"
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass.set("ru.itmo.indexbudget.experiments.CandidateRankingExperimentsKt")
+    javaLauncher.set(javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(25)) })
+}

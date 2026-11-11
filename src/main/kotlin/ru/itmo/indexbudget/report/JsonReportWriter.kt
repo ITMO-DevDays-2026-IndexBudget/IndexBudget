@@ -4,13 +4,14 @@ import ru.itmo.indexbudget.domain.*
 import tools.jackson.databind.DeserializationFeature
 import tools.jackson.databind.json.JsonMapper
 
-/** Explicit report v2 wire format; domain implementation details never define public JSON fields. */
+/** Explicit report v3 wire format; domain implementation details never define public JSON fields. */
 class JsonReportWriter {
     private val mapper = JsonMapper.builder()
         .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
         .build()
 
     fun render(report: AnalysisReport): String {
+        require(report.schemaVersion == 3 && report.specVersion == "0.2") { "Expected report v3 / spec 0.2" }
         val result = report.result
         val input = report.input
         val comparisons = report.queryComparisons.associateBy { it.queryId }
@@ -23,6 +24,8 @@ class JsonReportWriter {
             "duration_millis" to report.durationMillis,
             "environment" to environment(report.environment),
             "status" to result.status.name.lowercase(),
+            "analysis_mode" to report.analysisMode.name.lowercase(),
+            "candidate_ranking" to report.candidateRanking.wireName,
             "selected_objective" to result.selectedObjective.name.lowercase(),
             "comparison_scope" to report.comparisonScope.name.lowercase(),
             "incumbents_coincide" to report.incumbentsCoincide,
@@ -34,6 +37,7 @@ class JsonReportWriter {
                 "calls_per_hour" to profile.callsPerHour.toSortedMap(),
             ) },
             "budgets" to input?.constraints?.let(::budgets),
+            "write_proxy_model" to "row_changes_times_key_and_include_columns",
             "table_write_rates" to input?.tableWriteRates?.toSortedMap()?.mapValues { (_, rates) -> linkedMapOf(
                 "inserts_per_hour" to rates.insertsPerHour,
                 "updates_per_hour" to rates.updatesPerHour,
@@ -70,7 +74,7 @@ class JsonReportWriter {
     private fun manualComparison(value: ManualComparison) = linkedMapOf(
         "origin" to "manual_outside_automatic_shortlist",
         "comparison_scope" to "separate_manual_evaluation",
-        "status" to value.status, "admissible" to value.admissible,
+        "status" to value.status.wireValue, "admissible" to value.admissible,
         "candidates" to value.candidates.map(::candidate),
         "decisions" to value.decisions.map(::decision),
         "configuration" to value.evaluation?.let { configuration(it, value.metrics) },
@@ -134,6 +138,7 @@ class JsonReportWriter {
         "definition" to linkedMapOf(
             "table" to table(value.definition.table),
             "method" to value.definition.method,
+            "included_columns" to value.definition.includedColumns.map(::column),
             "unique" to value.definition.unique,
             "keys" to value.definition.keys.map { key -> linkedMapOf(
                 "column" to column(key.column),
@@ -144,6 +149,9 @@ class JsonReportWriter {
             ) },
         ),
         "source_query_ids" to value.sourceQueryIds.sorted(),
+        "source_branches" to value.sourceBranches.sortedWith(compareBy({ it.queryId }, { it.conditionPath })).map {
+            linkedMapOf("query_id" to it.queryId, "condition_path" to it.conditionPath)
+        },
         "generation_reasons" to value.generationReasons.map { it.name }.sorted(),
         "ddl" to value.ddl,
         "estimated_bytes" to value.estimatedBytes,
@@ -158,6 +166,26 @@ class JsonReportWriter {
         "candidates_before_global_deduplication" to value.candidatesBeforeGlobalDeduplication,
         "candidates_after_global_deduplication" to value.candidatesAfterGlobalDeduplication,
         "shortlisted_candidates" to value.shortlistedCandidates,
+        "initial_shortlisted_candidates" to value.initialShortlistedCandidates,
+        "reserve_candidates" to value.reserveCandidates,
+        "reserve_candidate_limit" to value.reserveCandidateLimit,
+        "max_size_attempts" to value.maxSizeAttempts,
+        "preparation_scope" to value.preparationScope.name.lowercase(),
+        "fixed_pool_selection" to value.fixedPoolSelection?.let { point -> linkedMapOf(
+            "pool_candidates" to point.poolCandidates,
+            "admissible_candidates" to point.admissibleCandidates,
+            "budget_rejected_candidates" to point.budgetRejectedCandidates,
+            "size_attempts" to point.sizeAttempts,
+        ) },
+        "preparation" to value.preparation?.let { preparation -> linkedMapOf(
+            "examined_candidates" to preparation.examinedCandidates,
+            "size_attempts" to preparation.sizeAttempts,
+            "budget_rejected_candidates" to preparation.budgetRejectedCandidates,
+            "candidate_errors" to preparation.candidateErrors,
+            "refilled_candidates" to preparation.refilledCandidates,
+            "final_shortlisted_candidates" to preparation.finalShortlistedCandidates,
+            "stop_reason" to preparation.stopReason.name,
+        ) },
         "ungenerated_definitions" to value.ungeneratedDefinitions,
         "local_scopes" to value.localScopes.map { scope -> linkedMapOf(
             "query_id" to scope.queryId,
@@ -166,8 +194,11 @@ class JsonReportWriter {
             "retained_columns" to scope.retainedColumns,
             "enumerated_definitions" to scope.enumeratedDefinitions,
             "deduplicated_definitions" to scope.deduplicatedDefinitions,
+            "unindexable_variants" to scope.unindexableVariants,
             "retained_definitions" to scope.retainedDefinitions,
             "excluded_columns" to scope.excludedColumns.map(::column),
+            "enumerated_include_definitions" to scope.enumeratedIncludeDefinitions,
+            "retained_include_definitions" to scope.retainedIncludeDefinitions,
         ) },
         "decisions" to value.decisions.map(::decision),
         "warnings" to value.warnings.map(::warning),

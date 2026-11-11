@@ -13,7 +13,8 @@ fun CatalogSnapshot.withSqlSemantics(): CatalogSnapshot {
         CatalogType(1700, "pg_catalog", "numeric", "N"), CatalogType(2205, "pg_catalog", "regclass", "N"),
         CatalogType(2206, "pg_catalog", "regtype", "N"), CatalogType(3614, "pg_catalog", "tsvector", "U"),
         CatalogType(3615, "pg_catalog", "tsquery", "U"),
-    )
+    ).map { it.copy(arrayTypeOid = it.oid + 100_000) }
+    val arrayTypes = types.map { CatalogType(it.arrayTypeOid, "pg_catalog", "_${it.name}", "A", elementTypeOid = it.oid) }
     val aliases = mapOf("integer" to "int4", "smallint" to "int2", "bigint" to "int8",
         "timestamp without time zone" to "timestamp", "timestamp with time zone" to "timestamptz")
     val operators = buildList {
@@ -29,6 +30,8 @@ fun CatalogSnapshot.withSqlSemantics(): CatalogSnapshot {
             val name = column.typeName.substringBefore('(').trim()
             column.copy(typeOid = types.singleOrNull { it.name == (aliases[name] ?: name) }?.oid)
         }) },
-        semantics = CatalogSemantics(types, operators, listOf(CatalogImplicitCast(1043, 25))),
+        semantics = CatalogSemantics(types + arrayTypes, operators, listOf(CatalogImplicitCast(1043, 25)) +
+            listOf(21L to 23L, 21L to 20L, 21L to 1700L, 23L to 20L, 23L to 1700L, 20L to 1700L)
+                .map { (source, target) -> CatalogImplicitCast(source, target) }),
     )
 }

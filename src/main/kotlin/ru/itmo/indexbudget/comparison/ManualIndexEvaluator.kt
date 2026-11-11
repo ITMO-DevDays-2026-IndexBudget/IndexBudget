@@ -14,18 +14,24 @@ class ManualIndexEvaluator {
         val canonicalizer = BtreeCandidateCanonicalizer(catalog, context)
         val candidates = mutableListOf<IndexCandidate>()
         val decisions = mutableListOf<CandidateDecision>()
-        for ((tableRef, definitionsForTable) in definitions.groupBy { it.table }) {
+        for ((tableRef, definitionsForTable) in definitions.withIndex().groupBy { it.value.table }) {
             context.checkDeadline()
             if (tableRef !in workload.queries.flatMap { it.tables }) invalid(ErrorCode.UNKNOWN_TABLE, "Manual indexes must reference workload tables.")
             val table = catalog.tables.singleOrNull { it.ref == tableRef }
                 ?: invalid(ErrorCode.UNKNOWN_TABLE, "Manual index table is unknown.")
             if (table.kind != TableKind.ORDINARY) invalid(ErrorCode.UNSUPPORTED_SQL, "Manual indexes require ordinary tables.")
-            for (definition in definitionsForTable) {
-                if (definition.method != "btree" || definition.unique || definition.keys.size !in 1..2)
+            for ((definitionIndex, definition) in definitionsForTable) {
+                val field = "manual_indexes.$definitionIndex"
+                if (definition.method != "btree" || definition.unique || definition.keys.size !in 1..2 ||
+                    definition.includedColumns.isNotEmpty())
                     invalid(ErrorCode.INVALID_INPUT, "Expected a nonunique B-tree with one or two columns.")
-                for (key in definition.keys) {
+                for ((keyIndex, key) in definition.keys.withIndex()) {
+                    val keyField = "$field.keys.$keyIndex"
                     if (key.column.table != tableRef || table.columns.none { it.name == key.column.name })
                         invalid(ErrorCode.UNKNOWN_COLUMN, "Manual index column is unknown.")
+                    val column = table.columns.single { it.name == key.column.name }
+                    if (column.defaultOperatorClass == null)
+                        invalid(ErrorCode.INVALID_INPUT, "Manual index key has no default B-tree operator class.", keyField)
                     if (key.collation != null || key.operatorClass != null)
                         invalid(ErrorCode.INVALID_INPUT, "Manual indexes use catalog-default collation and operator class.")
                 }
@@ -33,12 +39,12 @@ class ManualIndexEvaluator {
             // A synthetic scope supplies provenance only to the shared canonicalizer; source IDs are
             // cleared below because manual indexes must not claim automatic generation from SQL.
             val scope = CandidateScope("manual", tableRef, table.columns.size, emptyList(), emptyList(),
-                definitionsForTable.map { CandidateVariant(it, setOf("manual"), emptySet()) }, emptyList(), emptyList())
+                definitionsForTable.map { CandidateVariant(it.value, setOf("manual"), emptySet()) }, emptyList(), emptyList())
             val canonical = canonicalizer.canonicalize(scope)
             candidates += canonical.candidates.map { it.copy(sourceQueryIds = emptySet()) }
             decisions += canonical.decisions.map { it.copy(queryId = null, phase = null) }
         }
-        return ManualComparison("not_evaluated", candidates.sortedBy { it.id }, decisions)
+        return ManualComparison(ManualComparisonStatus.NOT_EVALUATED, candidates.sortedBy { it.id }, decisions)
     }
 
     fun evaluate(prepared: ManualComparison, workload: ResolvedWorkload, baseline: EvaluationResult,
@@ -65,7 +71,7 @@ class ManualIndexEvaluator {
             evaluation.requireQueryCoverage(workload.input.queries.map { it.id }.toSet())
             require(evaluation.candidateIds == sized.map { it.id }) { "Manual evaluation returned a different set" }
             val assessment = metrics.assessEvaluation(workload.input, baseline, evaluation, budget.usage)
-            progress = progress.copy(status = "completed", evaluation = evaluation, metrics = assessment.metrics,
+            progress = progress.copy(status = ManualComparisonStatus.COMPLETED, evaluation = evaluation, metrics = assessment.metrics,
                 evaluationViolations = (assessment as? EvaluationAssessment.Rejected)?.violations.orEmpty(),
                 queryComparisons = workload.input.queries.map {
                     val before = baseline.costByQueryId.getValue(it.id)
@@ -77,7 +83,7 @@ class ManualIndexEvaluator {
             return progress
         } catch (error: AnalysisException) {
             // Preserve a fully completed late evaluation; never retain a partial cost vector.
-            if (progress.evaluation == null) progress = progress.copy(status = "failed", error = error.error)
+            if (progress.evaluation == null) progress = progress.copy(status = ManualComparisonStatus.FAILED, error = error.error)
             save(progress)
             if (error.error.code !in setOf(ErrorCode.EXPLAIN_FAILED, ErrorCode.HYPOTHETICAL_INDEX_ERROR)) throw error
             if (error.suppressed.isNotEmpty()) throw error
@@ -86,5 +92,6 @@ class ManualIndexEvaluator {
         }
     }
 
-    private fun invalid(code: ErrorCode, message: String): Nothing = throw AnalysisException(AnalysisError(code, message))
+    private fun invalid(code: ErrorCode, message: String, field: String? = null): Nothing =
+        throw AnalysisException(AnalysisError(code, message, details = field?.let { mapOf("field" to it) }.orEmpty()))
 }

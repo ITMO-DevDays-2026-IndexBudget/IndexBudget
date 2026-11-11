@@ -46,8 +46,8 @@ class HtmlReportRenderer : ReportRenderer {
         val manual = report.manualComparison ?: return
         append("<section id=\"manual-comparison\"><h2>Ручной набор индексов</h2>")
         append("<p>Отдельная оценка вне автоматического shortlist. Best robust и best mean относятся к обычному поиску.</p>")
-        append("<p>Статус: ").append(h(manual.status)).append(". Допустимость: ")
-        text(if (manual.status != "completed") "Не установлена" else if (manual.admissible) "Допустим" else "Нарушает ограничения")
+        append("<p>Статус: ").append(h(manual.status.wireValue)).append(". Допустимость: ")
+        text(if (manual.status != ManualComparisonStatus.COMPLETED) "Не установлена" else if (manual.admissible) "Допустим" else "Нарушает ограничения")
         append(".</p>")
         for (candidate in manual.candidates) {
             append("<pre>").append(h(candidate.ddl ?: "Нет данных")).append("</pre><p>Оценка размера: ")
@@ -96,7 +96,9 @@ class HtmlReportRenderer : ReportRenderer {
         if (report.environment.applicationVersion == "fixture") {
             append("<p class=\"notice demo\"><strong>Демонстрационные данные.</strong> Синтетическая фикстура для проверки отчёта; это не результат анализа PostgreSQL.</p>")
         }
-        append("<div class=\"run-strip\"><span>Критерий поиска <strong>")
+        append("<div class=\"run-strip\"><span>Режим анализа <strong>")
+        text(modeName(report.analysisMode))
+        append("</strong></span><span>Критерий поиска <strong>")
         text(result.selectedObjective.name.lowercase(Locale.ROOT))
         append("</strong></span><span>Длительность <strong>").append(h(number(report.durationMillis))).append(" мс</strong></span>")
         append("<span>Причина остановки <strong>")
@@ -195,7 +197,7 @@ class HtmlReportRenderer : ReportRenderer {
         append("<div class=\"budget-card\"><h3>Запись</h3><p class=\"budget-number\">").append(h(number(usage?.writeUnitsPerHour)))
         append(" <small>write units/час</small></p><p>Бюджет: ")
         text(if (constraints == null) "Нет данных" else constraints.writeBudgetUnitsPerHour?.let { "${number(it)} units/час" } ?: "Отключён")
-        append(".</p></div></div><p class=\"muted\">Место учитывается с запасом для каждого индекса. Write units — вспомогательная модель изменений строк и числа ключей, а не измеренное замедление INSERT/UPDATE/DELETE.</p>")
+        append(".</p></div></div><p class=\"muted\">Место учитывается с запасом для каждого индекса. Write units — вспомогательная модель изменений строк × (число ключей + число INCLUDE-колонок), а не измеренное замедление INSERT/UPDATE/DELETE.</p>")
         val selected = report.result.selected
         if (selected == null) {
             append("<p class=\"empty\">Рекомендованные индексы отсутствуют: пригодный результат не сохранён.</p>")
@@ -211,10 +213,19 @@ class HtmlReportRenderer : ReportRenderer {
                     append("<p class=\"muted\">").append(h(definition(candidate))).append("</p><dl class=\"values\">")
                     entry("Оценка", storageSize(candidate.estimatedBytes))
                     entry("С запасом", storageSize(candidate.budgetedBytes))
+                    entry("INCLUDE", candidate.definition.includedColumns.takeIf { it.isNotEmpty() }
+                        ?.joinToString { it.name } ?: "Нет")
                     entry("Write units/час", number(candidate.writeUnitsPerHour))
                     entry("Источники SQL", candidate.sourceQueryIds.sorted().joinToString())
+                    if (candidate.sourceBranches.isNotEmpty()) entry("Ветви условий", candidate.sourceBranches
+                        .sortedWith(compareBy({ it.queryId }, { it.conditionPath }))
+                        .joinToString { "${it.queryId}: ${it.conditionPath}" })
                     entry("Происхождение", candidate.generationReasons.sortedBy { it.name }.joinToString { it.name })
-                    append("</dl><details><summary>DDL из модели</summary>")
+                    append("</dl>")
+                    if (candidate.definition.includedColumns.isNotEmpty()) {
+                        append("<p>INCLUDE позволяет рассмотреть index-only scan; обращения к таблице зависят от visibility map и не исключены.</p>")
+                    }
+                    append("<details><summary>DDL из модели</summary>")
                     pre(candidate.ddl ?: "DDL отсутствует в модели.")
                     append("</details>")
                 }
@@ -275,6 +286,9 @@ class HtmlReportRenderer : ReportRenderer {
 
     private fun StringBuilder.search(report: AnalysisReport) {
         section("search", "06", "Границы поиска", "Что было исследовано и где сработали ограничения")
+        append("<p>Режим анализа: ").append(h(modeName(report.analysisMode))).append(".</p>")
+        append("<p>Рейтинг shortlist: ").append(h(rankingName(report.candidateRanking)))
+            .append(". Рейтинг задаёт порядок сценарных очередей; критерии поиска и бюджеты сохраняются.</p>")
         val search = report.result.diagnostics
         val candidates = report.candidates.diagnostics
         val stats = search.statistics
@@ -290,12 +304,50 @@ class HtmlReportRenderer : ReportRenderer {
         append("<div class=\"caps\">")
         cap("01", "Колонки до генерации пар", "${candidates.columnLimitPerQueryTable} на (SQL, таблица)")
         cap("02", "Локальные кандидаты", "${candidates.localCandidateLimit} на (SQL, таблица)")
-        cap("03", "Общий shortlist", "${candidates.shortlistedCandidates} / ${candidates.globalCandidateLimit}")
+        cap("03", "Общий shortlist", "${candidates.fixedPoolSelection?.admissibleCandidates ?: candidates.preparation?.finalShortlistedCandidates ?: candidates.shortlistedCandidates} / ${candidates.globalCandidateLimit}")
         append("</div>")
-        table(listOf("SQL / таблица", "Колонки: найдено → оставлено", "Перечислено", "После дедупликации", "Оставлено локально")) {
+        append("<dl class=\"values\">")
+        entry("Исходный shortlist", number(candidates.initialShortlistedCandidates))
+        entry("Кандидаты в резерве", "${number(candidates.reserveCandidates)} / ${number(candidates.reserveCandidateLimit)}")
+        append("</dl>")
+        if (candidates.preparationScope == CandidatePreparationScope.COMMON_POOL) {
+            append("<p>Статистика подготовки относится к общему пулу при максимальном бюджете.</p>")
+        }
+        candidates.fixedPoolSelection?.let { point ->
+            table(listOf("Текущая бюджетная точка", "Факт")) {
+                row("Кандидаты общего пула", number(point.poolCandidates))
+                row("Допустимы для текущей точки", number(point.admissibleCandidates))
+                row("Бюджетные отказы текущей точки", number(point.budgetRejectedCandidates))
+                row("Попытки оценки размера текущей точки", number(point.sizeAttempts))
+            }
+        }
+        candidates.preparation?.let { preparation ->
+            table(listOf(if (candidates.preparationScope == CandidatePreparationScope.COMMON_POOL) "Общая подготовка пула" else "Подготовка кандидатов", "Факт", "Лимит")) {
+                row("Рассмотрено кандидатов", number(preparation.examinedCandidates),
+                    number(candidates.initialShortlistedCandidates + candidates.reserveCandidates))
+                row("Попытки оценки размера, включая ошибки", number(preparation.sizeAttempts), number(candidates.maxSizeAttempts))
+                row("Бюджетные отказы", number(preparation.budgetRejectedCandidates), "Не задан")
+                row("Ошибки отдельных кандидатов", number(preparation.candidateErrors), "Не задан")
+                row("Пополнено из резерва", number(preparation.refilledCandidates), "Не задан")
+                row("Итоговый shortlist", number(preparation.finalShortlistedCandidates), number(candidates.globalCandidateLimit))
+            }
+            val reason = when (preparation.stopReason) {
+                CandidatePreparationStopReason.SHORTLIST_FULL -> "Shortlist заполнен"
+                CandidatePreparationStopReason.RESERVE_EXHAUSTED -> "Резерв исчерпан"
+                CandidatePreparationStopReason.SIZE_LIMIT -> "Достигнут лимит оценок размера"
+                CandidatePreparationStopReason.DEADLINE_EXCEEDED -> "Исчерпан бюджет времени"
+                CandidatePreparationStopReason.CANCELLED -> "Анализ отменён"
+                CandidatePreparationStopReason.CONNECTION_LOST -> "Потеряно соединение с БД"
+                CandidatePreparationStopReason.FAILED -> "Ошибка подготовки"
+            }
+            append("<p>Остановка подготовки: ").append(h(reason)).append(" (")
+                .append(h(preparation.stopReason.name)).append(").</p>")
+        } ?: append("<p class=\"muted\">Диагностика подготовки кандидатов не сохранена.</p>")
+        table(listOf("SQL / таблица", "Колонки: найдено → оставлено", "Перечислено", "После дедупликации", "Оставлено локально", "INCLUDE: перечислено → оставлено")) {
             candidates.localScopes.forEach { scope ->
                 row("${scope.queryId} / ${tableName(scope.table)}", "${scope.discoveredColumns} → ${scope.retainedColumns}",
-                    number(scope.enumeratedDefinitions), number(scope.deduplicatedDefinitions), number(scope.retainedDefinitions))
+                    number(scope.enumeratedDefinitions), number(scope.deduplicatedDefinitions), number(scope.retainedDefinitions),
+                    "${scope.enumeratedIncludeDefinitions} → ${scope.retainedIncludeDefinitions}")
             }
         }
         if (candidates.localScopes.isEmpty()) append("<p class=\"muted\">Подробные локальные счётчики не сохранены.</p>")
@@ -326,10 +378,12 @@ class HtmlReportRenderer : ReportRenderer {
             }
         }
         append("</details><details><summary>Все сохранённые кандидаты и оценки</summary>")
-        table(listOf("ID / определение", "Оценка, байт и MiB", "С запасом, байт и MiB", "Write units/час", "Источники SQL")) {
+        table(listOf("ID / определение", "Оценка, байт и MiB", "С запасом, байт и MiB", "Write units/час", "Источники SQL", "Ветви условий")) {
             report.candidates.candidates.forEach { candidate ->
                 row("${candidate.id} / ${definition(candidate)}", storageSize(candidate.estimatedBytes), storageSize(candidate.budgetedBytes),
-                    number(candidate.writeUnitsPerHour), candidate.sourceQueryIds.sorted().joinToString())
+                    number(candidate.writeUnitsPerHour), candidate.sourceQueryIds.sorted().joinToString(),
+                    candidate.sourceBranches.sortedWith(compareBy({ it.queryId }, { it.conditionPath }))
+                        .joinToString { "${it.queryId}: ${it.conditionPath}" }.ifEmpty { "Нет OR-происхождения" })
             }
         }
         append("</details>")
@@ -350,6 +404,8 @@ class HtmlReportRenderer : ReportRenderer {
         entry("SHA-256 входа", report.inputHash ?: "Нет данных")
         entry("Schema / spec", "${report.schemaVersion} / ${report.specVersion}")
         entry("Статус", report.result.status.name.lowercase(Locale.ROOT))
+        entry("Режим анализа", modeName(report.analysisMode))
+        entry("Рейтинг shortlist", rankingName(report.candidateRanking))
         entry("Причины остановки", report.result.diagnostics.stopReasons.joinToString { it.name }.ifEmpty { "Нет данных" })
         entry("Завершённые этапы", report.result.diagnostics.completedPhases.joinToString(" → ") { it.name.lowercase(Locale.ROOT) }.ifEmpty { "Нет завершённых этапов" })
         entry("Приложение", report.environment.applicationVersion)
@@ -405,6 +461,17 @@ class HtmlReportRenderer : ReportRenderer {
     private fun StringBuilder.pre(value: String) { append("<pre><code>").append(h(value)).append("</code></pre>") }
     private fun StringBuilder.text(value: String) { append(h(value)) }
 
+    private fun rankingName(ranking: CandidateRanking): String = ranking.wireName + " · " + when (ranking) {
+        CandidateRanking.FREQUENCY -> "Нормированные частоты"
+        CandidateRanking.BASELINE_COST -> "Частоты × baseline cost · экспериментальный"
+    }
+
+    private fun modeName(mode: AnalysisMode): String = mode.name.lowercase(Locale.ROOT) + " · " + when (mode) {
+        AnalysisMode.FAST -> "Быстрый"
+        AnalysisMode.NORMAL -> "Обычный"
+        AnalysisMode.DEEP -> "Глубокий"
+    }
+
     private fun number(value: Number?): String {
         if (value == null) return "Нет данных"
         val symbols = DecimalFormatSymbols(Locale.ROOT).apply { groupingSeparator = '\u202f'; decimalSeparator = ',' }
@@ -438,7 +505,8 @@ class HtmlReportRenderer : ReportRenderer {
             candidate.definition.keys.joinToString { key ->
                 "${key.column.name} ${key.direction.name} NULLS ${key.nulls.name}" +
                     (key.collation?.let { " COLLATE $it" } ?: "") + (key.operatorClass?.let { " $it" } ?: "")
-            } + ")"
+            } + ")" + candidate.definition.includedColumns.takeIf { it.isNotEmpty() }
+                ?.joinToString(", ", " INCLUDE (", ")") { it.name }.orEmpty()
     private fun detailsText(details: Map<String, String>) = details.toSortedMap().entries.joinToString("\n") { "${it.key}: ${it.value}" }.ifEmpty { "Нет данных" }
 
     private fun h(value: Any): String = buildString {
@@ -471,9 +539,13 @@ class HtmlReportRenderer : ReportRenderer {
 
     private fun candidateReason(reason: CandidateReason): String = when (reason) {
         CandidateReason.EXACT_EXISTING_DUPLICATE -> "Точный реальный дубль"
+        CandidateReason.NO_BTREE_OPERATOR_CLASS -> "Нет подходящего B-tree opclass"
         CandidateReason.COLUMN_SHORTLIST_TRUNCATED -> "Отсечение колонок"
+        CandidateReason.INCLUDE_PAYLOAD_LIMIT -> "Лимит INCLUDE-колонок"
+        CandidateReason.INCLUDE_VARIANT_LIMIT -> "Лимит INCLUDE-вариантов"
         CandidateReason.LOCAL_CANDIDATE_LIMIT -> "Локальный лимит"
         CandidateReason.GLOBAL_CANDIDATE_LIMIT -> "Общий лимит"
+        CandidateReason.ZERO_BASELINE_COST_SUPPORT -> "Нулевой вклад baseline cost"
         CandidateReason.STORAGE_BUDGET -> "Превышение бюджета места"
         CandidateReason.WRITE_BUDGET -> "Превышение бюджета записи"
         CandidateReason.MAX_INDEXES -> "Достигнут лимит индексов"
