@@ -132,6 +132,8 @@ data class AnalysisReport(
     val normalizedProfileWeights: Map<String, Double> = emptyMap(),
     val queryComparisons: List<QueryCostComparison> = emptyList(),
     val incumbentsCoincide: Boolean? = null,
+    val manualComparison: ManualComparison? = null,
+
     /** Effective mode after CLI override; available even when the input could not be retained. */
     val analysisMode: AnalysisMode = AnalysisMode.NORMAL,
     /** Effective shortlist strategy, including baseline-only and interrupted runs. */

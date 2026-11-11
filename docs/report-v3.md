@@ -207,3 +207,11 @@ JSON и HTML получают один `AnalysisReport`; SQL содержит т
 В `candidate_diagnostics.local_scopes` обязательны `enumerated_include_definitions` и `retained_include_definitions` (целые, включая ноль). Отсечения INCLUDE имеют причины `INCLUDE_PAYLOAD_LIMIT` / `INCLUDE_VARIANT_LIMIT` с `excluded_variants` и `limit`; локальный cap содержит также `include_before`, `include_after`, `include_limit`. Глобальный cap относится ко всем кандидатам независимо от payload.
 
 Карточки и список кандидатов показывают INCLUDE, исходный и бюджетный размер и write units. Возможность index-only scan не обещает отсутствие обращений к таблице. SQL-экспорт использует общий DDL renderer, включая payload.
+
+## Ручное сравнение (#77)
+
+Необязательные `manual_requested_indexes` и `manual_comparison` описывают отдельную
+ручную оценку вне автоматического shortlist; без неё оба поля равны `null`.
+Статусы, определения, полные costs/метрики, бюджетные нарушения и диагностика описаны
+в [контракте ручного сравнения](manual-index-comparison.md#отчёт). Эти данные не меняют
+`best_robust`, `best_mean`, `selected`, `price_of_robustness` и автоматический SQL.

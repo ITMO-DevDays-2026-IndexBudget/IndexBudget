@@ -1,6 +1,7 @@
 package ru.itmo.indexbudget.application
 
 import org.springframework.stereotype.Component
+import ru.itmo.indexbudget.domain.*
 import ru.itmo.indexbudget.domain.AnalysisError
 import ru.itmo.indexbudget.domain.AnalysisException
 import ru.itmo.indexbudget.domain.AnalysisMode
@@ -57,7 +58,7 @@ class WorkloadReader {
         }
         objectNode(root, Location("workload"), setOf(
             "schema_version", "objective", "queries", "profiles", "constraints", "table_write_rates", "analysis_mode",
-            "candidate_ranking",
+            "candidate_ranking", "manual_indexes",
         ))
         val requestedMode = when (val value = root.get("analysis_mode")) {
             null -> AnalysisMode.NORMAL
@@ -95,6 +96,7 @@ class WorkloadReader {
         ProfileWeights.normalize(profiles)
         context?.checkDeadline()
         val writeRates = writeRates(root.get("table_write_rates"))
+        val manual = manualIndexes(root.get("manual_indexes"))
         if (constraints.writeBudgetUnitsPerHour != null && writeRates == null) {
             invalid(Location("table_write_rates"), "An enabled write budget requires a complete write profile.",
                 ErrorCode.INVALID_WRITE_PROFILE)
@@ -108,8 +110,37 @@ class WorkloadReader {
             context.checkDeadline()
             context.recordInputHash(HexFormat.of().formatHex(digest))
         }
-        return WorkloadInput(queries, profiles, constraints, objective = objective, tableWriteRates = writeRates,
+        return WorkloadInput(queries, profiles, constraints, objective = objective, tableWriteRates = writeRates, manualIndexes = manual,
             analysisMode = analysisMode, candidateRanking = candidateRankingOverride ?: requestedRanking)
+    }
+
+    private fun manualIndexes(node: JsonNode?): List<IndexDefinition>? {
+        if (node == null) return null
+        val location = Location("manual_indexes")
+        return array(node, location, 5).mapIndexed { index, value ->
+            val at = location.child(index.toString())
+            objectNode(value, at, setOf("schema", "table", "keys"))
+            val table = TableRef(identifier(value.get("schema"), at.child("schema")), identifier(value.get("table"), at.child("table")))
+            val keys = array(value.get("keys"), at.child("keys"), 2).mapIndexed { position, key ->
+                val keyAt = at.child("keys").child(position.toString())
+                objectNode(key, keyAt, setOf("column", "direction", "nulls"))
+                val column = identifier(key.get("column"), keyAt.child("column"))
+                val direction = when (key.get("direction")?.let { string(it, keyAt.child("direction")) } ?: "asc") {
+                    "asc" -> SortDirection.ASC
+                    "desc" -> SortDirection.DESC
+                    else -> invalid(keyAt.child("direction"), "Expected asc or desc.")
+                }
+                val nulls = when (key.get("nulls")?.let { string(it, keyAt.child("nulls")) }) {
+                    null -> if (direction == SortDirection.DESC) NullsOrder.FIRST else NullsOrder.LAST
+                    "first" -> NullsOrder.FIRST
+                    "last" -> NullsOrder.LAST
+                    else -> invalid(keyAt.child("nulls"), "Expected first or last.")
+                }
+                IndexKey(ColumnRef(table, column), direction, nulls)
+            }
+            if (keys.map { it.column }.distinct().size != keys.size) invalid(at, "Repeated index key.")
+            IndexDefinition(table, keys)
+        }
     }
 
     /** Sort JSON objects only: array order, string values and absent fields retain their meaning. */
@@ -271,10 +302,16 @@ class WorkloadReader {
         return node.toList()
     }
 
-    private fun string(node: JsonNode?, location: Location): String {
+    private fun identifier(node: JsonNode?, location: Location): String {
+        val value = string(node, location, allowBlank = true)
+        if (value.isEmpty() || '\u0000' in value) invalid(location, "Expected a nonempty identifier without NUL.")
+        return value
+    }
+
+    private fun string(node: JsonNode?, location: Location, allowBlank: Boolean = false): String {
         if (node == null || !node.isString) invalid(location, "Expected a nonblank string.")
         val value = node.stringValue()
-        if (value.isBlank()) invalid(location, "Expected a nonblank string.")
+        if (!allowBlank && value.isBlank()) invalid(location, "Expected a nonblank string.")
         try {
             Charsets.UTF_8.newEncoder().onMalformedInput(CodingErrorAction.REPORT)
                 .encode(java.nio.CharBuffer.wrap(value))

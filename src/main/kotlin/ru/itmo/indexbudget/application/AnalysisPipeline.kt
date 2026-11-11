@@ -1,5 +1,6 @@
 package ru.itmo.indexbudget.application
 
+import ru.itmo.indexbudget.comparison.ManualIndexEvaluator
 import ru.itmo.indexbudget.candidates.CandidateGenerator
 import ru.itmo.indexbudget.domain.*
 import ru.itmo.indexbudget.optimizer.Optimizer
@@ -42,6 +43,8 @@ class AnalysisPipeline(
         context: RunContext,
         fixedPool: PreparedCandidatePool?,
     ): SearchResult {
+        var manual: ManualComparison? = input.manualIndexes?.let { ManualComparison(ManualComparisonStatus.NOT_EVALUATED) }
+        val manualEvaluator = ManualIndexEvaluator()
         var baseline: EvaluationResult? = null
         var checkpoint: SearchCheckpoint? = null
         var candidateBatch = CandidateBatch(emptyList())
@@ -80,6 +83,7 @@ class AnalysisPipeline(
                 "Resolution must preserve original SQL"
             }
             resolvedValidator.validate(resolved, context)
+            input.manualIndexes?.let { manual = manualEvaluator.prepare(it, catalog, resolved, context) }
             context.completePhase()
 
             context.startSearch()
@@ -149,6 +153,10 @@ class AnalysisPipeline(
                     if (result.status == RunStatus.COMPLETED) context.checkDeadline()
                 }
             }
+            if (manual != null && result.status != RunStatus.FAILED) {
+                manual = manualEvaluator.evaluate(checkNotNull(manual), resolved, evaluatedBaseline,
+                    session, metrics, context) { manual = it }
+            }
         } catch (error: AnalysisException) {
             failure = error.error
             // The adapter preserves the primary failure and attaches safe typed cleanup failures.
@@ -185,7 +193,8 @@ class AnalysisPipeline(
         // Neither report port can access the closed session. This path also accepts an expired run.
         context.enterReport()
         try {
-            val report = reportBuilder.build(input, candidateBatch, finalResult, context)
+            val builtReport = reportBuilder.build(input, candidateBatch, finalResult, context)
+            val report = if (manual == null) builtReport else builtReport.copy(manualComparison = manual)
             require(report.runId == context.runId && report.inputHash == context.inputHash &&
                 report.analysisMode == context.analysisMode &&
                 report.candidateRanking == input.candidateRanking &&

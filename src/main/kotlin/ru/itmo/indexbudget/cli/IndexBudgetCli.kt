@@ -193,6 +193,7 @@ class IndexBudgetCli(
               indexbudget stats --help
 
             Validates JSON v2, shared queries, frequency profiles and budgets.
+            Optional manual_indexes: 1–5 structured B-tree definitions, evaluated separately after search.
             Use a new or empty output directory for each run.
             Runs SQL resolution, bounded shortlist, HypoPG, greedy + repair and HTML/JSON/SQL export.
             Requires a prepared PostgreSQL database with HypoPG; analysis creates no physical indexes.
