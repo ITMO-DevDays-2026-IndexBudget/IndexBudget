@@ -143,6 +143,31 @@ class IncludeCandidatesTest {
         assertTrue(batch.diagnostics.localScopes.all { it.enumeratedIncludeDefinitions == 0 })
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = ["a IN (1, 2, NULL)", "a BETWEEN 1 AND 2", "a IS NULL", "a IS NOT NULL"])
+    fun `new predicates allow payload without Btree opclass while rejecting it as a key`(predicate: String) {
+        val sqlCatalog = catalog.copy(tables = catalog.tables.map { table -> table.copy(
+            columns = table.columns.map { if (it.name == "b") it.copy(defaultOperatorClass = null) else it },
+        ) }).withSqlSemantics()
+        val sql = "SELECT b FROM public.records WHERE $predicate AND b IS NULL"
+        val input = WorkloadInput(listOf(QueryInput("q", sql)),
+            listOf(Profile("p", 1.0, mapOf("q" to 1.0))), Constraints(1_000_000, null))
+        val context = RunContext()
+        val analyzer = JSqlParserSqlAnalyzer()
+        val resolved = analyzer.resolve(analyzer.parse(input, context), sqlCatalog, context)
+        val batch = ProfileAwareCandidateGenerator().generate(resolved, sqlCatalog, context)
+
+        assertEquals(sql, resolved.queries.single().sql)
+        val covering = batch.candidates.single { it.definition.includedColumns.isNotEmpty() }
+        assertEquals(listOf(col("a")), covering.definition.keys.map { it.column })
+        assertEquals(listOf(col("b")), covering.definition.includedColumns)
+        assertTrue(batch.candidates.all { candidate -> candidate.definition.keys.none { it.column == col("b") } })
+        assertTrue(batch.diagnostics.localScopes.single().unindexableVariants > 0)
+        assertEquals("b", batch.diagnostics.decisions.single {
+            it.reason == CandidateReason.NO_BTREE_OPERATOR_CLASS
+        }.details["column"])
+    }
+
     @Test
     fun `local and global caps count covering variants without changing key arity`() {
         val columns = listOf("a", "b", "c", "d").map(::col)

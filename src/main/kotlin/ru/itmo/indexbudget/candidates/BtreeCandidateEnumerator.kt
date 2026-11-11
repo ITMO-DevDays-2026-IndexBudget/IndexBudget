@@ -113,7 +113,7 @@ class BtreeCandidateEnumerator : CandidateEnumerator {
             context.checkDeadline()
             for (column in listOfNotNull(predicate.leftColumn, predicate.rightColumn)) {
                 val value = feature(column)
-                if (predicate.operator == ComparisonOperator.EQUAL) value.equality = true else value.range = true
+                if (predicate.operator.equalityFeature) value.equality = true else value.range = true
             }
         }
         for (order in query.orderBy) {

@@ -105,7 +105,7 @@ DDL формирует общий `PostgresDdlRenderer` из разрешённ�
 - `candidates_before_global_deduplication`, `candidates_after_global_deduplication`, `shortlisted_candidates`;
 - `ungenerated_definitions` — `null`, если точное число неизвестно;
 - `local_scopes`: `query_id`, `table`, `discovered_columns`, `retained_columns`, `enumerated_definitions`,
-  `deduplicated_definitions`, `retained_definitions`, `excluded_columns` (структуры `ColumnRef`),
+  `deduplicated_definitions`, `unindexable_variants`, `retained_definitions`, `excluded_columns` (структуры `ColumnRef`),
   `enumerated_include_definitions`, `retained_include_definitions`;
 - `decisions`, `warnings`.
 

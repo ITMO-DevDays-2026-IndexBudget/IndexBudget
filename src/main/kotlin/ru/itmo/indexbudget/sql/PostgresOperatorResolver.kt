@@ -25,22 +25,6 @@ internal class PostgresOperatorResolver(private val catalog: CatalogSnapshot, pr
         if (exact != null) return accept(exact)
 
         fun arguments(op: CatalogOperator) = listOf(op.leftTypeOid, op.rightTypeOid)
-        fun canCoerce(input: CatalogType?, target: Long): Boolean {
-            if (input == null || input.oid == target) return true
-            // PostgreSQL find_coercion_pathway unwraps domains before consulting pg_cast.
-            // Keep the declared operator types unchanged for exact-match ranking below.
-            val sourceType = baseType(input)
-            val targetType = baseType(types[target]
-                ?: fail(ErrorCode.CATALOG_ERROR, "Catalog is missing an operator argument type."))
-            if (sourceType.oid == targetType.oid || sourceType.oid to targetType.oid in casts) return true
-            return when (targetType.name) {
-                "anyarray", "anycompatiblearray" -> sourceType.category == "A"
-                "anyrange", "anycompatiblerange" -> sourceType.kind == "r"
-                "anymultirange", "anycompatiblemultirange" -> sourceType.kind == "m"
-                "anyenum" -> sourceType.kind == "e"
-                else -> false
-            }
-        }
         candidates = candidates.filter { op ->
             context.checkDeadline()
             arguments(op).zip(inputs).all { (target, input) -> canCoerce(input, target) }
@@ -75,6 +59,52 @@ internal class PostgresOperatorResolver(private val catalog: CatalogSnapshot, pr
         val chosen = candidates.singleOrNull()
             ?: fail(ErrorCode.UNSUPPORTED_SQL, "Comparison operator is missing or ambiguous in PostgreSQL.")
         accept(chosen)
+    }
+
+    /** PG16 transformAExprIn: multi-literal lists prefer a common scalar-array type. */
+    fun requireBuiltinIn(left: CatalogType, values: List<CatalogType?>) {
+        context.checkDeadline()
+        val common = if (values.size > 1) commonType(listOf(left) + values) else null
+        if (common != null && common.arrayTypeOid != 0L) {
+            val array = types[common.arrayTypeOid]
+                ?: fail(ErrorCode.CATALOG_ERROR, "Catalog is missing an IN array type.")
+            if (array.elementTypeOid != common.oid) fail(ErrorCode.CATALOG_ERROR, "IN array element type does not match.")
+            // PostgreSQL coerces RHS array elements, but resolves the operator with the original LHS type.
+            requireBuiltin("=", left, common)
+        } else {
+            for (value in values) {
+                context.checkDeadline()
+                requireBuiltin("=", left, value)
+            }
+        }
+    }
+
+    private fun commonType(inputs: List<CatalogType?>): CatalogType? {
+        val known = inputs.mapNotNull { context.checkDeadline(); it?.let(::baseType) }
+        var candidate = known.firstOrNull() ?: return null
+        for (type in known.drop(1)) {
+            context.checkDeadline()
+            if (candidate.category != type.category) return null
+            if (!candidate.preferred && canCoerce(candidate, type.oid) && !canCoerce(type, candidate.oid)) candidate = type
+        }
+        return candidate.takeIf { inputs.all { context.checkDeadline(); canCoerce(it, candidate.oid) } }
+    }
+
+    private fun canCoerce(input: CatalogType?, target: Long): Boolean {
+        context.checkDeadline()
+        if (input == null || input.oid == target) return true
+        // Domain unwrapping is shared with ordinary binary operator resolution.
+        val sourceType = baseType(input)
+        val targetType = baseType(types[target]
+            ?: fail(ErrorCode.CATALOG_ERROR, "Catalog is missing an operator argument type."))
+        if (sourceType.oid == targetType.oid || sourceType.oid to targetType.oid in casts) return true
+        return when (targetType.name) {
+            "anyarray", "anycompatiblearray" -> sourceType.category == "A"
+            "anyrange", "anycompatiblerange" -> sourceType.kind == "r"
+            "anymultirange", "anycompatiblemultirange" -> sourceType.kind == "m"
+            "anyenum" -> sourceType.kind == "e"
+            else -> false
+        }
     }
 
     private fun baseType(type: CatalogType): CatalogType {

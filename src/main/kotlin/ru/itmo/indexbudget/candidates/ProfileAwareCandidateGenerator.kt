@@ -38,9 +38,11 @@ class ProfileAwareCandidateGenerator(
                 enumeratedIncludeDefinitions = scope.variants.count { it.definition.includedColumns.isNotEmpty() },
                 retainedIncludeDefinitions = covering.size,
                 candidatesAfterExistingDeduplication = canonical.candidates.size,
+                unindexableVariants = canonical.unindexableVariants,
             )
             decisions += canonical.decisions
             warnings += scope.warnings
+            warnings += canonical.warnings
             if (canonical.candidates.size > local.size) {
                 val details = mapOf(
                     "schema" to scope.table.schema, "table" to scope.table.name,

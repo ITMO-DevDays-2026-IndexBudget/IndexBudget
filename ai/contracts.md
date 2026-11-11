@@ -27,7 +27,7 @@ indexbudget analyze --workload <path> --output-dir <path>
 
 При включённом write budget полный профиль записи обязателен. При выключенном его можно не передавать или передать целиком; частичный переданный профиль всё равно ошибочен. Неизвестная таблица и отсутствующий rate — ошибки. Без профиля write units равны `null`, а не нулю; при полном профиле рассчитываются даже без лимита. После resolution ключи профиля сверяются с точными физическими `schema.name`, с сохранением регистра и без разбора SQL-алиасов/кавычек. Неоднозначные ключи разных таблиц из-за точек в именах отклоняются.
 
-Лимиты до дорогой работы: JSON ≤ 1 MiB UTF-8, каждый SQL ≤ 64 KiB UTF-8; при проверке AST — ≤ 256 сравнений WHERE/JOIN. Превышение даёт `INPUT_LIMIT_EXCEEDED`; SQL не обрезается. Все суммы, произведения, costs и отношения проверяются на конечность. Underflow положительного нормированного веса или `B_mean = 0` при положительном `B_s` — численная ошибка.
+Лимиты до дорогой работы: JSON ≤ 1 MiB UTF-8, каждый SQL ≤ 64 KiB UTF-8; при проверке AST — ≤ 256 единиц сложности WHERE/JOIN (сравнение/null-test: 1, IN: каждый элемент, BETWEEN: 2). Превышение даёт `INPUT_LIMIT_EXCEEDED`; SQL не обрезается. Все суммы, произведения, costs и отношения проверяются на конечность. Underflow положительного нормированного веса или `B_mean = 0` при положительном `B_s` — численная ошибка.
 
 ## CatalogSnapshot и ResolvedWorkload
 
@@ -38,6 +38,13 @@ ResolvedWorkload сохраняет исходный текст и ID каждо
 JSqlParser AST и JDBC connection не должны становиться частью общего DTO для генератора/метрик/HTML. Поддержанный SQL и ошибки unsupported-конструкций определены разделом 3 спеки и задачами [#6](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/issues/6), [#8](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/issues/8), [#9](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/issues/9).
 
 ## IndexCandidate и ограниченный пул
+
+Расширение SQL #73 добавляет IN/BETWEEN/IS NULL/IS NOT NULL без изменения внешнего JSON v2.
+Каждый элемент IN расходует одну единицу общего лимита 256 WHERE/JOIN, BETWEEN — две,
+null-test — одну. Внутренний `ResolvedPredicate` сохраняет форму и `literalCount`, не разворачивая
+IN в AND; генератор различает equality-like (IN, IS NULL) и range-like (BETWEEN, IS NOT NULL).
+Каталог передаёт `CatalogType.arrayTypeOid` для выбора настоящей сигнатуры равенства IN.
+Подробный поднабор и ограничения — в [текущих контрактах](../docs/contracts.md#sql-resolution-89).
 
 ID определяется канонической структурой `schema, table, method, ordered keys, directions, nulls, collation, opclass, sorted included columns`, имя — стабильное `ib_<hash>`. Один renderer формирует DDL с полностью квалифицированной таблицей и экранированными идентификаторами для HypoPG и экспорта. OID HypoPG не является стабильным candidate ID.
 

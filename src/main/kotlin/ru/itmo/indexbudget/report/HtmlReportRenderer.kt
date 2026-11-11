@@ -441,6 +441,7 @@ class HtmlReportRenderer : ReportRenderer {
 
     private fun candidateReason(reason: CandidateReason): String = when (reason) {
         CandidateReason.EXACT_EXISTING_DUPLICATE -> "Точный реальный дубль"
+        CandidateReason.NO_BTREE_OPERATOR_CLASS -> "Нет подходящего B-tree opclass"
         CandidateReason.COLUMN_SHORTLIST_TRUNCATED -> "Отсечение колонок"
         CandidateReason.INCLUDE_PAYLOAD_LIMIT -> "Лимит INCLUDE-колонок"
         CandidateReason.INCLUDE_VARIANT_LIMIT -> "Лимит INCLUDE-вариантов"
