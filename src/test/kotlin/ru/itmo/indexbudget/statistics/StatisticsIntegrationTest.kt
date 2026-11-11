@@ -53,6 +53,25 @@ class StatisticsIntegrationTest {
         assertTrue(hidden.all { it.queryid == null && it.query == null && it.textStatus == QueryTextStatus.RESTRICTED })
     }
 
+    @Test fun `frequency calculator consumes actual collector snapshots without inventing an initial counter`() {
+        fun executeProbe(times: Int) = connection().use { connection -> connection.createStatement().use { statement ->
+            repeat(times) { statement.executeQuery("SELECT value FROM public.snapshot_probe WHERE value = 23").close() }
+        } }
+        executeProbe(1)
+        val collector = JdbcStatisticsCollector({ connection() })
+        val before = collector.collect(source, SnapshotLimits(), RunContext())
+        executeProbe(7)
+        val after = collector.collect(source, SnapshotLimits(), RunContext())
+        val profile = FrequencyCalculator().calculate(listOf(FrequencyWindow("observed", 1.0, before, after))).profiles.single()
+        val row = profile.observations.single { it.query?.startsWith("SELECT value FROM public.snapshot_probe") == true }
+        assertEquals(ObservationState.OBSERVED, row.state)
+        assertEquals(7L, row.deltaCalls)
+        val expected = 7.0 * 3600.0 / profile.period.durationSeconds
+        assertEquals(expected, requireNotNull(row.callsPerHour), expected * 1e-12)
+        assertTrue(requireNotNull(row.totalExecTimeMillis) >= 0.0)
+        assertEquals(0L, row.deltaRows)
+    }
+
     @Test fun `restricted entries stay restricted with a one byte text cap`() {
         connection().use { c -> c.createStatement().use { it.executeQuery("SELECT count(*) FROM public.snapshot_probe").close() } }
         val result = JdbcStatisticsCollector({ connection("stats_reader") }).collect(source,
