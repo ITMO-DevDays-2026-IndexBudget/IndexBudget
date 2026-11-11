@@ -40,6 +40,8 @@ class WorkloadProvenanceTest {
     @Test
     fun `provenance survives mode and candidate ranking selection and CLI overrides in the shared report`() {
         val source = example().put("analysis_mode", "fast").put("candidate_ranking", "baseline_cost")
+        val manualSource = mapper.readTree(Files.readString(Path.of("examples/workload-v2-manual.json")))
+        source.set("manual_indexes", manualSource["manual_indexes"])
         val path = directory.resolve("workload.json")
         Files.writeString(path, mapper.writeValueAsString(source))
         assertEquals(CandidateRanking.BASELINE_COST, reader.read(path).candidateRanking)
@@ -50,11 +52,13 @@ class WorkloadProvenanceTest {
         assertEquals(AnalysisMode.DEEP, context.analysisMode)
         assertEquals(CandidateRanking.FREQUENCY, input.candidateRanking)
         assertNotNull(input.provenance)
+        assertEquals(reader.read(Path.of("examples/workload-v2-manual.json")).manualIndexes, input.manualIndexes)
         val report = DefaultReportBuilder().build(input, ContractFixtures.report().candidates,
             ContractFixtures.completedResult(), context)
         val output = mapper.readTree(JsonReportWriter().render(report))
         assertEquals("deep", output["analysis_mode"].stringValue())
         assertEquals("frequency", output["candidate_ranking"].stringValue())
+        assertEquals(requireNotNull(input.manualIndexes).size, output["manual_requested_indexes"].size())
         assertEquals(input.provenance?.sourceId.toString(), output["workload_provenance"]["source_id"].stringValue())
         assertEquals(50.0, output["summary"]["mean_effect"]["gain_percent"].doubleValue())
     }

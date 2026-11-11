@@ -1,5 +1,9 @@
 # Контракты компонентов v0.2
 
+Расчёт частот по выходу коллектора #65: `FrequencyCalculator.calculate` принимает
+1–3 `FrequencyWindow`, возвращает частоты и диагностический manifest для #67.
+[Ключи, периоды, политика неполноты и формат profiles v1](statistics-frequencies.md).
+
 Модели и интерфейсы задают стыки совместной реализации [#3](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/issues/3) и [#14](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/issues/14). Источник поведения — [спецификация v0.2](../IndexBudget-spec-v0.2.md). Реализованы валидация JSON v2, orchestration, AST-валидация и разрешение SQL, JDBC-каталог, сессия HypoPG, полный ограниченный генератор кандидатов, профильные метрики, расчёт бюджетов, компаратор, проверка допустимости после оценки, жадный поиск и ограниченный repair с кэшем одного запуска. Реализованы сборка отчёта v3 и согласованный экспорт JSON/SQL; для реального запуска ещё нужен HTML-renderer (#20). Проверки orchestration используют подставные реализации недостающих интерфейсов.
 
 Проект пока собирается одним Gradle-модулем. Пакеты `cli`, `application`, `domain`, `sql`, `candidates`, `optimizer`, `postgres` и `report` обозначают границы ответственности. Доменные модели и интерфейсы расчётов не зависят от Spring, JDBC, Jackson и JSqlParser AST.
@@ -605,6 +609,16 @@ EXPLAIN, deadline без нового cleanup SQL, rollback, повтор пос
 `bash demo/check-hypopg.sh` создаёт отдельный контейнер; CI job `postgres-hypopg-integration`
 использует тот же runner. Unit tests отдельно проверяют повреждённый JSON, численные ошибки,
 счётчики и безопасную диагностику; они не заменяют интеграцию с PostgreSQL.
+
+## Ручной набор (план #64)
+
+`WorkloadInput.manualIndexes` — необязательные 1–5 структурированных B-tree определений.
+`ManualIndexEvaluator.prepare` разрешает их по общему каталогу и canonicalizer до baseline;
+`evaluate` после поиска использует ту же AnalysisSession, MetricsCalculator и RunContext.
+`AnalysisReport.manualComparison` передаётся экспортёрам отдельно от SearchResult;
+он не становится incumbent и не входит в автоматический shortlist/SQL.
+Строгий JSON-вход, бюджетные отказы и выходные поля описаны в
+[manual-index-comparison.md](manual-index-comparison.md).
 
 ## Снимки pg_stat_statements (план #64)
 

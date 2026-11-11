@@ -318,3 +318,11 @@ HTML экранирует описание отбора и IDs; историче
 `zero-baseline`, `regression`, `partial`, `failed`, без обращения к БД. Фикстуры, меняющие
 результат или workload, пересобирают производные данные через `DefaultReportBuilder`;
 согласованность `queries`, `query_effects` и сохранённых оценок проверяется для всех вариантов.
+
+## Ручное сравнение (#77)
+
+Необязательные `manual_requested_indexes` и `manual_comparison` описывают отдельную
+ручную оценку вне автоматического shortlist; без неё оба поля равны `null`.
+Статусы, определения, полные costs/метрики, бюджетные нарушения и диагностика описаны
+в [контракте ручного сравнения](manual-index-comparison.md#отчёт). Эти данные не меняют
+`best_robust`, `best_mean`, `selected`, `price_of_robustness` и автоматический SQL.

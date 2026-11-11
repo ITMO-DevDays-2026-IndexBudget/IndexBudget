@@ -581,6 +581,8 @@
     "budgeted_bytes" : 629146,
     "write_units_per_hour" : 8200.0
   } ],
+  "manual_requested_indexes" : null,
+  "manual_comparison" : null,
   "candidate_diagnostics" : {
     "column_limit_per_query_table" : 16,
     "local_candidate_limit" : 32,
