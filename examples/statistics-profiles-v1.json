@@ -1,0 +1,67 @@
+{
+  "schema_version" : 1,
+  "kind" : "pg_stat_statements_profiles",
+  "source" : {
+    "source_id" : "d0d60c19-eb9d-42ee-9e01-935560eb7e20",
+    "database_oid" : 42,
+    "reader_userid" : 10,
+    "all_query_texts_visible" : true,
+    "postgres_version" : "16.15",
+    "extension_version" : "1.10",
+    "track" : "top"
+  },
+  "time_basis" : "capture_midpoints",
+  "incomplete_policy" : "matched_stable_counters_only",
+  "limitations" : [ "non_atomic_captures", "pg16_targeted_reset_may_be_undetectable", "historical_time_is_not_predicted_latency" ],
+  "common_usable_keys" : [ {
+    "source_id" : "d0d60c19-eb9d-42ee-9e01-935560eb7e20",
+    "dbid" : 42,
+    "userid" : 10,
+    "queryid" : "1",
+    "toplevel" : true
+  } ],
+  "profiles" : [ {
+    "id" : "day",
+    "weight" : 1.0,
+    "normalized_weight" : 1.0,
+    "before_snapshot_id" : "569bd7b2-be04-3c6d-8640-eae65135d85d",
+    "after_snapshot_id" : "871d748a-e2d5-3a58-a2a8-12f818fd24f2",
+    "status" : "completed",
+    "period" : {
+      "before_started_at" : "2026-11-11T00:00:00Z",
+      "before_finished_at" : "2026-11-11T00:00:02Z",
+      "after_started_at" : "2026-11-11T00:01:00Z",
+      "after_finished_at" : "2026-11-11T00:01:02Z",
+      "start" : "2026-11-11T00:00:01Z",
+      "end" : "2026-11-11T00:01:01Z",
+      "duration_seconds" : 60.0,
+      "minimum_duration_seconds" : 58.0,
+      "maximum_duration_seconds" : 62.0
+    },
+    "reasons" : [ ],
+    "before_reasons" : [ ],
+    "after_reasons" : [ ],
+    "unidentified_before" : 0,
+    "unidentified_after" : 0,
+    "observed_calls_per_hour" : 3600.0,
+    "observed_total_exec_time_ms" : 90.0,
+    "observations" : [ {
+      "key" : {
+        "source_id" : "d0d60c19-eb9d-42ee-9e01-935560eb7e20",
+        "dbid" : 42,
+        "userid" : 10,
+        "queryid" : "1",
+        "toplevel" : true
+      },
+      "state" : "OBSERVED",
+      "query" : "SELECT id FROM records WHERE id = $1",
+      "text_status" : "AVAILABLE",
+      "delta_calls" : "60",
+      "calls_per_hour" : 3600.0,
+      "delta_rows" : "120",
+      "total_exec_time_ms" : 90.0,
+      "mean_exec_time_ms" : 1.5,
+      "reasons" : [ ]
+    } ]
+  } ]
+}
