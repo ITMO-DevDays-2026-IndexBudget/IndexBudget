@@ -258,8 +258,34 @@ class HtmlReportRenderer : ReportRenderer {
         append("<div class=\"caps\">")
         cap("01", "Колонки до генерации пар", "${candidates.columnLimitPerQueryTable} на (SQL, таблица)")
         cap("02", "Локальные кандидаты", "${candidates.localCandidateLimit} на (SQL, таблица)")
-        cap("03", "Общий shortlist", "${candidates.shortlistedCandidates} / ${candidates.globalCandidateLimit}")
+        cap("03", "Общий shortlist", "${candidates.preparation?.finalShortlistedCandidates ?: candidates.shortlistedCandidates} / ${candidates.globalCandidateLimit}")
         append("</div>")
+        append("<dl class=\"values\">")
+        entry("Исходный shortlist", number(candidates.initialShortlistedCandidates))
+        entry("Кандидаты в резерве", "${number(candidates.reserveCandidates)} / ${number(candidates.reserveCandidateLimit)}")
+        append("</dl>")
+        candidates.preparation?.let { preparation ->
+            table(listOf("Подготовка кандидатов", "Факт", "Лимит")) {
+                row("Рассмотрено кандидатов", number(preparation.examinedCandidates),
+                    number(candidates.initialShortlistedCandidates + candidates.reserveCandidates))
+                row("Попытки оценки размера, включая ошибки", number(preparation.sizeAttempts), number(candidates.maxSizeAttempts))
+                row("Бюджетные отказы", number(preparation.budgetRejectedCandidates), "Не задан")
+                row("Ошибки отдельных кандидатов", number(preparation.candidateErrors), "Не задан")
+                row("Пополнено из резерва", number(preparation.refilledCandidates), "Не задан")
+                row("Итоговый shortlist", number(preparation.finalShortlistedCandidates), number(candidates.globalCandidateLimit))
+            }
+            val reason = when (preparation.stopReason) {
+                CandidatePreparationStopReason.SHORTLIST_FULL -> "Shortlist заполнен"
+                CandidatePreparationStopReason.RESERVE_EXHAUSTED -> "Резерв исчерпан"
+                CandidatePreparationStopReason.SIZE_LIMIT -> "Достигнут лимит оценок размера"
+                CandidatePreparationStopReason.DEADLINE_EXCEEDED -> "Исчерпан бюджет времени"
+                CandidatePreparationStopReason.CANCELLED -> "Анализ отменён"
+                CandidatePreparationStopReason.CONNECTION_LOST -> "Потеряно соединение с БД"
+                CandidatePreparationStopReason.FAILED -> "Ошибка подготовки"
+            }
+            append("<p>Остановка подготовки: ").append(h(reason)).append(" (")
+                .append(h(preparation.stopReason.name)).append(").</p>")
+        } ?: append("<p class=\"muted\">Диагностика подготовки кандидатов не сохранена.</p>")
         table(listOf("SQL / таблица", "Колонки: найдено → оставлено", "Перечислено", "После дедупликации", "Оставлено локально", "INCLUDE: перечислено → оставлено")) {
             candidates.localScopes.forEach { scope ->
                 row("${scope.queryId} / ${tableName(scope.table)}", "${scope.discoveredColumns} → ${scope.retainedColumns}",

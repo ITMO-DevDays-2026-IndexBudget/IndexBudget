@@ -12,7 +12,7 @@ enum class GenerationReason(val pairPriority: Int? = null) {
 /** Shared local/global pair ordering; all generation reasons remain available as provenance. */
 fun IndexCandidate.bestPairPriority(): Int? = generationReasons.mapNotNull { it.pairPriority }.minOrNull()
 
-/** Unknown estimates stay null. The PostgreSQL adapter fills sizes only for the final shortlist. */
+/** Unknown estimates stay null, including unvisited reserve entries and rejected candidates. */
 data class IndexCandidate(
     val id: String,
     val definition: IndexDefinition,
@@ -79,9 +79,35 @@ data class CandidateDiagnostics(
     val ungeneratedDefinitions: Long? = null,
     val decisions: List<CandidateDecision> = emptyList(),
     val warnings: List<AnalysisWarning> = emptyList(),
+    val initialShortlistedCandidates: Int = 0,
+    val reserveCandidates: Int = 0,
+    val reserveCandidateLimit: Int = CandidatePreparationLimits.RESERVE,
+    val maxSizeAttempts: Int = CandidatePreparationLimits.SIZE_ATTEMPTS,
+    val preparation: CandidatePreparationStatistics? = null,
 )
 
 data class CandidateBatch(
     val candidates: List<IndexCandidate>,
     val diagnostics: CandidateDiagnostics = CandidateDiagnostics(),
+    val reserve: List<IndexCandidate> = emptyList(),
+)
+
+object CandidatePreparationLimits {
+    const val SHORTLIST = 16
+    const val RESERVE = 48
+    const val SIZE_ATTEMPTS = 32
+}
+
+enum class CandidatePreparationStopReason {
+    SHORTLIST_FULL, RESERVE_EXHAUSTED, SIZE_LIMIT, DEADLINE_EXCEEDED, CANCELLED, CONNECTION_LOST, FAILED,
+}
+
+data class CandidatePreparationStatistics(
+    val examinedCandidates: Int = 0,
+    val sizeAttempts: Int = 0,
+    val budgetRejectedCandidates: Int = 0,
+    val candidateErrors: Int = 0,
+    val refilledCandidates: Int = 0,
+    val finalShortlistedCandidates: Int = 0,
+    val stopReason: CandidatePreparationStopReason,
 )

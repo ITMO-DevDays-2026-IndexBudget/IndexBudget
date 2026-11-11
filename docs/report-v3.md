@@ -102,12 +102,41 @@ DDL формирует общий `PostgresDdlRenderer` из разрешённ�
 `candidate_diagnostics` содержит:
 
 - `column_limit_per_query_table`, `local_candidate_limit`, `global_candidate_limit` (16/32/16);
-- `candidates_before_global_deduplication`, `candidates_after_global_deduplication`, `shortlisted_candidates`;
+- `candidates_before_global_deduplication`, `candidates_after_global_deduplication`;
+- `initial_shortlisted_candidates` — число начальных кандидатов до проверки бюджетов, не более 16;
+- `reserve_candidates`, `reserve_candidate_limit` — фактический резерв и его предел 48;
+- `max_size_attempts` — предел 32 вызовов оценки размера, включая ошибки;
+- `shortlisted_candidates` — прежнее число первоначально отобранных кандидатов, равное `initial_shortlisted_candidates`;
+- `preparation` — статистика подготовки, описанная ниже, либо `null`, если стадия не выполнялась;
 - `ungenerated_definitions` — `null`, если точное число неизвестно;
 - `local_scopes`: `query_id`, `table`, `discovered_columns`, `retained_columns`, `enumerated_definitions`,
   `deduplicated_definitions`, `unindexable_variants`, `retained_definitions`, `excluded_columns` (структуры `ColumnRef`),
   `enumerated_include_definitions`, `retained_include_definitions`;
 - `decisions`, `warnings`.
+
+`preparation` содержит:
+
+| Поле | Смысл |
+| --- | --- |
+| `examined_candidates` | Рассмотренные записи начального списка и резерва, включая ранние отказы |
+| `size_attempts` | Фактически начатые вызовы `estimateSize`, включая ошибочные |
+| `budget_rejected_candidates` | Кандидаты, отклонённые индивидуальными бюджетами |
+| `candidate_errors` | Локальные ошибки гипотез; потеря сессии и deadline сюда не входят |
+| `refilled_candidates` | Допустимые кандидаты из резерва, включённые в финальный shortlist |
+| `final_shortlisted_candidates` | Число подготовленных допустимых кандидатов |
+| `stop_reason` | `SHORTLIST_FULL`, `RESERVE_EXHAUSTED`, `SIZE_LIMIT`, `DEADLINE_EXCEEDED`, `CANCELLED`, `CONNECTION_LOST` либо `FAILED` |
+
+Начальный список и резерв образуют одну детерминированную очередь до 64 записей. В `candidates`
+сохраняются все записи этой очереди, в том числе бюджетные отказы, ошибки и непроверенный остаток;
+размеры не получавших оценку кандидатов остаются `null`. Поиск получает только допустимый финальный
+список до 16. Отказ по write budget может происходить до size-вызова и не создаёт вымышленной оценки
+размера. `SIZE_LIMIT` обозначает ограничение подготовки с warning; он сам по себе не требует partial.
+Потеря сессии и deadline отражаются также в общей диагностике запуска.
+
+Поля подготовки добавлены аддитивно в выходную схему 3; входной JSON и CLI-параметры не меняются.
+Существующий `shortlisted_candidates` сохраняет прежний смысл отбора до подготовки; итоговый
+размер передаётся только в новом `preparation.final_shortlisted_candidates`. У прежнего отчёта
+без этих полей сведения о refill неизвестны. [Пример наблюдаемых счётчиков](candidate-refill.md).
 
 `diagnostics` содержит `completed_phases`, `stop_reasons`, `statistics`, `limits`, `warnings`,
 `errors`, `candidate_decisions`, `unexamined_configurations`. Последнее остаётся `null`, если точное
@@ -126,6 +155,8 @@ DDL формирует общий `PostgresDdlRenderer` из разрешённ�
 Предупреждение/ошибка имеют `code`, `message`, `query_id`, `profile_id`, `details`.
 Неизвестные optional ID/таблица/фаза — `null`, пустые details — `{}`. Содержимое диагностики уже
 обезличено у источника: контракты запрещают DSN, пароли и сырые тексты исключений драйвера.
+
+В HTML раздел границ поиска показывает начальный список, резерв, бюджетные отказы, допустимые пополнения, итоговый shortlist, size-вызовы и причину остановки подготовки. Счётчики берутся из той же модели, что JSON; итог показывается через `preparation.final_shortlisted_candidates`, когда статистика подготовки доступна.
 
 ## Согласованность файлов
 

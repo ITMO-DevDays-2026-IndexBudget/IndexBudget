@@ -141,6 +141,9 @@ class IndexBudgetCli(
             Runs the analysis pipeline when all production components are connected.
             Missing components produce NOT_IMPLEMENTED (exit 1), without reports or a database connection.
             Progress on stderr contains stages and actual EXPLAIN/set/cache counters.
+            Candidate preparation starts with up to 16 candidates and a reserve of up to 48.
+            Budget rejections are refilled from that reserve, with at most 32 size calls,
+            including failed calls, under the shared search/command deadline.
 
             Exit codes: 0 completed/help; 1 failed; 2 invalid input; 3 partial.
             PostgreSQL configuration for the pipeline: INDEXBUDGET_DATABASE_URL.

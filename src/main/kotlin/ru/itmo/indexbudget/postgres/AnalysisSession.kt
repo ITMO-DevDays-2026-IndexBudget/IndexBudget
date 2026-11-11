@@ -20,7 +20,7 @@ interface AnalysisSession : ConfigurationEvaluator, AutoCloseable {
     /** Unqualified names are resolved against this connection's PostgreSQL search path. */
     fun readCatalog(tables: Set<TableName>, context: RunContext): CatalogSnapshot
 
-    /** Size of a shortlisted hypothetical index, with the same cleanup/deadline contract as evaluate. */
+    /** Size of a candidate visited in the bounded shortlist/reserve queue, with the same cleanup/deadline contract as evaluate. */
     fun estimateSize(candidate: IndexCandidate, context: RunContext): Long
 
     /**
