@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "kind": "pg_stat_statements_examples",
+  "examples": [{
+    "key": {"source_id": "d0d60c19-eb9d-42ee-9e01-935560eb7e20", "dbid": 42, "userid": 10, "queryid": "1", "toplevel": true},
+    "sql": "SELECT id FROM public.records WHERE group_id = 1",
+    "search_path": ["pg_catalog", "public"]
+  }]
+}

@@ -271,6 +271,23 @@ sh demo/check.sh
 
 ## Сбор наблюдаемой нагрузки
 
+После снимков можно построить обычный workload v2:
+
+```text
+indexbudget import-workload --config import-config.json --output-dir imported
+indexbudget analyze --workload imported/workload.json --output-dir analysis
+```
+
+Импорт требует 1–3 окна, явные SQL-примеры с литералами и исходный контекст схем,
+проверяет AST/типы/имена и отбирает до 20 SQL по всем профилям. UNKNOWN не становится
+нулём. Workload и отдельный манифест сохраняют периоды, отбор и репрезентативность
+примеров; provenance переносится в JSON/HTML анализа. Бюджеты/write rates остаются
+ручными. [Форматы и ограничения #67](docs/observed-workload-import.md),
+[синтетический комплект](examples/observed-import/import-config.json).
+
+Реальный маршрут на одноразовой PostgreSQL/HypoPG проверяется `bash demo/check-import.sh`
+и CI `postgres-observed-import`; требуется работающий Docker Engine.
+
 `indexbudget stats --help` описывает отдельные команды `stats snapshot` и `stats pair`
 для read-only снимков pg_stat_statements в PostgreSQL 16. Они не запускают подбор индексов,
 не устанавливают расширение и не меняют общую БД. Формат снимков v1, лимиты, права и

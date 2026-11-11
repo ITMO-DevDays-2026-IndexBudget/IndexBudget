@@ -638,6 +638,23 @@ EXPLAIN, deadline без нового cleanup SQL, rollback, повтор пос
 
 ## Снимки pg_stat_statements (план #64)
 
+### Импорт #67
+
+`ObservedWorkloadImporter` использует `FrequencyProfiles` #66 и `SqlExample` по
+полному ключу. `ImportCatalog` читает текущий каталог в явном per-entry search_path;
+`SqlTemplateMatcher` привязывает только параметрические AST-листья и повторно
+использует whitelist. Обёртка `ImportWorkloadCommand` проверяет JSON/схему/источник,
+владеет JDBC lifetime, сохраняет файлы и запускает существующие input/write validators.
+Успешный workload не содержит зависимостей от живого коллектора.
+
+Импортёр формирует существующий `WorkloadInput.provenance: WorkloadProvenance?` (#68),
+не вводя альтернативный DTO/renderer. Ссылка на полный манифест и его SHA-256 входят
+в `selectionRule`; окна используют фактические Δcalls, не calls/hour. Ручной ввод без
+блока совместим. Точные форматы, лимиты, отбор, знаменатели и replay описаны в
+[observed-workload-import.md](observed-workload-import.md).
+
+### Сбор снимков #65
+
 `StatisticsCollector.collect(sourceId, limits, context)` владеет отдельным физическим
 соединением только на время чтения. Возвращает `StatisticsSnapshot` с областью текущей БД,
 всеми доступными counters до ranking, metadata reset/dealloc до/после и явной неполнотой.
