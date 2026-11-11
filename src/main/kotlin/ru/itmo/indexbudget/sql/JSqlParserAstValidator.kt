@@ -39,7 +39,11 @@ import ru.itmo.indexbudget.domain.ErrorCode
 import ru.itmo.indexbudget.domain.RunContext
 import ru.itmo.indexbudget.domain.ConditionLimits
 
-internal class JSqlParserAstValidator(private val queryId: String, private val context: RunContext) {
+internal class JSqlParserAstValidator(
+    private val queryId: String,
+    private val context: RunContext,
+    private val allowTemplateParameters: Boolean = false,
+) {
     private var conditionNodes = 0
     fun validate(select: PlainSelect): List<Table> {
         validateStructureClauses(select)
@@ -118,7 +122,8 @@ internal class JSqlParserAstValidator(private val queryId: String, private val c
         select.limit?.let { limit ->
             context.checkDeadline()
             val value = (limit.rowCount as? LongValue)?.stringValue?.toLongOrNull()
-            if (value == null || value < 0 || limit.offset != null ||
+            val parameter = allowTemplateParameters && limit.rowCount is net.sf.jsqlparser.expression.JdbcParameter
+            if ((!parameter && (value == null || value < 0)) || limit.offset != null ||
                 limit.byExpressions?.isNotEmpty() == true
             ) {
                 fail(ErrorCode.UNSUPPORTED_SQL, "LIMIT must be a non-negative integer literal within the bigint range.")
@@ -280,6 +285,7 @@ internal class JSqlParserAstValidator(private val queryId: String, private val c
     private fun isSupportedLiteral(expression: Expression): Boolean {
         context.checkDeadline()
         return when (expression) {
+            is net.sf.jsqlparser.expression.JdbcParameter -> allowTemplateParameters
             is BooleanValue, is DateTimeLiteralExpression, is DateValue, is DoubleValue, is HexValue,
             is LongValue, is NullValue, is StringValue, is TimestampValue, is TimeValue,
             -> true

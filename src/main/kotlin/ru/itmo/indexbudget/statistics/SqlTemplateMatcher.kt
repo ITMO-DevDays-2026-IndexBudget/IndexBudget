@@ -11,6 +11,11 @@ import ru.itmo.indexbudget.sql.JSqlParserAstValidator
 
 /** Conservative AST substitution: only parameter leaves change; the entire resulting AST must match. */
 internal class SqlTemplateMatcher(private val context: RunContext) {
+    fun referencedTables(sql: String): Set<TableName> = parse(sql).let { select ->
+        (listOf(select.fromItem as Table) + select.joins.orEmpty().map { it.fromItem as Table }).map {
+            TableName(decodePostgresIdentifier(it.name), it.schemaName?.let(::decodePostgresIdentifier))
+        }.toSet()
+    }
     fun match(template: String, example: String, catalog: CatalogSnapshot): Boolean {
         val original = parse(template)
         val sample = parse(example)
@@ -87,6 +92,7 @@ internal class SqlTemplateMatcher(private val context: RunContext) {
             val physical = if (schema != null) catalog.tables.firstOrNull { it.ref == TableRef(schema, name) }
                 else catalog.searchPath.firstNotNullOfOrNull { path -> catalog.tables.firstOrNull { it.ref == TableRef(path, name) } }
             val ref = physical?.ref ?: ImportJson.fail("Template table cannot be resolved in the explicit context.")
+            table.nameParts = table.nameParts.toMutableList()
             table.schemaName = quote(ref.schema)
             // Keep the original table spelling so unaliased qualifiers keep their identity.
         }
@@ -107,7 +113,11 @@ internal class SqlTemplateMatcher(private val context: RunContext) {
             catch (_: Exception) { ImportJson.fail("Template cannot be parsed as one SELECT.") }
         finally { context.checkDeadline() }
         if (statements.size != 1 || statements[0] !is PlainSelect) ImportJson.fail("Template must be one plain SELECT.")
-        return statements[0] as PlainSelect
+        return (statements[0] as PlainSelect).also {
+            // Reuse token-based restoration, including quoted names containing dots. Only template
+            // scalar parameters are temporarily allowed; bound ASTs are validated strictly in match.
+            JSqlParserAstValidator("template", context, allowTemplateParameters = true).validate(it)
+        }
     }
     private fun quote(value: String) = "\"" + value.replace("\"", "\"\"") + "\""
 }

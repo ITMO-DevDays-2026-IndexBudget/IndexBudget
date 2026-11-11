@@ -31,6 +31,73 @@ class ObservedWorkloadImporterTest {
     private val options: Map<String, Any?> = mapOf("constraints" to mapOf("storage_budget_bytes" to 1048576,
         "write_budget_units_per_hour" to null), "objective" to "robust")
 
+    @Test fun `template catalog includes its own unqualified table before comparing physical schemas`() {
+        val archive = snapshot.tables.single().copy(ref = TableRef("archive", "records"))
+        val available = snapshot.tables + archive
+        val importer = ObservedWorkloadImporter(ImportCatalog { names, path, _ ->
+            assertTrue(TableName("records") in names)
+            snapshot.copy(searchPath = path, tables = names.mapNotNull { name ->
+                if (name.schema != null) available.firstOrNull { it.ref == TableRef(name.schema, name.name) }
+                else path.firstNotNullOfOrNull { schema -> available.firstOrNull { it.ref == TableRef(schema, name.name) } }
+            }.distinct())
+        })
+        val input = frequencies("SELECT * FROM records WHERE group_id=$1")
+        val example = SqlExample(key(), "SELECT * FROM archive.records WHERE group_id=1", listOf("pg_catalog", "public", "archive"))
+        assertNotNull(importer.build(input, listOf(example), options).error)
+        assertNull(importer.build(input, listOf(example.copy(sql = exampleSql)), options).error)
+    }
+
+    @Test fun `quoted dotted projection survives AST matching and exported SQL`() {
+        val table = TableRef("public", "records")
+        val catalog = snapshot.copy(tables = snapshot.tables.map { it.copy(columns = it.columns + listOf(
+            CatalogColumn("a.b", "int4", defaultOperatorClass = "pg_catalog.int4_ops"),
+            CatalogColumn("b", "int4", defaultOperatorClass = "pg_catalog.int4_ops"))) }).withSqlSemantics()
+        val importer = ObservedWorkloadImporter(ImportCatalog { _, path, _ -> catalog.copy(searchPath = path) })
+        val result = importer.build(frequencies("SELECT \"a.b\" FROM public.records a WHERE group_id=$1"),
+            listOf(SqlExample(key(), "SELECT \"a.b\" FROM public.records a WHERE group_id=1", listOf("pg_catalog", "public"))), options)
+        assertNull(result.error)
+        assertTrue(read(result).queries.single().sql.startsWith("SELECT \"a.b\" FROM"))
+        assertEquals(setOf(ColumnRef(table, "a.b")), result.resolvedQueries.single().projectedColumns)
+    }
+
+    @Test fun `snapshot query byte limit accepts exact UTF8 boundary and rejects one byte above`() {
+        for (query in listOf("SELECT 1", "SELECT 'я'")) {
+            val size = query.toByteArray(Charsets.UTF_8).size
+            val value = capture(0, listOf(row(100, query))).copy(limits = SnapshotLimits(maxQueryBytes = size))
+            val file = directory.resolve("limit.json")
+            Files.write(file, SnapshotJson().render(value))
+            assertEquals(query, ImportJson.snapshot(file, RunContext()).entries.single().query)
+            Files.write(file, SnapshotJson().render(value.copy(limits = value.limits.copy(maxQueryBytes = size - 1))))
+            assertEquals(ErrorCode.INPUT_LIMIT_EXCEEDED, assertThrows(AnalysisException::class.java) {
+                ImportJson.snapshot(file, RunContext())
+            }.error.code)
+        }
+    }
+
+    @Test fun `CLI missing example key and snapshot before are input errors before opening database`() {
+        for (missing in listOf("key", "before")) {
+            val before = tree(ImportJson.mapper.readTree(SnapshotJson().render(capture(0, listOf(row(100))))))
+            Files.write(directory.resolve("before.json"), ImportJson.mapper.writeValueAsBytes(before.properties()
+                .filter { missing != "before" || it.key != "before" }.associate { it.key to it.value }))
+            Files.write(directory.resolve("after.json"), SnapshotJson().render(capture(60, listOf(row(160)))))
+            val example = mutableMapOf<String, Any>("sql" to exampleSql, "search_path" to listOf("pg_catalog", "public"))
+            if (missing != "key") example["key"] = ImportJson.key(key())
+            Files.write(directory.resolve("examples.json"), ImportJson.mapper.writeValueAsBytes(mapOf("schema_version" to 1,
+                "kind" to "pg_stat_statements_examples", "examples" to listOf(example))))
+            Files.write(directory.resolve("config.json"), ImportJson.mapper.writeValueAsBytes(mapOf("schema_version" to 1,
+                "kind" to "pg_stat_statements_import_config", "examples" to "examples.json", "windows" to listOf(
+                    mapOf("id" to "day", "weight" to 1, "before" to "before.json", "after" to "after.json"))) + options))
+            val output = directory.resolve("output-$missing")
+            val err = StringWriter()
+            val exit = ImportWorkloadCommand { fail("Database must not be opened") }.execute(arrayOf("import-workload",
+                "--config", directory.resolve("config.json").toString(), "--output-dir", output.toString()),
+                PrintWriter(StringWriter(), true), PrintWriter(err, true))
+            assertEquals(2, exit, err.toString())
+            assertTrue(err.toString().startsWith("INVALID_INPUT:"))
+            assertFalse(Files.exists(output))
+        }
+    }
+
     @Test fun `snapshot wire format round trips bigint identities and frequency windows`() {
         val before = capture(0, listOf(row(100).copy(queryid = Long.MIN_VALUE)))
         val path = directory.resolve("snapshot.json")

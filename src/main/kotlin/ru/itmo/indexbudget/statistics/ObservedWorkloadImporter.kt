@@ -70,7 +70,7 @@ class ObservedWorkloadImporter(private val catalog: ImportCatalog) {
                 val one = WorkloadInput(listOf(QueryInput(id, example.sql)), listOf(Profile("validation", 1.0, mapOf(id to 1.0))),
                     Constraints(0, null))
                 val parsed = sql.parse(one, context)
-                val snapshot = catalog.read(parsed.referencedTables, example.searchPath, context)
+                val snapshot = catalog.read(parsed.referencedTables + matcher.referencedTables(template), example.searchPath, context)
                 val resolved = sql.resolve(parsed, snapshot, context).queries.single()
                 if (!matcher.match(requireNotNull(rows.first()?.query), example.sql, snapshot)) {
                     exclude("TEMPLATE_MISMATCH"); continue
@@ -79,7 +79,7 @@ class ObservedWorkloadImporter(private val catalog: ImportCatalog) {
                 // Validate the exact exported SQL too, after explicit table qualification.
                 val frozenInput = one.copy(queries = listOf(QueryInput(id, frozen)))
                 val frozenQuery = sql.resolve(sql.parse(frozenInput, context), snapshot, context).queries.single()
-                check(frozenQuery.tables == resolved.tables)
+                if (frozenQuery.copy(sql = resolved.sql) != resolved) ImportJson.fail("Qualified SQL changed resolved semantics.")
                 eligible[key] = frozenQuery
             } catch (failure: AnalysisException) {
                 if (failure.error.code !in setOf(ErrorCode.UNSUPPORTED_SQL, ErrorCode.UNKNOWN_COLUMN, ErrorCode.UNKNOWN_TABLE,

@@ -52,8 +52,13 @@ internal object ImportJson {
     fun fields(node: JsonNode, allowed: Set<String>) {
         if (!node.isObject || node.properties().any { it.key !in allowed }) fail("Unknown fields in import input.")
     }
-    fun key(node: JsonNode) = StatisticsKey(UUID.fromString(text(node, "source_id")), long(node, "dbid"),
-        long(node, "userid"), decimalLong(node, "queryid"), bool(node, "toplevel"))
+    fun requiredObject(node: JsonNode?, name: String): JsonNode = node?.takeIf { it.isObject }
+        ?: fail("Missing or invalid object field: $name.")
+    fun key(node: JsonNode?): StatisticsKey {
+        val value = requiredObject(node, "key")
+        return StatisticsKey(UUID.fromString(text(value, "source_id")), long(value, "dbid"),
+            long(value, "userid"), decimalLong(value, "queryid"), bool(value, "toplevel"))
+    }
     fun key(value: StatisticsKey): Map<String, Any> = linkedMapOf("source_id" to value.sourceId.toString(),
         "dbid" to value.dbid, "userid" to value.userid, "queryid" to value.queryid.toString(), "toplevel" to value.toplevel)
 
@@ -77,7 +82,9 @@ internal object ImportJson {
         if (Files.size(path) > maxBytes) fail("Snapshot exceeds declared byte limit.")
         val entries = array(root, "entries")
         if (entries.size > maxRows) fail("Snapshot exceeds declared row limit.")
-        fun epoch(node: JsonNode) = StatisticsEpoch(text(node, "stats_reset"), long(node, "dealloc"))
+        fun epoch(node: JsonNode?) = requiredObject(node, "epoch").let {
+            StatisticsEpoch(text(it, "stats_reset"), long(it, "dealloc"))
+        }
         val snapshot = StatisticsSnapshot(UUID.fromString(text(root, "snapshot_id")), StatisticsSource(
             UUID.fromString(text(root, "source_id")), long(scope, "database_oid"), long(scope, "reader_userid"),
             bool(scope, "all_query_texts_visible"), text(root, "postgres_version"), text(root, "extension_version"), text(scope, "track")),
@@ -85,9 +92,12 @@ internal object ImportJson {
             root.get("after")?.takeUnless { it.isNull }?.let(::epoch), entries.map { row ->
                 context.checkDeadline()
                 fields(row, setOf("dbid", "userid", "queryid", "toplevel", "query", "text_status", "calls", "total_exec_time", "rows"))
+                val query = row.get("query")?.takeUnless { it.isNull }?.let { text(row, "query") }
+                if (query != null && query.toByteArray(Charsets.UTF_8).size > maxQuery)
+                    fail("Snapshot query exceeds declared max_query_bytes.", ErrorCode.INPUT_LIMIT_EXCEEDED)
                 StatisticsEntry(long(row, "dbid"), long(row, "userid"),
                     row.get("queryid")?.takeUnless { it.isNull }?.let { decimalLong(row, "queryid") },
-                    bool(row, "toplevel"), row.get("query")?.takeUnless { it.isNull }?.let { text(row, "query") },
+                    bool(row, "toplevel"), query,
                     QueryTextStatus.valueOf(text(row, "text_status").uppercase()), long(row, "calls"),
                     number(row, "total_exec_time"), long(row, "rows"))
             }, array(root, "reasons").map { SnapshotReason.valueOf(it.asString()) },
