@@ -19,7 +19,11 @@ class ProfileAwareCandidateGenerator(
                 "Enumerator exceeded the bounded scope contract"
             }
             val canonical = canonicalizer.canonicalize(scope)
-            val local = canonical.candidates.sortedWith(localOrder).take(LOCAL_LIMIT)
+            val ordered = canonical.candidates.sortedWith(localOrder)
+            // Reserve up to eight places for covering variants without starving ordinary pairs.
+            val covering = ordered.filter { it.definition.includedColumns.isNotEmpty() }.take(8)
+            val local = ordered.filter { it.definition.includedColumns.isEmpty() }
+                .take(LOCAL_LIMIT - covering.size) + covering
             context.checkDeadline()
             survivors += local
             scopes += LocalGenerationStatistics(
@@ -31,15 +35,22 @@ class ProfileAwareCandidateGenerator(
                 deduplicatedDefinitions = canonical.deduplicatedDefinitions,
                 retainedDefinitions = local.size,
                 excludedColumns = scope.excludedColumns,
+                enumeratedIncludeDefinitions = scope.variants.count { it.definition.includedColumns.isNotEmpty() },
+                retainedIncludeDefinitions = covering.size,
                 candidatesAfterExistingDeduplication = canonical.candidates.size,
+                unindexableVariants = canonical.unindexableVariants,
             )
             decisions += canonical.decisions
             warnings += scope.warnings
+            warnings += canonical.warnings
             if (canonical.candidates.size > local.size) {
                 val details = mapOf(
                     "schema" to scope.table.schema, "table" to scope.table.name,
                     "candidates_before" to canonical.candidates.size.toString(),
                     "candidates_after" to local.size.toString(),
+                    "include_before" to ordered.count { it.definition.includedColumns.isNotEmpty() }.toString(),
+                    "include_after" to covering.size.toString(),
+                    "include_limit" to "8",
                 )
                 // Aggregate scope diagnostics, not a retained copy of all generation events.
                 decisions += CandidateDecision(CandidateReason.LOCAL_CANDIDATE_LIMIT,
@@ -51,11 +62,14 @@ class ProfileAwareCandidateGenerator(
         }
         context.checkDeadline()
         val pool = canonicalizer.merge(survivors)
-        val selected = select(pool, workload, context)
-        if (pool.size > GLOBAL_LIMIT) {
+        val orderedPool = select(pool, workload, context)
+        val selected = orderedPool.take(CandidatePreparationLimits.SHORTLIST)
+        val reserve = orderedPool.drop(CandidatePreparationLimits.SHORTLIST)
+        if (pool.size > CandidatePreparationLimits.SHORTLIST) {
             val details = mapOf("candidates_before" to pool.size.toString(),
-                "candidates_after" to selected.size.toString(), "refill_after_budget_filter" to "false")
-            val selectedIds = selected.map { it.id }.toSet()
+                "candidates_after" to selected.size.toString(), "reserve_candidates" to reserve.size.toString(),
+                "preparation_pool_size" to orderedPool.size.toString(), "refill_after_budget_filter" to "true")
+            val selectedIds = orderedPool.map { it.id }.toSet()
             for (candidate in pool) {
                 context.checkDeadline()
                 if (candidate.id !in selectedIds) decisions += CandidateDecision(
@@ -63,7 +77,7 @@ class ProfileAwareCandidateGenerator(
                     table = candidate.definition.table, phase = AnalysisPhase.CANDIDATES, details = details)
             }
             warnings += AnalysisWarning(WarningCode.GLOBAL_CANDIDATE_LIMIT,
-                "Общий shortlist ограничен до оценки размеров. После бюджетного отсева вытесненные кандидаты не возвращаются.",
+                "Общий shortlist ограничен до оценки размеров; ограниченный резерв пополняет его после бюджетного отсева.",
                 details = details)
         }
         context.checkDeadline()
@@ -72,10 +86,12 @@ class ProfileAwareCandidateGenerator(
             candidatesBeforeGlobalDeduplication = survivors.size,
             candidatesAfterGlobalDeduplication = pool.size,
             shortlistedCandidates = selected.size,
+            initialShortlistedCandidates = selected.size,
+            reserveCandidates = reserve.size,
             ungeneratedDefinitions = null,
             decisions = decisions,
             warnings = warnings,
-        ))
+        ), reserve = reserve)
     }
 
     private fun select(pool: List<IndexCandidate>, workload: ResolvedWorkload, context: RunContext): List<IndexCandidate> {
@@ -110,7 +126,8 @@ class ProfileAwareCandidateGenerator(
             ProfileQueues(queue(1), queue(2))
         }
         val selected = linkedMapOf<String, IndexCandidate>()
-        while (selected.size < GLOBAL_LIMIT) {
+        val poolLimit = CandidatePreparationLimits.SHORTLIST + CandidatePreparationLimits.RESERVE
+        while (selected.size < poolLimit) {
             context.checkDeadline()
             var added = false
             for (queue in queues) {
@@ -118,7 +135,7 @@ class ProfileAwareCandidateGenerator(
                 val candidate = queue.next(selected.keys, context) ?: continue
                 selected[candidate.id] = candidate
                 added = true
-                if (selected.size == GLOBAL_LIMIT) break
+                if (selected.size == poolLimit) break
             }
             if (!added) break
         }
@@ -149,7 +166,6 @@ class ProfileAwareCandidateGenerator(
 
     private companion object {
         const val LOCAL_LIMIT = 32
-        const val GLOBAL_LIMIT = 16
         const val MAX_SCOPES = 60
         const val MAX_VARIANTS_PER_SCOPE = 976
         val localOrder = compareBy<IndexCandidate> { it.definition.keys.size }

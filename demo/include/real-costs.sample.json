@@ -1,0 +1,26 @@
+{
+  "postgres_version" : "16.15 (Debian 16.15-1.pgdg12+2)",
+  "hypopg_version" : "1.4.2",
+  "fixture_rows" : 50000,
+  "samples" : [ {
+    "query_id" : "negative",
+    "ddl" : "CREATE INDEX \"ib_2b3e08b439d68cc04e176817c9e0a1569851000a62f6dfa018312a9e31f0\" ON \"include_demo\".\"records\" USING btree (\"a\" \"pg_catalog\".\"int4_ops\" ASC NULLS LAST) INCLUDE (\"payload\");",
+    "estimated_bytes" : 7036928,
+    "budgeted_bytes" : 8444314,
+    "write_units_per_hour" : 120.0,
+    "storage_budget_bytes" : 100000000,
+    "write_budget_units_per_hour" : 300.0,
+    "baseline_cost" : 1395.0,
+    "covering_cost" : 1395.0
+  }, {
+    "query_id" : "positive",
+    "ddl" : "CREATE INDEX \"ib_05ed9828e257aabad0190a906f56afa451c4dcd2fae982b21bef13c4300f\" ON \"include_demo\".\"records\" USING btree (\"a\" \"pg_catalog\".\"int4_ops\" ASC NULLS LAST) INCLUDE (\"b\");",
+    "estimated_bytes" : 1449984,
+    "budgeted_bytes" : 1739981,
+    "write_units_per_hour" : 120.0,
+    "storage_budget_bytes" : 100000000,
+    "write_budget_units_per_hour" : 300.0,
+    "baseline_cost" : 1395.0,
+    "covering_cost" : 4.06
+  } ]
+}

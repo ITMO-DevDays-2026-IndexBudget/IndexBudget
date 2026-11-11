@@ -22,8 +22,10 @@ class PostgresDdlRenderer : DdlRenderer {
                 append(" NULLS ").append(key.nulls.name)
             }
         }
+        val include = canonical.includedColumns.takeIf { it.isNotEmpty() }
+            ?.joinToString(", ", " INCLUDE (", ")") { quoteIdentifier(it.name) }.orEmpty()
         return "CREATE INDEX ${quoteIdentifier(name)} ON ${quoteIdentifier(table.schema)}." +
-            "${quoteIdentifier(table.name)} USING btree ($keys);"
+            "${quoteIdentifier(table.name)} USING btree ($keys)$include;"
     }
 }
 
@@ -35,7 +37,8 @@ internal object CanonicalIndex {
         require(definition.keys.map { it.column }.distinct().size == definition.keys.size) { "Repeated index key" }
         quoteIdentifier(definition.table.schema)
         quoteIdentifier(definition.table.name)
-        return definition.copy(keys = definition.keys.map { key ->
+        definition.includedColumns.forEach { quoteIdentifier(it.name) }
+        return definition.copy(includedColumns = definition.includedColumns.sortedBy { it.name }, keys = definition.keys.map { key ->
             require(key.column.table == definition.table) { "Index keys must belong to its table" }
             quoteIdentifier(key.column.name)
             key.copy(
@@ -63,6 +66,12 @@ internal object CanonicalIndex {
                 field(key.nulls.name)
                 field(key.collation)
                 field(key.operatorClass)
+            }
+            // Preserve IDs of plain indexes; nonempty payload extends the unambiguous encoding.
+            if (definition.includedColumns.isNotEmpty()) {
+                field("include-v1")
+                output.writeInt(definition.includedColumns.size)
+                definition.includedColumns.sortedBy { it.name }.forEach { field(it.name) }
             }
         }
         return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes.toByteArray()))

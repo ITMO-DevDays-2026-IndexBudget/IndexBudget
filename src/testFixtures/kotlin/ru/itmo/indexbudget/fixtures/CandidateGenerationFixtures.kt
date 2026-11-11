@@ -27,7 +27,7 @@ object CandidateGenerationFixtures {
 
     fun all(): List<CandidateGenerationScenario> = listOf(
         equalityRange(), twoEqualities(), filterAndSort(), mixedOrder(), overlappingReasons(), join(), projectionOnly(),
-        wideTwoFeatures(), wideAllFilters(), repeatedPredicates(), profileSupport(),
+        wideTwoFeatures(), wideAllFilters(), repeatedPredicates(), profileSupport(), orAlternatives(), mixedOr(),
     )
 
     fun equalityRange(): CandidateGenerationScenario {
@@ -50,6 +50,30 @@ object CandidateGenerationFixtures {
             pair("a", "b", GenerationReason.TWO_EQUALITIES), pair("b", "a", GenerationReason.TWO_EQUALITIES),
         ))
     }
+
+    fun orAlternatives(): CandidateGenerationScenario {
+        val query = query("SELECT * FROM public.records WHERE a = 1 OR b = 2",
+            predicates = listOf(predicate("a"), predicate("b"))).copy(condition = ResolvedCondition.Or(
+                ResolvedCondition.Predicate(0), ResolvedCondition.Predicate(1)))
+        return small("OR alternatives do not form an AND pair", query, listOf("a", "b"), setOf(
+            branches(single("a"), "condition/L"), branches(single("b"), "condition/R")))
+    }
+
+    fun mixedOr(): CandidateGenerationScenario {
+        val query = query("SELECT * FROM public.records WHERE a = 1 AND (b = 2 OR unused >= 3)",
+            predicates = listOf(predicate("a"), predicate("b"), predicate("unused", ComparisonOperator.GREATER_THAN_OR_EQUAL)))
+            .copy(condition = ResolvedCondition.And(ResolvedCondition.Predicate(0), ResolvedCondition.Or(
+                ResolvedCondition.Predicate(1), ResolvedCondition.Predicate(2))))
+        return small("AND pairs with either OR branch but alternatives remain exclusive", query, listOf("a", "b", "unused"), setOf(
+            branches(single("a"), "condition/L"), branches(single("b"), "condition/R/L"),
+            branches(single("unused"), "condition/R/R"),
+            branches(pair("a", "b", GenerationReason.TWO_EQUALITIES), "condition/L", "condition/R/L"),
+            branches(pair("b", "a", GenerationReason.TWO_EQUALITIES), "condition/L", "condition/R/L"),
+            branches(pair("a", "unused", GenerationReason.EQUALITY_AND_RANGE), "condition/L", "condition/R/R")))
+    }
+
+    private fun branches(variant: CandidateVariant, vararg paths: String) = variant.copy(
+        sourceBranches = paths.mapTo(linkedSetOf()) { CandidateSourceBranch("q", it) })
 
     fun mixedOrder(): CandidateGenerationScenario {
         val query = query(
