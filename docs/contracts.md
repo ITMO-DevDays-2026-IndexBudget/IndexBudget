@@ -500,3 +500,14 @@ EXPLAIN, deadline без нового cleanup SQL, rollback, повтор пос
 `bash demo/check-hypopg.sh` создаёт отдельный контейнер; CI job `postgres-hypopg-integration`
 использует тот же runner. Unit tests отдельно проверяют повреждённый JSON, численные ошибки,
 счётчики и безопасную диагностику; они не заменяют интеграцию с PostgreSQL.
+
+## Снимки pg_stat_statements (план #64)
+
+`StatisticsCollector.collect(sourceId, limits, context)` владеет отдельным физическим
+соединением только на время чтения. Возвращает `StatisticsSnapshot` с областью текущей БД,
+всеми доступными counters до ranking, metadata reset/dealloc до/после и явной неполнотой.
+`JdbcAnalysisSessionFactory.openConnection` переиспользует ограниченное открытие физического
+соединения без инициализации HypoPG; закрытие обязательно для вызывающего кода.
+`StatisticsCommand` запускает каждое чтение с отдельным контекстом, публикует снимки независимо
+и не удерживает соединение в интервале пары. Формат v1 и CLI описаны в
+[statistics-snapshots.md](statistics-snapshots.md). Workload/report v2 не меняются.
