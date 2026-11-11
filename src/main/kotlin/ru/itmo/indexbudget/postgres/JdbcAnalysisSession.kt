@@ -35,35 +35,48 @@ class JdbcAnalysisSession(
     private val ddlRenderer: DdlRenderer = PostgresDdlRenderer(),
 ) : AnalysisSession {
     private var capturedVersions = DatabaseVersions()
+    private var capturedSourceFingerprint: String? = null
     override val databaseVersions: DatabaseVersions get() = capturedVersions
+    override val sourceFingerprint: String? get() = capturedSourceFingerprint
 
     override fun readDatabaseVersions(context: RunContext): DatabaseVersions {
         enter(context)
         return try {
-            query("SELECT pg_catalog.current_setting('server_version'), e.extversion " +
-                "FROM pg_catalog.pg_extension e WHERE e.extname OPERATOR(pg_catalog.=) 'hypopg'",
-                context, ErrorCode.DB_CONNECTION_ERROR) { rows ->
+            val (versions, fingerprint) = query(
+                "SELECT pg_catalog.current_setting('server_version'), e.extversion, " +
+                    "pg_catalog.inet_server_addr()::pg_catalog.text, pg_catalog.inet_server_port(), " +
+                    "pg_catalog.current_database(), SESSION_USER, CURRENT_USER " +
+                    "FROM pg_catalog.pg_extension e WHERE e.extname OPERATOR(pg_catalog.=) 'hypopg'",
+                context, ErrorCode.DB_CONNECTION_ERROR,
+            ) { rows ->
                 if (!rows.next()) fail(ErrorCode.DB_CONNECTION_ERROR, "HypoPG extension is not installed")
-                DatabaseVersions(rows.getString(1), rows.getString(2)).also {
-                    capturedVersions = it
-                    context.recordDatabaseVersions(it)
+                val versions = DatabaseVersions(rows.getString(1), rows.getString(2))
+                val address = rows.getString(3)
+                val port = rows.getInt(4).takeUnless { rows.wasNull() }
+                val database = rows.getString(5)
+                val sessionUser = rows.getString(6)
+                val currentUser = rows.getString(7)
+                // A configured JDBC URL may list multiple hosts or a proxy. Only server-observed
+                // facts identify the connection actually serving this session. Unix sockets have
+                // no inet address/port, so their source identity remains explicitly unknown.
+                val fingerprint = if (address.isNullOrBlank() || port == null || port <= 0 ||
+                    database.isNullOrBlank() || sessionUser.isNullOrBlank() || currentUser.isNullOrBlank()) null
+                else {
+                    val identity = mapper.writeValueAsString(listOf(address, port, database, sessionUser, currentUser))
+                    java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                        .digest(identity.toByteArray(Charsets.UTF_8)))
                 }
+                versions to fingerprint
             }
+            // Publish cached facts only after the guarded query and its deadline check succeed.
+            capturedVersions = versions
+            capturedSourceFingerprint = fingerprint
+            context.recordDatabaseVersions(versions)
+            versions
         } catch (error: AnalysisException) {
             throw mapExistingError(error, context)
         }
     }
-
-    override val sourceFingerprint: String?
-        get() = try {
-            // pgJDBC metadata reads these connection facts locally, without issuing SQL.
-            val metadata = connection.metaData
-            val source = org.postgresql.ds.PGSimpleDataSource().apply { setURL(metadata.url) }
-            val identity = mapper.writeValueAsString(listOf(source.serverNames.toList(), source.portNumbers.toList(),
-                source.databaseName, metadata.userName))
-            java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
-                .digest(identity.toByteArray(Charsets.UTF_8)))
-        } catch (_: Exception) { null }
 
     private val closed = AtomicBoolean()
     private val operationLock = Any()

@@ -14,7 +14,6 @@ import ru.itmo.indexbudget.domain.ErrorCode
 import ru.itmo.indexbudget.domain.RunContext
 import ru.itmo.indexbudget.domain.SearchResult
 import tools.jackson.core.JacksonException
-import tools.jackson.databind.json.JsonMapper
 import java.io.IOException
 import java.io.PrintWriter
 import java.nio.file.InvalidPathException
@@ -28,7 +27,6 @@ class IndexBudgetCli(
     private val statisticsCommand: StatisticsCommand = StatisticsCommand(),
     private val budgetSeriesCommand: BudgetSeriesCommand = BudgetSeriesCommand(workloadReader),
 ) {
-    private val diagnosticMapper = JsonMapper.builder().build()
 
     fun execute(
         args: Array<String>,
@@ -38,11 +36,7 @@ class IndexBudgetCli(
     ): Int {
         if (args.firstOrNull() == "stats") return statisticsCommand.execute(args, out, err)
         if (args.firstOrNull() == "analyze-series") return budgetSeriesCommand.execute(args, out, err, context)
-        context.observeProgress { progress ->
-            val counters = progress.statistics
-            err.println("stage=${progress.phase.name.lowercase()} explain_attempts=${counters.explainAttempts} " +
-                "completed_sets=${counters.completedEvaluations} cache_hits=${counters.cacheHits}")
-        }
+        context.observeProgress { CliDiagnostics.progress(err, it) }
         if (args.isEmpty() || args.contentEquals(arrayOf("--help")) ||
             args.contentEquals(arrayOf("analyze", "--help"))) {
             out.println(USAGE)
@@ -135,14 +129,7 @@ class IndexBudgetCli(
     }
 
     private fun printRunLimits(err: PrintWriter, context: RunContext, ranking: CandidateRanking? = null) {
-        val limits = context.limits
-        err.println("stage=validation analysis_mode=${context.analysisMode.name.lowercase()} " +
-            "command_timeout_millis=${limits.commandTimeout.toMillis()} " +
-            "search_timeout_millis=${limits.searchTimeout.toMillis()} " +
-            "explain_timeout_millis=${limits.explainTimeout.toMillis()} " +
-            "connect_timeout_millis=${limits.connectTimeout.toMillis()} " +
-            "max_explain_attempts=${limits.maxExplainAttempts} max_repair_attempts=${limits.maxRepairAttempts}" +
-            (ranking?.let { " candidate_ranking=${it.wireName}" } ?: ""))
+        CliDiagnostics.limits(err, context.analysisMode, context.limits, ranking)
     }
 
     private fun failValidation(
@@ -156,12 +143,7 @@ class IndexBudgetCli(
     private fun printSummary(
         err: PrintWriter, context: RunContext, status: String, stopReasons: List<String>, ranking: CandidateRanking? = null,
     ) {
-        val counters = context.statistics()
-        err.println("stage=finished status=$status analysis_mode=${context.analysisMode.name.lowercase()} " +
-            "explain_attempts=${counters.explainAttempts} evaluation_attempts=${counters.evaluationAttempts} " +
-            "completed_sets=${counters.completedEvaluations} cache_hits=${counters.cacheHits} " +
-            "repair_attempts=${counters.repairAttempts} stop_reasons=${stopReasons.joinToString(",")}" +
-            (ranking?.let { " candidate_ranking=${it.wireName}" } ?: ""))
+        CliDiagnostics.summary(err, context.analysisMode, context.statistics(), status, stopReasons, ranking)
     }
 
     private fun fail(err: PrintWriter, code: ErrorCode, message: String): Int {
@@ -174,12 +156,7 @@ class IndexBudgetCli(
     }
 
     private fun printDiagnostic(err: PrintWriter, error: AnalysisError) {
-        val diagnostic = linkedMapOf<String, Any>("code" to error.code.name, "message" to error.message)
-        error.queryId?.let { diagnostic["query_id"] = it }
-        error.profileId?.let { diagnostic["profile_id"] = it }
-        if (error.details.isNotEmpty()) diagnostic["details"] = error.details
-        // JSON экранирует переводы строк и управляющие символы в пользовательских IDs.
-        err.println("${error.code.name}: ${diagnosticMapper.writeValueAsString(diagnostic)}")
+        CliDiagnostics.error(err, error)
     }
 
     companion object {

@@ -9,14 +9,16 @@ import java.nio.file.StandardCopyOption.REPLACE_EXISTING
 
 /** Separate v1 manifest; ordinary workload v2 and per-run report v3 retain their contracts. */
 internal class BudgetSeriesWriter(
-    private val directory: Path,
+    private val owner: SeriesDirectoryOwner,
     private val input: WorkloadInput,
     private val request: BudgetSeriesRequest,
     private val context: RunContext,
 ) {
+    private val directory: Path get() = owner.directory
     private val mapper = JsonMapper.builder().build()
 
     fun publish(result: BudgetSeriesResult, preparation: SeriesPreparation?, preparationContext: RunContext?, finished: Boolean) {
+        owner.verify()
         val root = linkedMapOf<String, Any?>(
             "schema_version" to 1, "spec_version" to "0.2", "series_id" to context.runId,
             "status" to if (finished) result.status.name.lowercase() else "running",
@@ -38,6 +40,7 @@ internal class BudgetSeriesWriter(
                     "deletes_per_hour" to rates.deletesPerHour, "source" to rates.source.name.lowercase()) }),
             "preparation" to preparationContext?.let { preparedContext -> mapOf(
                 "run_id" to preparedContext.runId, "statistics" to statistics(preparedContext.statistics()),
+                "limits" to limits(preparedContext.limits),
                 "maximum_budgets" to preparation?.pool?.input?.constraints?.let(::budgets),
                 "conditions" to preparation?.conditions?.let(::conditions),
                 "candidate_ids" to preparation?.pool?.candidates?.map { it.id },
@@ -49,13 +52,16 @@ internal class BudgetSeriesWriter(
                 "condition_changes" to point.changes, "conditions" to point.conditions?.let(::conditions),
                 "selected_index_ids" to point.result?.selected?.evaluation?.candidateIds,
                 "metrics" to point.result?.selected?.metrics?.let(::metrics),
-                "statistics" to point.result?.diagnostics?.statistics?.let(::statistics),
-                "stop_reasons" to point.result?.diagnostics?.stopReasons?.map { it.name },
+                "statistics" to (point.diagnostics ?: point.result?.diagnostics)?.statistics?.let(::statistics),
+                "limits" to (point.diagnostics ?: point.result?.diagnostics)?.limits?.let(::limits),
+                "stop_reasons" to (point.diagnostics ?: point.result?.diagnostics)?.stopReasons?.map { it.name },
+                "errors" to (point.diagnostics ?: point.result?.diagnostics)?.errors?.map(::error),
                 "artifacts" to point.artifacts, "error" to point.error?.let(::error)) },
         )
         val temporary = directory.resolve(".series-${context.runId}.tmp")
         try {
             Files.writeString(temporary, mapper.writerWithDefaultPrettyPrinter().writeValueAsString(root) + "\n")
+            owner.verify()
             Files.move(temporary, directory.resolve("series.json"), ATOMIC_MOVE, REPLACE_EXISTING)
         } catch (_: Exception) {
             throw AnalysisException(AnalysisError(ErrorCode.EXPORT_FAILED, "Cannot publish budget series summary."))
@@ -66,6 +72,11 @@ internal class BudgetSeriesWriter(
 
     private fun budgets(value: Constraints) = mapOf("storage_budget_bytes" to value.storageBudgetBytes,
         "write_budget_units_per_hour" to value.writeBudgetUnitsPerHour, "max_indexes" to value.maxIndexes)
+
+    private fun limits(value: RunLimits) = mapOf("command_timeout_millis" to value.commandTimeout.toMillis(),
+        "search_timeout_millis" to value.searchTimeout.toMillis(), "explain_timeout_millis" to value.explainTimeout.toMillis(),
+        "connect_timeout_millis" to value.connectTimeout.toMillis(), "max_explain_attempts" to value.maxExplainAttempts,
+        "max_repair_attempts" to value.maxRepairAttempts)
 
     private fun conditions(value: SeriesConditions) = mapOf("catalog_hash" to value.catalogHash,
         "baseline_costs" to value.baselineCosts, "baseline_plans_hash" to value.baselinePlansHash,

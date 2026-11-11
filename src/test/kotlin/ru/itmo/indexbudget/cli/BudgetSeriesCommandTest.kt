@@ -5,6 +5,8 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import ru.itmo.indexbudget.application.*
 import ru.itmo.indexbudget.domain.*
+import ru.itmo.indexbudget.fixtures.ContractFixtures
+import tools.jackson.databind.json.JsonMapper
 import java.io.PrintWriter
 import java.io.StringWriter
 import java.nio.file.Files
@@ -113,6 +115,104 @@ class BudgetSeriesCommandTest {
         assertTrue(stderr.contains("OUTPUT_DIRECTORY_NOT_EMPTY:"), stderr)
         assertEquals("previous", Files.readString(artifact))
     }
+
+    @Test
+    fun `partial points print scoped limits counters stop reasons and saved errors`() {
+        val prepLimits = RunLimits(Duration.ofSeconds(11), Duration.ofSeconds(7), Duration.ofMillis(400),
+            Duration.ofMillis(900), 17, 2)
+        val pointLimits = RunLimits(Duration.ofSeconds(19), Duration.ofSeconds(13), Duration.ofMillis(700),
+            Duration.ofMillis(1200), 31, 4)
+        val savedError = AnalysisError(ErrorCode.EXPLAIN_FAILED, "A saved evaluation failed.", queryId = "q\n\"quoted")
+        val preparation = SearchDiagnostics(limits = prepLimits,
+            statistics = RunStatistics(2, 1, 1, 0, 0))
+        val partial = ContractFixtures.partialResult().copy(diagnostics = SearchDiagnostics(
+            limits = pointLimits, statistics = RunStatistics(9, 4, 3, 2, 1),
+            stopReasons = listOf(StopReason.EXPLAIN_LIMIT), errors = listOf(savedError)))
+        val runner = BudgetSeriesRunner { _, request, _, supplied ->
+            val prep = supplied.child(AnalysisMode.FAST, scope = RunScope.PREPARATION)
+            prep.enterPhase(AnalysisPhase.BASELINE)
+            prep.reserveEvaluationAttempt()
+            prep.reserveExplainAttempt()
+            prep.recordCompletedEvaluation()
+            val first = supplied.child(AnalysisMode.FAST, scope = RunScope.POINT, ordinal = 1)
+            first.enterPhase(AnalysisPhase.BASELINE)
+            first.reserveEvaluationAttempt()
+            val second = supplied.child(AnalysisMode.FAST, scope = RunScope.POINT, ordinal = 2)
+            second.enterPhase(AnalysisPhase.BASELINE)
+            BudgetSeriesResult(SeriesStatus.PARTIAL, listOf(
+                BudgetSeriesPoint(1, request.values[0], SeriesPointStatus.PARTIAL, result = partial,
+                    conditionsMatch = true),
+                BudgetSeriesPoint(2, request.values[1], SeriesPointStatus.SKIPPED,
+                    error = AnalysisError(ErrorCode.CANCELLED, "Series cancelled."))), preparationDiagnostics = preparation)
+        }
+        val (code, stderr) = invoke(runner, Path.of("examples/workload-v2.json"), writeSeries(), RunContext(),
+            "--analysis-mode", "fast")
+        assertEquals(3, code)
+        val prep = fields(stderr.lineSequence().single { it.startsWith("stage=series_preparation ") })
+        assertEquals("preparation", prep["scope"])
+        assertEquals("2", prep["explain_attempts"])
+        assertEquals("1", prep["evaluation_attempts"])
+        val point = fields(stderr.lineSequence().single { it.startsWith("stage=series_point ") && it.contains("ordinal=1") })
+        assertEquals("point", point["scope"])
+        assertEquals("partial", point["status"])
+        assertEquals("fast", point["analysis_mode"])
+        assertEquals("EXPLAIN_LIMIT", point["stop_reasons"])
+        assertEquals(mapOf("explain_attempts" to "9", "evaluation_attempts" to "4", "completed_sets" to "3",
+            "cache_hits" to "2", "repair_attempts" to "1"), point.filterKeys { it in setOf("explain_attempts",
+                "evaluation_attempts", "completed_sets", "cache_hits", "repair_attempts") })
+        val limits = fields(stderr.lineSequence().single { it.startsWith("stage=series_point_limits ") })
+        assertEquals(mapOf("command_timeout_millis" to "19000", "search_timeout_millis" to "13000",
+            "explain_timeout_millis" to "700", "connect_timeout_millis" to "1200", "max_explain_attempts" to "31",
+            "max_repair_attempts" to "4"), limits.filterKeys { it.endsWith("_millis") || it.startsWith("max_") })
+        val preparationLimits = fields(stderr.lineSequence().single { it.startsWith("stage=series_preparation_limits ") })
+        assertEquals("11000", preparationLimits["command_timeout_millis"])
+        assertEquals("17", preparationLimits["max_explain_attempts"])
+        val errors = stderr.lineSequence().filter { it.startsWith("EXPLAIN_FAILED:") }.toList()
+        assertEquals(1, errors.size)
+        val error = JsonMapper.builder().build().readTree(errors.single().substringAfter(": "))
+        assertEquals(savedError.queryId, error["query_id"].stringValue())
+        assertEquals("point", error["scope"].stringValue())
+        assertEquals(1, error["ordinal"].intValue())
+        val live = stderr.lineSequence().filter { it.startsWith("stage=baseline ") }.map(::fields).toList()
+        assertTrue(live.any { it["scope"] == "preparation" && it["evaluation_attempts"] == "1" })
+        assertTrue(live.any { it["scope"] == "point" && it["ordinal"] == "1" && it["evaluation_attempts"] == "1" })
+        assertTrue(live.any { it["scope"] == "point" && it["ordinal"] == "2" && it["evaluation_attempts"] == "0" })
+        val skipped = fields(stderr.lineSequence().single { it.startsWith("stage=series_point ") && it.contains("ordinal=2") })
+        assertEquals("CANCELLED", skipped["stop_reasons"])
+        assertFalse(skipped.containsKey("explain_attempts"))
+    }
+
+    @Test
+    fun `preparation and caught point errors print snapshots without duplicate diagnostics`() {
+        val failure = AnalysisError(ErrorCode.DB_CONNECTION_ERROR, "Connection unavailable.")
+        val diagnostics = SearchDiagnostics(statistics = RunStatistics(3, 2, 1, 0, 0),
+            stopReasons = listOf(StopReason.CONNECTION_LOST), errors = listOf(failure))
+        for (preparationFailed in listOf(true, false)) {
+            val runner = BudgetSeriesRunner { _, request, _, _ ->
+                if (preparationFailed) BudgetSeriesResult(SeriesStatus.FAILED, emptyList(),
+                    preparationError = failure, preparationDiagnostics = diagnostics)
+                else BudgetSeriesResult(SeriesStatus.PARTIAL, listOf(BudgetSeriesPoint(1, request.values[0],
+                    SeriesPointStatus.FAILED, runId = "failed-point", error = failure, diagnostics = diagnostics)))
+            }
+            val (code, stderr) = invoke(runner, Path.of("examples/workload-v2.json"), writeSeries(), RunContext())
+            assertEquals(if (preparationFailed) 1 else 3, code)
+            val errors = stderr.lineSequence().filter { it.startsWith("DB_CONNECTION_ERROR:") }
+                .map { JsonMapper.builder().build().readTree(it.substringAfter(": ")) }.toList()
+            assertEquals(1, errors.size)
+            assertEquals(if (preparationFailed) "preparation" else "point", errors.single()["scope"].stringValue())
+            val stage = if (preparationFailed) "series_preparation" else "series_point"
+            val failed = fields(stderr.lineSequence().single { it.startsWith("stage=$stage ") })
+            assertEquals("failed", failed["status"])
+            assertEquals("3", failed["explain_attempts"])
+            assertEquals("2", failed["evaluation_attempts"])
+            assertEquals("CONNECTION_LOST,DB_CONNECTION_ERROR", failed["stop_reasons"])
+        }
+    }
+
+    private fun fields(line: String): Map<String, String> = line.split(' ').mapNotNull { entry ->
+        val parts = entry.split('=', limit = 2)
+        if (parts.size == 2) parts[0] to parts[1] else null
+    }.toMap()
 
     @Test
     fun `help is available from main CLI without database or files`() {

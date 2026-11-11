@@ -4,7 +4,6 @@ import org.springframework.stereotype.Component
 import ru.itmo.indexbudget.application.*
 import ru.itmo.indexbudget.domain.*
 import tools.jackson.core.JacksonException
-import tools.jackson.databind.json.JsonMapper
 import java.io.IOException
 import java.io.PrintWriter
 import java.nio.file.InvalidPathException
@@ -21,18 +20,13 @@ class BudgetSeriesCommand(
         throw AnalysisException(AnalysisError(ErrorCode.NOT_IMPLEMENTED, "Budget series analysis is not connected."))
     },
 ) {
-    private val mapper = JsonMapper.builder().build()
 
     fun execute(args: Array<String>, out: PrintWriter, err: PrintWriter, context: RunContext): Int {
         if (args.contentEquals(arrayOf("analyze-series", "--help"))) {
             out.println(HELP)
             return 0
         }
-        context.observeProgress { progress ->
-            val counters = progress.statistics
-            err.println("stage=${progress.phase.name.lowercase()} explain_attempts=${counters.explainAttempts} " +
-                "completed_sets=${counters.completedEvaluations} cache_hits=${counters.cacheHits}")
-        }
+        context.observeProgress { CliDiagnostics.progress(err, it) }
         return try {
             val options = options(args)
             val mode = options["--analysis-mode"]?.let { value ->
@@ -68,12 +62,8 @@ class BudgetSeriesCommand(
                 "series_timeout_seconds=${series.timeoutSeconds} analysis_mode=${input.analysisMode.name.lowercase()} " +
                 "candidate_ranking=${input.candidateRanking.wireName}")
             val result = runner.run(input, series, output, context)
-            result.points.forEach { point ->
-                err.println("stage=series_point ordinal=${point.ordinal} status=${point.status.name.lowercase()} " +
-                    "conditions_match=${point.conditionsMatch ?: "unknown"}")
-                point.error?.let { diagnostic(err, it) }
-            }
-            result.preparationError?.let { diagnostic(err, it) }
+            printPreparation(err, result, input)
+            result.points.forEach { point -> printPoint(err, point, input) }
             err.println("stage=series_finished status=${result.status.name.lowercase()}")
             result.exitCode
         } catch (failure: AnalysisException) {
@@ -115,11 +105,40 @@ class BudgetSeriesCommand(
     }
 
     private fun diagnostic(err: PrintWriter, error: AnalysisError) {
-        val safe = linkedMapOf<String, Any>("code" to error.code.name, "message" to error.message)
-        if (error.details.isNotEmpty()) safe["details"] = error.details
-        error.queryId?.let { safe["query_id"] = it }
-        error.profileId?.let { safe["profile_id"] = it }
-        err.println("${error.code.name}: ${mapper.writeValueAsString(safe)}")
+        CliDiagnostics.error(err, error)
+    }
+
+    private fun printPreparation(err: PrintWriter, result: BudgetSeriesResult, input: WorkloadInput) {
+        val diagnostics = result.preparationDiagnostics
+        val errors = (diagnostics?.errors.orEmpty() + listOfNotNull(result.preparationError)).distinct()
+        if (diagnostics != null) {
+            CliDiagnostics.limits(err, input.analysisMode, diagnostics.limits, input.candidateRanking,
+                stage = "series_preparation_limits", scope = RunScope.PREPARATION)
+            CliDiagnostics.summary(err, input.analysisMode, diagnostics.statistics,
+                if (result.preparationError == null) "completed" else "failed",
+                diagnostics.stopReasons.map { it.name } + listOfNotNull(result.preparationError?.code?.name),
+                input.candidateRanking, stage = "series_preparation", scope = RunScope.PREPARATION)
+        }
+        errors.forEach { CliDiagnostics.error(err, it, RunScope.PREPARATION) }
+    }
+
+    private fun printPoint(err: PrintWriter, point: BudgetSeriesPoint, input: WorkloadInput) {
+        val diagnostics = point.diagnostics ?: point.result?.diagnostics
+        val reasons = (diagnostics?.stopReasons.orEmpty().map { it.name } + listOfNotNull(point.error?.code?.name)).distinct()
+        if (diagnostics == null) {
+            // A skipped point has no run, counters or effective per-run limits to report.
+            err.println("stage=series_point status=${point.status.name.lowercase()} scope=point ordinal=${point.ordinal} " +
+                "stop_reasons=${reasons.joinToString(",")} conditions_match=${point.conditionsMatch ?: "unknown"}")
+        } else {
+            CliDiagnostics.limits(err, input.analysisMode, diagnostics.limits, input.candidateRanking,
+                stage = "series_point_limits", scope = RunScope.POINT, ordinal = point.ordinal)
+            CliDiagnostics.summary(err, input.analysisMode, diagnostics.statistics, point.status.name.lowercase(),
+                reasons, input.candidateRanking, stage = "series_point", scope = RunScope.POINT,
+                ordinal = point.ordinal, conditionsMatch = point.conditionsMatch)
+        }
+        (diagnostics?.errors.orEmpty() + listOfNotNull(point.error)).distinct().forEach {
+            CliDiagnostics.error(err, it, RunScope.POINT, point.ordinal)
+        }
     }
 
     companion object {
@@ -137,6 +156,8 @@ class BudgetSeriesCommand(
             Every point uses a fresh RunContext, JDBC session and cache, and publishes separate JSON/HTML/SQL.
             series.json records point statuses, selected indexes, metrics, budgets and relative artifact links.
             Baseline/catalog changes are marked as non-comparable; planner cost is not runtime.
+            Stderr separates scope=preparation from scope=point ordinal=N, including progress and failures.
+            Each completed invocation prints all six limits, five counters, stop reasons and saved errors.
             Series deadline and cancellation preserve earlier published points; later points are marked stopped.
             Connection: INDEXBUDGET_DATABASE_URL. No physical indexes or EXPLAIN ANALYZE.
             Exit: 0 completed; 3 partial; 2 invalid input; 1 failed.

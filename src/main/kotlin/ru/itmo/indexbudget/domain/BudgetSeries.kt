@@ -67,12 +67,15 @@ data class BudgetSeriesPoint(
     val changes: List<String> = emptyList(),
     val artifacts: Map<String, String> = emptyMap(),
     val error: AnalysisError? = null,
+    val diagnostics: SearchDiagnostics? = null,
 )
 
 data class BudgetSeriesResult(
     val status: SeriesStatus,
     val points: List<BudgetSeriesPoint>,
     val preparationError: AnalysisError? = null,
+    val preparationDiagnostics: SearchDiagnostics? = null,
 ) {
-    val exitCode: Int get() = status.exitCode
+    val exitCode: Int get() = if (status == SeriesStatus.FAILED)
+        preparationError?.code?.defaultExitCode ?: status.exitCode else status.exitCode
 }

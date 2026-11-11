@@ -115,6 +115,8 @@ class BudgetSeriesHypopgIntegrationTest {
                 assertTrue(result.points.all { it.conditions?.databaseVersions?.hypopgVersion == "1.4.2" })
                 assertTrue(result.points.all { it.conditions?.sourceFingerprint?.matches(Regex("[a-f0-9]{64}")) == true })
                 assertEquals(1, result.points.map { it.conditions?.sourceFingerprint }.distinct().size)
+                assertEquals(actualSourceFingerprint(admin), result.points.first().conditions?.sourceFingerprint,
+                    "Source identity must describe the actual PostgreSQL session, not the configured JDBC hosts")
                 assertEquals(4, connections.size, "One preparation and three independent point sessions")
                 assertEquals(4, contexts.distinct().size)
                 assertTrue(connections.all { it.isClosed })
@@ -162,6 +164,18 @@ class BudgetSeriesHypopgIntegrationTest {
             } finally {
                 execute(admin, "DROP SCHEMA IF EXISTS $schema CASCADE")
             }
+        }
+    }
+
+    private fun actualSourceFingerprint(connection: Connection): String = connection.createStatement().use { statement ->
+        statement.executeQuery("SELECT pg_catalog.inet_server_addr()::pg_catalog.text, " +
+            "pg_catalog.inet_server_port(), pg_catalog.current_database(), SESSION_USER, CURRENT_USER").use { rows ->
+            check(rows.next())
+            val address = checkNotNull(rows.getString(1))
+            val identity = JsonMapper().writeValueAsString(listOf(address, rows.getInt(2), rows.getString(3),
+                rows.getString(4), rows.getString(5)))
+            java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                .digest(identity.toByteArray(Charsets.UTF_8)))
         }
     }
 

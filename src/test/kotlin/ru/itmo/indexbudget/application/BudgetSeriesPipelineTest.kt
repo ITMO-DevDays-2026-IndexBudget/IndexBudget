@@ -16,8 +16,27 @@ class BudgetSeriesPipelineTest {
     @TempDir lateinit var directory: Path
     private val input = ContractFixtures.workload().copy(analysisMode = AnalysisMode.FAST,
         candidateRanking = CandidateRanking.BASELINE_COST)
-    private val reference = SeriesConditions("catalog-a", mapOf("q" to 100.0), "plans-a", DatabaseVersions("16.15", "1.4.2"))
+    private val reference = SeriesConditions("catalog-a", mapOf("q" to 100.0), "plans-a", DatabaseVersions("16.15", "1.4.2"), "source-a")
     private val noShutdown = ShutdownCancellation { AutoCloseable {} }
+
+    @Test
+    fun `different actual source and unknown source never appear as matched conditions`() {
+        val analysis = FakeAnalysis()
+        analysis.point = { _, output, _, _ ->
+            publish(output)
+            val observed = when (analysis.pointInputs.size) {
+                1 -> reference
+                2 -> reference.copy(sourceFingerprint = "source-b")
+                else -> reference.copy(sourceFingerprint = null)
+            }
+            SeriesPointRun(ContractFixtures.completedResult(), observed)
+        }
+        val result = run(analysis)
+        assertEquals(SeriesStatus.PARTIAL, result.status)
+        assertEquals(listOf(true, false, null), result.points.map { it.conditionsMatch })
+        assertEquals(listOf("source"), result.points[1].changes)
+        assertEquals(listOf("source_unavailable"), result.points[2].changes)
+    }
 
     @Test
     fun `observed workload source survives common preparation every point and series manifest`() {
