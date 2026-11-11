@@ -2,6 +2,7 @@ package ru.itmo.indexbudget.candidates
 
 import ru.itmo.indexbudget.domain.CandidateBatch
 import ru.itmo.indexbudget.domain.CatalogSnapshot
+import ru.itmo.indexbudget.domain.EvaluationResult
 import ru.itmo.indexbudget.domain.IndexDefinition
 import ru.itmo.indexbudget.domain.ResolvedWorkload
 import ru.itmo.indexbudget.domain.RunContext
@@ -9,6 +10,14 @@ import ru.itmo.indexbudget.domain.RunContext
 interface CandidateGenerator {
     /** Apply column/local/global limits before requesting any HypoPG size estimates. */
     fun generate(workload: ResolvedWorkload, catalog: CatalogSnapshot, context: RunContext): CandidateBatch
+
+    /** Reuse the already evaluated empty set; implementations without a cost-aware ranking remain compatible. */
+    fun generate(
+        workload: ResolvedWorkload,
+        catalog: CatalogSnapshot,
+        context: RunContext,
+        baseline: EvaluationResult,
+    ): CandidateBatch = generate(workload, catalog, context)
 }
 
 /** Shared by HypoPG and SQL export. Input must have resolved catalog defaults; never executes SQL. */

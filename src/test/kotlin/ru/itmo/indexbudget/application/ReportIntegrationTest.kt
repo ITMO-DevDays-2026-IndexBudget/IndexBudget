@@ -182,7 +182,7 @@ class ReportIntegrationTest {
 
             override fun estimateSize(candidate: IndexCandidate, context: RunContext): Long {
                 assertFalse(run.closed)
-                return requireNotNull(candidate.estimatedBytes)
+                return requireNotNull(ContractFixtures.candidates().single { it.id == candidate.id }.estimatedBytes)
             }
 
             override fun evaluate(candidates: List<IndexCandidate>, workload: ResolvedWorkload,

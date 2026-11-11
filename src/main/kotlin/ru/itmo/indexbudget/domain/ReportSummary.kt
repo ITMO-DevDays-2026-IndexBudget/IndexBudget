@@ -36,7 +36,7 @@ object ReportSummary {
             status = result.status,
             selectedIndexIds = selected?.evaluation?.candidateIds,
             meanEffect = CostEffect.calculate(metrics?.baselineMeanCost, metrics?.meanCost)
-                .copy(ratio = metrics?.meanRatio),
+                .let { effect -> if (effect.ratio == null) effect else effect.copy(ratio = metrics?.meanRatio) },
             worstRatio = metrics?.worstRatio,
             budgetUsage = metrics?.budgetUsage,
             budgetLimits = report.input?.constraints,

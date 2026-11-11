@@ -9,6 +9,7 @@ import ru.itmo.indexbudget.domain.AnalysisError
 import ru.itmo.indexbudget.domain.AnalysisException
 import ru.itmo.indexbudget.domain.AnalysisMode
 import ru.itmo.indexbudget.domain.AnalysisPhase
+import ru.itmo.indexbudget.domain.CandidateRanking
 import ru.itmo.indexbudget.domain.ErrorCode
 import ru.itmo.indexbudget.domain.RunContext
 import ru.itmo.indexbudget.domain.SearchResult
@@ -60,7 +61,8 @@ class IndexBudgetCli(
             if (option !in ANALYZE_OPTIONS || option in options ||
                 value == null || value.startsWith("--") || value.isBlank()) {
                 return fail(err, ErrorCode.INVALID_INPUT,
-                    "Expected --workload <path> --output-dir <path> [--analysis-mode fast|normal|deep], once each.")
+                    "Expected --workload <path> --output-dir <path> [--analysis-mode fast|normal|deep] " +
+                        "[--candidate-ranking frequency|baseline_cost], once each.")
             }
             options[option] = value
             offset += 2
@@ -72,6 +74,11 @@ class IndexBudgetCli(
             AnalysisMode.entries.firstOrNull { it.name.lowercase() == value }
                 ?: return fail(err, ErrorCode.INVALID_INPUT, "--analysis-mode must be fast, normal or deep.")
         }
+        val rankingOverride = options["--candidate-ranking"]?.let { value ->
+            CandidateRanking.entries.firstOrNull { it.wireName == value }
+                ?: return fail(err, ErrorCode.INVALID_INPUT, "--candidate-ranking must be frequency or baseline_cost.")
+        }
+        var effectiveRanking: CandidateRanking? = null
         val (input, outputPath) = try {
             // JSON may request deep; use the maximum only until the reader resolves its mode.
             // Applying the selected preset keeps elapsed startup/reading time on the same clock.
@@ -79,34 +86,35 @@ class IndexBudgetCli(
             context.enterPhase(AnalysisPhase.VALIDATION)
             val workloadPath = Path.of(options.getValue("--workload"))
             val outputPath = Path.of(options.getValue("--output-dir"))
-            val input = workloadReader.read(workloadPath, context, modeOverride)
+            val input = workloadReader.read(workloadPath, context, modeOverride, rankingOverride)
+            effectiveRanking = input.candidateRanking
             context.checkDeadline()
             outputDirectoryValidator.validate(outputPath)
             context.checkDeadline()
             context.completePhase()
             input to outputPath
         } catch (failure: AnalysisException) {
-            return failValidation(err, context, failure.error)
+            return failValidation(err, context, failure.error, effectiveRanking)
         } catch (_: InvalidPathException) {
             return failValidation(err, context,
-                AnalysisError(ErrorCode.INVALID_INPUT, "Invalid workload or output path."))
+                AnalysisError(ErrorCode.INVALID_INPUT, "Invalid workload or output path."), effectiveRanking)
         } catch (_: IOException) {
             return failValidation(err, context,
-                AnalysisError(ErrorCode.INVALID_INPUT, "Cannot read the workload file."))
+                AnalysisError(ErrorCode.INVALID_INPUT, "Cannot read the workload file."), effectiveRanking)
         } catch (_: JacksonException) {
             return failValidation(err, context,
-                AnalysisError(ErrorCode.INVALID_INPUT, "Workload JSON does not match the v2 input structure."))
+                AnalysisError(ErrorCode.INVALID_INPUT, "Workload JSON does not match the v2 input structure."), effectiveRanking)
         } catch (_: IllegalArgumentException) {
             return failValidation(err, context,
-                AnalysisError(ErrorCode.INVALID_INPUT, "Workload JSON does not match the v2 input structure."))
+                AnalysisError(ErrorCode.INVALID_INPUT, "Workload JSON does not match the v2 input structure."), effectiveRanking)
         }
-        printRunLimits(err, context)
+        printRunLimits(err, context, input.candidateRanking)
 
         return try {
             val result = analysisRunner.run(input, outputPath, context)
             val reasons = result.diagnostics.stopReasons.map { it.name } +
                 listOfNotNull((result as? SearchResult.Failed)?.error?.code?.name)
-            printSummary(err, context, result.status.name.lowercase(), reasons.distinct())
+            printSummary(err, context, result.status.name.lowercase(), reasons.distinct(), input.candidateRanking)
             if (result is SearchResult.Failed) {
                 fail(err, result.error)
             } else {
@@ -116,36 +124,42 @@ class IndexBudgetCli(
                 result.status.exitCode
             }
         } catch (failure: AnalysisException) {
-            printSummary(err, context, "failed", listOf(failure.error.code.name))
+            printSummary(err, context, "failed", listOf(failure.error.code.name), input.candidateRanking)
             fail(err, failure.error)
         } catch (_: Exception) {
-            printSummary(err, context, "failed", listOf(ErrorCode.INTERNAL_ERROR.name))
+            printSummary(err, context, "failed", listOf(ErrorCode.INTERNAL_ERROR.name), input.candidateRanking)
             fail(err, ErrorCode.INTERNAL_ERROR, "Analysis failed unexpectedly.")
         }
     }
 
-    private fun printRunLimits(err: PrintWriter, context: RunContext) {
+    private fun printRunLimits(err: PrintWriter, context: RunContext, ranking: CandidateRanking? = null) {
         val limits = context.limits
         err.println("stage=validation analysis_mode=${context.analysisMode.name.lowercase()} " +
             "command_timeout_millis=${limits.commandTimeout.toMillis()} " +
             "search_timeout_millis=${limits.searchTimeout.toMillis()} " +
             "explain_timeout_millis=${limits.explainTimeout.toMillis()} " +
             "connect_timeout_millis=${limits.connectTimeout.toMillis()} " +
-            "max_explain_attempts=${limits.maxExplainAttempts} max_repair_attempts=${limits.maxRepairAttempts}")
+            "max_explain_attempts=${limits.maxExplainAttempts} max_repair_attempts=${limits.maxRepairAttempts}" +
+            (ranking?.let { " candidate_ranking=${it.wireName}" } ?: ""))
     }
 
-    private fun failValidation(err: PrintWriter, context: RunContext, error: AnalysisError): Int {
-        printRunLimits(err, context)
-        printSummary(err, context, "failed", listOf(error.code.name))
+    private fun failValidation(
+        err: PrintWriter, context: RunContext, error: AnalysisError, ranking: CandidateRanking?,
+    ): Int {
+        printRunLimits(err, context, ranking)
+        printSummary(err, context, "failed", listOf(error.code.name), ranking)
         return fail(err, error)
     }
 
-    private fun printSummary(err: PrintWriter, context: RunContext, status: String, stopReasons: List<String>) {
+    private fun printSummary(
+        err: PrintWriter, context: RunContext, status: String, stopReasons: List<String>, ranking: CandidateRanking? = null,
+    ) {
         val counters = context.statistics()
         err.println("stage=finished status=$status analysis_mode=${context.analysisMode.name.lowercase()} " +
             "explain_attempts=${counters.explainAttempts} evaluation_attempts=${counters.evaluationAttempts} " +
             "completed_sets=${counters.completedEvaluations} cache_hits=${counters.cacheHits} " +
-            "repair_attempts=${counters.repairAttempts} stop_reasons=${stopReasons.joinToString(",")}")
+            "repair_attempts=${counters.repairAttempts} stop_reasons=${stopReasons.joinToString(",")}" +
+            (ranking?.let { " candidate_ranking=${it.wireName}" } ?: ""))
     }
 
     private fun fail(err: PrintWriter, code: ErrorCode, message: String): Int {
@@ -168,14 +182,14 @@ class IndexBudgetCli(
 
     companion object {
         private val REQUIRED_ANALYZE_OPTIONS = setOf("--workload", "--output-dir")
-        private val ANALYZE_OPTIONS = REQUIRED_ANALYZE_OPTIONS + "--analysis-mode"
+        private val ANALYZE_OPTIONS = REQUIRED_ANALYZE_OPTIONS + setOf("--analysis-mode", "--candidate-ranking")
         private val USAGE = """
             IndexBudget — PostgreSQL index selection CLI
 
             Usage:
               indexbudget --help
               indexbudget --version
-              indexbudget analyze --workload <path> --output-dir <path> [--analysis-mode fast|normal|deep]
+              indexbudget analyze --workload <path> --output-dir <path> [--analysis-mode fast|normal|deep] [--candidate-ranking frequency|baseline_cost]
               indexbudget stats --help
 
             Validates JSON v2, shared queries, frequency profiles and budgets.
@@ -183,6 +197,9 @@ class IndexBudgetCli(
             Runs SQL resolution, bounded shortlist, HypoPG, greedy + repair and HTML/JSON/SQL export.
             Requires a prepared PostgreSQL database with HypoPG; analysis creates no physical indexes.
             Progress on stderr contains stages and actual EXPLAIN/set/cache counters.
+            Candidate preparation starts with up to 16 candidates and a reserve of up to 48.
+            Budget rejections are refilled from that reserve, with at most 32 size calls,
+            including failed calls, under the shared search/command deadline.
 
             Analysis modes (CLI overrides optional JSON analysis_mode; default: normal):
               fast:   command 30s, search 20s, EXPLAIN attempts 500, repair attempts 8.
@@ -191,6 +208,10 @@ class IndexBudgetCli(
             Every mode uses a 2s EXPLAIN timeout and a 5s connection timeout, capped by remaining time.
             Search budget starts before baseline. Modes keep the same pool of up to 16 candidates
             and greedy/fixed-S0 repair. Limits are budgets; exact runtime or better quality is not guaranteed.
+            Candidate ranking (CLI overrides optional JSON candidate_ranking; default: frequency):
+              frequency: normalized scenario frequencies (original strategy).
+              baseline_cost: frequencies multiplied by saved baseline planner costs (experimental).
+            Ranking orders scenario queues only; scenario quotas, arity diversity and search criteria stay the same.
             Final stderr summary includes all counters and stop reasons.
 
             Exit codes: 0 completed/help; 1 failed; 2 invalid input; 3 partial.

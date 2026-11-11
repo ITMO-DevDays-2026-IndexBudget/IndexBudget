@@ -1,6 +1,7 @@
 package ru.itmo.indexbudget.domain
 
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertThrows
@@ -272,6 +273,34 @@ class MetricsCalculatorImplTest {
 
         assertEquals(ErrorCode.NUMERIC_ERROR, exception.error.code)
         assertEquals("extreme", exception.error.profileId)
+    }
+
+    @Test
+    fun `mean ratio underflow is rejected even when every profile ratio is representable`() {
+        val profiles = listOf(profile("tiny", 1.0, 1e-308, 0.0), profile("large", 1.0, 0.0, 1e306))
+        val baseline = evaluation(1.0, 1.0)
+        val selected = evaluation(1.0, 0.0)
+        assertEquals(listOf(1.0, 0.0), profiles.map {
+            impl.calculate(workload(it), baseline, selected, usage).meanRatio
+        })
+
+        val exception = assertThrows(AnalysisException::class.java) {
+            impl.calculate(workload(*profiles.toTypedArray()), baseline, selected, usage)
+        }
+        assertEquals(ErrorCode.NUMERIC_ERROR, exception.error.code)
+        assertNull(exception.error.profileId)
+
+        val zero = impl.calculate(workload(*profiles.toTypedArray()), baseline, evaluation(0.0, 0.0), usage)
+        assertEquals(0.0, zero.meanCost)
+        assertEquals(0.0, zero.meanRatio)
+    }
+
+    @Test
+    fun `representable subnormal mean ratio remains available`() {
+        val workload = workload(profile("tiny", 1.0, 1e-17, 0.0), profile("large", 1.0, 0.0, 1e306))
+        val metrics = impl.calculate(workload, evaluation(1.0, 1.0), evaluation(1.0, 0.0), usage)
+        assertEquals(1e-323, metrics.meanRatio)
+        assertTrue(requireNotNull(metrics.meanRatio) > 0.0)
     }
 
     @Test

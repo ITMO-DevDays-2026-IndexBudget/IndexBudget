@@ -13,6 +13,7 @@ data class WorkloadInput(
     val objective: Objective = Objective.ROBUST,
     val tableWriteRates: Map<String, TableWriteRates>? = null,
     val analysisMode: AnalysisMode = AnalysisMode.NORMAL,
+    val candidateRanking: CandidateRanking = CandidateRanking.FREQUENCY,
     val provenance: WorkloadProvenance? = null,
 )
 

@@ -29,6 +29,19 @@ import java.nio.file.Path
 import java.time.Duration
 
 class AnalysisPipelineTest {
+    @Test
+    fun `candidate ranking receives saved full baseline once and result retains selected strategy`() {
+        val run = Harness(ContractFixtures.workload().copy(candidateRanking = CandidateRanking.BASELINE_COST))
+
+        val result = run.execute()
+
+        assertSame(result.baseline, run.generationBaseline)
+        assertEquals(1, run.evaluatedSets.count { it.isEmpty() })
+        assertEquals(3, run.evaluatedSets.size)
+        assertEquals(6, result.diagnostics.statistics.explainAttempts)
+        assertEquals(CandidateRanking.BASELINE_COST, run.report?.candidateRanking)
+    }
+
     @ParameterizedTest
     @EnumSource(AnalysisMode::class)
     fun `each mode reaches the session and preserves full incumbents after its actual deadline`(mode: AnalysisMode) {
@@ -311,7 +324,7 @@ class AnalysisPipelineTest {
         for (objective in Objective.entries) {
             for (withWriteProfile in listOf(false, true)) {
                 val run = Harness(
-                    ContractFixtures.workload(objective, withWriteProfile),
+                    ContractFixtures.workload(objective, withWriteProfile).copy(candidateRanking = CandidateRanking.BASELINE_COST),
                     suppliedMetrics = MetricsCalculatorImpl(),
                 )
                 run.baselineAction = {
@@ -322,6 +335,7 @@ class AnalysisPipelineTest {
 
                 assertEquals(RunStatus.COMPLETED, result.status)
                 assertEquals(listOf(StopReason.ZERO_BASELINE), result.diagnostics.stopReasons)
+                assertEquals(CandidateRanking.BASELINE_COST, run.report?.candidateRanking)
                 assertNull(result.selected?.metrics?.meanRatio)
                 assertNull(result.selected?.metrics?.worstRatio)
                 assertEquals(emptyList<String>(), result.selected?.evaluation?.candidateIds)
@@ -468,7 +482,7 @@ class AnalysisPipelineTest {
         assertEquals(RunStatus.COMPLETED, result.status)
         val reported = checkNotNull(run.report).candidates.candidates
         assertEquals(listOf("records_created_at", "records_group_created_at"), reported.map { it.id })
-        assertEquals(rejected.copy(estimatedBytes = null, budgetedBytes = null, writeUnitsPerHour = null),
+        assertEquals(rejected.copy(estimatedBytes = null, budgetedBytes = null),
             reported.first())
         assertEquals(ContractFixtures.candidates().last(), reported.last())
         assertEquals(listOf("records_group_created_at"), run.optimizedCandidateIds)
@@ -499,9 +513,10 @@ class AnalysisPipelineTest {
         assertEquals(listOf(if (cleanupCode == ErrorCode.DB_CONNECTION_ERROR)
             StopReason.CONNECTION_LOST else StopReason.DEADLINE_EXCEEDED), result.diagnostics.stopReasons)
         assertEquals(listOf(CandidateDecision(CandidateReason.HYPOTHETICAL_INDEX_ERROR,
-            candidateId = candidate.id, phase = AnalysisPhase.CANDIDATES)), result.diagnostics.candidateDecisions)
+            candidateId = candidate.id, table = candidate.definition.table,
+            phase = AnalysisPhase.CANDIDATES)), result.diagnostics.candidateDecisions)
         assertEquals(listOf(WarningCode.CANDIDATE_REJECTED), result.diagnostics.warnings.map { it.code })
-        assertEquals(listOf(candidate.copy(estimatedBytes = null, budgetedBytes = null, writeUnitsPerHour = null)),
+        assertEquals(listOf(candidate.copy(estimatedBytes = null, budgetedBytes = null)),
             run.report?.candidates?.candidates)
         assertFalse("optimize" in run.events)
         assertFalse(AnalysisPhase.CANDIDATES in result.diagnostics.completedPhases)
@@ -542,7 +557,7 @@ class AnalysisPipelineTest {
         assertFalse("optimize" in run.events)
         assertEquals(listOf(emptyList<String>()), run.evaluatedSets)
         assertEquals(run.shortlist.map {
-            it.copy(estimatedBytes = null, budgetedBytes = null, writeUnitsPerHour = null)
+            it.copy(estimatedBytes = null, budgetedBytes = null)
         }, run.report?.candidates?.candidates)
         assertEquals(run.shortlist.map { it.id }, result.diagnostics.candidateDecisions.map { it.candidateId })
         assertTrue(result.diagnostics.candidateDecisions.all { it.reason == CandidateReason.HYPOTHETICAL_INDEX_ERROR })
@@ -561,10 +576,12 @@ class AnalysisPipelineTest {
         assertEquals(RunStatus.PARTIAL, result.status)
         assertEquals(listOf(StopReason.CONNECTION_LOST), result.diagnostics.stopReasons)
         assertEquals(run.shortlist.map {
-            it.copy(estimatedBytes = null, budgetedBytes = null, writeUnitsPerHour = null)
+            it.copy(estimatedBytes = null, budgetedBytes = null)
         }, run.report?.candidates?.candidates)
-        assertEquals("records_created_at", result.diagnostics.candidateDecisions.single().candidateId)
-        assertEquals(CandidateReason.HYPOTHETICAL_INDEX_ERROR, result.diagnostics.candidateDecisions.single().reason)
+        assertEquals(listOf("records_created_at", "records_group_created_at"),
+            result.diagnostics.candidateDecisions.map { it.candidateId })
+        assertEquals(listOf(CandidateReason.HYPOTHETICAL_INDEX_ERROR, CandidateReason.NOT_EVALUATED_DUE_TO_LIMIT),
+            result.diagnostics.candidateDecisions.map { it.reason })
         assertEquals(listOf(WarningCode.CANDIDATE_REJECTED), result.diagnostics.warnings.map { it.code })
         assertFalse("optimize" in run.events)
         assertEquals(1, run.closeCalls)
@@ -752,6 +769,7 @@ class AnalysisPipelineTest {
         val corruptions = listOf<Pair<String, (AnalysisReport) -> AnalysisReport>>(
             "runId" to { report -> report.copy(runId = "different-run") },
             "analysisMode" to { report -> report.copy(analysisMode = AnalysisMode.DEEP) },
+            "candidateRanking" to { report -> report.copy(candidateRanking = CandidateRanking.BASELINE_COST) },
             "inputHash" to { report -> report.copy(inputHash = "b".repeat(64)) },
             "input" to { report -> report.copy(input = checkNotNull(report.input).copy(objective = Objective.MEAN)) },
             "result" to { report -> report.copy(result = SearchResult.Failed(
@@ -865,6 +883,7 @@ class AnalysisPipelineTest {
         var beforeEvaluation: (List<String>) -> Unit = {}
         var onParse: () -> Unit = {}
         var onGenerate: () -> Unit = {}
+        var generationBaseline: EvaluationResult? = null
         var afterBaseline: () -> Unit = {}
         var onSize: (IndexCandidate) -> Unit = {}
         var afterCheckpoint: () -> Unit = {}
@@ -1060,6 +1079,12 @@ class AnalysisPipelineTest {
                     }
                 },
                 candidateGenerator = object : CandidateGenerator {
+                    override fun generate(workload: ResolvedWorkload, catalog: CatalogSnapshot,
+                        context: RunContext, baseline: EvaluationResult): CandidateBatch {
+                        generationBaseline = baseline
+                        return generate(workload, catalog, context)
+                    }
+
                     override fun generate(workload: ResolvedWorkload, catalog: CatalogSnapshot, context: RunContext): CandidateBatch {
                         observe("generate", context)
                         onGenerate()

@@ -24,6 +24,7 @@ JSON записывается в UTF-8. Все перечисленные пол
 | `environment` | Версии окружения, см. ниже |
 | `status` | `completed`, `partial` или `failed` |
 | `analysis_mode` | Эффективный режим `fast`, `normal` или `deep`, с учётом приоритета CLI над JSON; доступен и для failed |
+| `candidate_ranking` | Эффективный рейтинг `frequency` или экспериментальный `baseline_cost` с учётом CLI; сохраняется при completed/partial/failed и раннем завершении до shortlist |
 | `selected_objective` | `robust` или `mean`, критерий, управлявший поиском |
 | `comparison_scope` | Всегда `evaluated_sets`: оба incumbents из одного исследованного пула |
 | `incumbents_coincide` | Совпадают ли отсортированные IDs двух наборов; `null` для failed |
@@ -58,7 +59,7 @@ JSON записывается в UTF-8. Все перечисленные пол
 Hash вычисляет `WorkloadReader` до применения DTO defaults: рекурсивно сортируются ключи JSON-объектов,
 убираются разделяющие пробелы, сохраняются порядок массивов и содержимое SQL-строк. В builder передаётся
 готовый `RunContext.inputHash`; повторная сериализация DTO не используется как источник hash.
-CLI `--analysis-mode` меняет эффективный режим запуска, сохраняя hash исходного JSON.
+CLI `--analysis-mode` и `--candidate-ranking` меняют эффективные настройки запуска, сохраняя hash исходного JSON. `candidate_ranking` — совместимое добавочное поле выходной схемы 3; вход workload остаётся v2. Прежний вход без этого поля выбирает `frequency`; в старых отчётах v2/v3 без поля рейтинг неявно равен `frequency`. Изменение рейтинга не меняет модель INCLUDE или `write_proxy_model`.
 `analysis_mode` — добавочное поле выходной схемы 3; вход workload остаётся v2,
 и прежний вход без этого поля выбирает `normal`.
 Читатели отчётов без поля режима могут трактовать режим как `normal`; фактические
@@ -117,12 +118,50 @@ DDL формирует общий `PostgresDdlRenderer` из разрешённ�
 `candidate_diagnostics` содержит:
 
 - `column_limit_per_query_table`, `local_candidate_limit`, `global_candidate_limit` (16/32/16);
-- `candidates_before_global_deduplication`, `candidates_after_global_deduplication`, `shortlisted_candidates`;
+- `candidates_before_global_deduplication`, `candidates_after_global_deduplication`;
+- `initial_shortlisted_candidates` — число начальных кандидатов до проверки бюджетов, не более 16;
+- `reserve_candidates`, `reserve_candidate_limit` — фактический резерв и его предел 48;
+- `max_size_attempts` — предел 32 вызовов оценки размера, включая ошибки;
+- `shortlisted_candidates` — прежнее число первоначально отобранных кандидатов, равное `initial_shortlisted_candidates`;
+- `preparation` — статистика подготовки, описанная ниже, либо `null`, если стадия не выполнялась;
 - `ungenerated_definitions` — `null`, если точное число неизвестно;
 - `local_scopes`: `query_id`, `table`, `discovered_columns`, `retained_columns`, `enumerated_definitions`,
   `deduplicated_definitions`, `unindexable_variants`, `retained_definitions`, `excluded_columns` (структуры `ColumnRef`),
   `enumerated_include_definitions`, `retained_include_definitions`;
 - `decisions`, `warnings`.
+
+`preparation` содержит:
+
+| Поле | Смысл |
+| --- | --- |
+| `examined_candidates` | Рассмотренные записи начального списка и резерва, включая ранние отказы |
+| `size_attempts` | Фактически начатые вызовы `estimateSize`, включая ошибочные |
+| `budget_rejected_candidates` | Кандидаты, отклонённые индивидуальными бюджетами |
+| `candidate_errors` | Локальные ошибки гипотез; потеря сессии и deadline сюда не входят |
+| `refilled_candidates` | Допустимые кандидаты из резерва, включённые в финальный shortlist |
+| `final_shortlisted_candidates` | Число подготовленных допустимых кандидатов |
+| `stop_reason` | `SHORTLIST_FULL`, `RESERVE_EXHAUSTED`, `SIZE_LIMIT`, `DEADLINE_EXCEEDED`, `CANCELLED`, `CONNECTION_LOST` либо `FAILED` |
+
+Начальный список и резерв образуют одну детерминированную очередь до 64 записей. В `candidates`
+сохраняются все записи этой очереди, в том числе бюджетные отказы, ошибки и непроверенный остаток;
+размеры не получавших оценку кандидатов остаются `null`. Поиск получает только допустимый финальный
+список до 16. Отказ по write budget может происходить до size-вызова и не создаёт вымышленной оценки
+размера. `SIZE_LIMIT` обозначает ограничение подготовки с warning; он сам по себе не требует partial.
+Потеря сессии и deadline отражаются также в общей диагностике запуска.
+
+Поля подготовки добавлены аддитивно в выходную схему 3; входной JSON и CLI-параметры не меняются.
+Существующий `shortlisted_candidates` сохраняет прежний смысл отбора до подготовки; итоговый
+размер передаётся только в новом `preparation.final_shortlisted_candidates`. У прежнего отчёта
+без этих полей сведения о refill неизвестны. [Пример наблюдаемых счётчиков](candidate-refill.md).
+
+Диагностика фиксированного пула: `preparation_scope` равен `run` для обычного анализа и
+`common_pool` для бюджетной точки. В последнем случае `preparation` сохраняет работу общей
+подготовки при максимальном бюджете. Отдельный `fixed_pool_selection` описывает текущую точку:
+`pool_candidates`, `admissible_candidates`, `budget_rejected_candidates`, `size_attempts` (всегда 0).
+В обычном анализе `fixed_pool_selection` равен `null`. HTML подписывает общую подготовку и
+текущую точку отдельно; общий shortlist точки показывает число допустимых для неё кандидатов.
+Значение `initial_shortlisted_candidates` по умолчанию наследует `shortlisted_candidates`,
+в том числе для producers, заполняющих только прежнее поле.
 
 `diagnostics` содержит `completed_phases`, `stop_reasons`, `statistics`, `limits`, `warnings`,
 `errors`, `candidate_decisions`, `unexamined_configurations`. Последнее остаётся `null`, если точное
@@ -145,12 +184,14 @@ DDL формирует общий `PostgresDdlRenderer` из разрешённ�
 Отказ всему набору может иметь `candidate_id: null` и список отсортированных IDs через запятую
 в `details.candidate_ids`. `MAX_INDEXES` означает нарушение числа индексов, `EVALUATION_FAILED` —
 ошибку полной оценки этого набора. `NO_MARGINAL_IMPROVEMENT` относится к конкретному greedy-шагу;
-`NOT_SELECTED` и `NOT_EVALUATED_DUE_TO_LIMIT` различают проверенные и не проверенные из-за лимитов
+`ZERO_BASELINE_COST_SUPPORT` означает нулевой рейтинг кандидата по baseline cost во всех профилях и отличается от глобального cap. `NOT_SELECTED` и `NOT_EVALUATED_DUE_TO_LIMIT` различают проверенные и не проверенные из-за лимитов
 варианты. `unexamined_configurations` при остановке на repair cap считает допустимых ещё
 не проверенных соседей fixed S0; при исчерпании соседства равно 0, при прерывании до подсчёта — `null`.
 Предупреждение/ошибка имеют `code`, `message`, `query_id`, `profile_id`, `details`.
 Неизвестные optional ID/таблица/фаза — `null`, пустые details — `{}`. Содержимое диагностики уже
 обезличено у источника: контракты запрещают DSN, пароли и сырые тексты исключений драйвера.
+
+В HTML раздел границ поиска показывает начальный список, резерв, бюджетные отказы, допустимые пополнения, итоговый shortlist, size-вызовы и причину остановки подготовки. Счётчики берутся из той же модели, что JSON; итог показывается через `preparation.final_shortlisted_candidates`, когда статистика подготовки доступна.
 
 ## Согласованность файлов
 
@@ -160,7 +201,7 @@ JSON и HTML получают один `AnalysisReport`; SQL содержит т
 публикацией. Ошибка записи/рендера/публикации — `EXPORT_FAILED` и exit 1; существующие чужие файлы
 не заменяются. Сохранённый partial можно экспортировать после остановки поиска или отмены.
 
-В HTML указан эффективный режим; раздел границ поиска показывает все шесть лимитов,
+В HTML указаны эффективные режим и рейтинг shortlist; `baseline_cost` помечен экспериментальным; раздел границ поиска показывает все шесть лимитов,
 фактические пять счётчиков и причины остановки по сохранённой модели.
 
 ## INCLUDE (#79)
@@ -211,7 +252,8 @@ JSON и HTML получают один `AnalysisReport`; SQL содержит т
 `out_of_range` относится к дополнительному представлению сохранённых costs: такой SQL может
 входить в корректный полный вектор, хотя его индивидуальный процент непредставим.
 Это не маскирует ошибки поиска: неконечные профильные метрики или underflow положительного
-профильного отношения дают `NUMERIC_ERROR`. При `cost > 0` отношение, потерянное в ноль,
+профильного отношения либо общего M дают `NUMERIC_ERROR`, даже если отношения отдельных
+профилей представимы. Реальный M = 0 при C_mean = 0 остаётся допустимым. При `cost > 0` отношение, потерянное в ноль,
 сохраняется как `null`/`out_of_range`; представимые subnormal-отношения и реальный ноль
 при `cost = 0` остаются числовыми.
 Порядок операций процентов сохранён (`100 * gain / baseline`), включая проверку промежуточного
@@ -238,6 +280,9 @@ partial и failed отображаются явно. Никакой новый E
 Это не реализация извлечения частот/импорта #66/#67: importer отвечает за правильность
 наблюдений и соответствие примеров статистике; reader проверяет форму и связи метаданных.
 Импортёр может вложить этот объект из своего манифеста в воспроизводимый workload.
+Интеграция с фактическим выходом #67 пока не проверена: для закрытия #68 требуется
+сопоставить источник, окна, отбор, охват и происхождение примеров в отчёте с настоящим
+манифестом импортёра. Синтетические примеры и тесты передачи метаданных этого не заменяют.
 
 Объект имеет собственный `schema_version: 1` и в той же структуре экспортируется как
 `workload_provenance`. Неизвестные поля и иные версии отклоняются до анализа.

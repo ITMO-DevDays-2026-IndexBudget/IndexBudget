@@ -15,7 +15,7 @@ fun IndexCandidate.bestPairPriority(): Int? = generationReasons.mapNotNull { it.
 /** A structural leaf path in the resolved condition tree, or the unconditional 'order_by' source. */
 data class CandidateSourceBranch(val queryId: String, val conditionPath: String)
 
-/** Unknown estimates stay null. The PostgreSQL adapter fills sizes only for the final shortlist. */
+/** Unknown estimates stay null, including unvisited reserve entries and rejected candidates. */
 data class IndexCandidate(
     val id: String,
     val definition: IndexDefinition,
@@ -36,6 +36,7 @@ enum class CandidateReason {
     INCLUDE_PAYLOAD_LIMIT,
     INCLUDE_VARIANT_LIMIT,
     GLOBAL_CANDIDATE_LIMIT,
+    ZERO_BASELINE_COST_SUPPORT,
     STORAGE_BUDGET,
     WRITE_BUDGET,
     MAX_INDEXES,
@@ -83,9 +84,52 @@ data class CandidateDiagnostics(
     val ungeneratedDefinitions: Long? = null,
     val decisions: List<CandidateDecision> = emptyList(),
     val warnings: List<AnalysisWarning> = emptyList(),
+    val initialShortlistedCandidates: Int = shortlistedCandidates,
+    val reserveCandidates: Int = 0,
+    val reserveCandidateLimit: Int = CandidatePreparationLimits.RESERVE,
+    val maxSizeAttempts: Int = CandidatePreparationLimits.SIZE_ATTEMPTS,
+    val preparation: CandidatePreparationStatistics? = null,
+    val preparationScope: CandidatePreparationScope = CandidatePreparationScope.RUN,
+    val fixedPoolSelection: FixedPoolSelectionStatistics? = null,
 )
 
 data class CandidateBatch(
     val candidates: List<IndexCandidate>,
     val diagnostics: CandidateDiagnostics = CandidateDiagnostics(),
+    val reserve: List<IndexCandidate> = emptyList(),
 )
+
+object CandidatePreparationLimits {
+    const val SHORTLIST = 16
+    const val RESERVE = 48
+    const val SIZE_ATTEMPTS = 32
+}
+
+enum class CandidatePreparationStopReason {
+    SHORTLIST_FULL, RESERVE_EXHAUSTED, SIZE_LIMIT, DEADLINE_EXCEEDED, CANCELLED, CONNECTION_LOST, FAILED,
+}
+
+data class CandidatePreparationStatistics(
+    val examinedCandidates: Int = 0,
+    val sizeAttempts: Int = 0,
+    val budgetRejectedCandidates: Int = 0,
+    val candidateErrors: Int = 0,
+    val refilledCandidates: Int = 0,
+    val finalShortlistedCandidates: Int = 0,
+    val stopReason: CandidatePreparationStopReason,
+)
+
+enum class CandidatePreparationScope { RUN, COMMON_POOL }
+
+data class FixedPoolSelectionStatistics(
+    val poolCandidates: Int,
+    val admissibleCandidates: Int,
+    val budgetRejectedCandidates: Int,
+    val sizeAttempts: Int = 0,
+)
+
+fun BudgetViolation.toCandidateReason(): CandidateReason = when (this) {
+    BudgetViolation.STORAGE_BUDGET -> CandidateReason.STORAGE_BUDGET
+    BudgetViolation.WRITE_BUDGET -> CandidateReason.WRITE_BUDGET
+    BudgetViolation.MAX_INDEXES -> CandidateReason.MAX_INDEXES
+}

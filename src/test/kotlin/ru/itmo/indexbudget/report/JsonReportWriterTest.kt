@@ -11,6 +11,18 @@ class JsonReportWriterTest {
     private val writer = JsonReportWriter()
 
     @Test
+    fun `legacy diagnostics preserve the initial shortlist alias`() {
+        val source = ContractFixtures.report()
+        val report = source.copy(candidates = source.candidates.copy(
+            diagnostics = CandidateDiagnostics(shortlistedCandidates = 16)))
+        val json = mapper.readTree(writer.render(report))["candidate_diagnostics"]
+        assertEquals(16, json["shortlisted_candidates"].intValue())
+        assertEquals(16, json["initial_shortlisted_candidates"].intValue())
+        assertEquals("run", json["preparation_scope"].stringValue())
+        assertTrue(json["fixed_pool_selection"].isNull)
+    }
+
+    @Test
     fun `wire v3 exposes both incumbents from one pool and embeds saved plan JSON`() {
         val report = ContractFixtures.report(objective = Objective.MEAN)
         val json = mapper.readTree(writer.render(report))
@@ -57,9 +69,46 @@ class JsonReportWriterTest {
         assertTrue(json["candidates"][1]["write_units_per_hour"].isNull)
         assertNull(json["candidates"][1]["cost"])
         assertTrue(json["candidate_diagnostics"]["ungenerated_definitions"].isNull)
+        assertTrue(json["candidate_diagnostics"]["preparation"].isNull)
         assertTrue(json["diagnostics"]["unexamined_configurations"].isNull)
         assertEquals("GLOBAL_CANDIDATE_LIMIT", json["candidate_diagnostics"]["decisions"][0]["reason"].stringValue())
         assertTrue(json["incumbents_coincide"].booleanValue())
+    }
+
+    @Test
+    fun `candidate preparation preserves original pool refill counts and every stop reason`() {
+        val source = ContractFixtures.report()
+        for (reason in CandidatePreparationStopReason.entries) {
+            val report = source.copy(candidates = source.candidates.copy(
+                diagnostics = source.candidates.diagnostics.copy(
+                    shortlistedCandidates = 16, initialShortlistedCandidates = 16,
+                    reserveCandidates = 2, reserveCandidateLimit = 48, maxSizeAttempts = 32,
+                    preparation = CandidatePreparationStatistics(
+                        examinedCandidates = 18, sizeAttempts = 18,
+                        budgetRejectedCandidates = 14, candidateErrors = 0,
+                        refilledCandidates = 2, finalShortlistedCandidates = 4,
+                        stopReason = reason,
+                    ),
+                ),
+            ))
+            val json = mapper.readTree(writer.render(report))
+            assertEquals(3, json["schema_version"].intValue())
+            val diagnostics = json["candidate_diagnostics"]
+            assertEquals(16, diagnostics["shortlisted_candidates"].intValue())
+            assertEquals(16, diagnostics["initial_shortlisted_candidates"].intValue())
+            assertEquals(2, diagnostics["reserve_candidates"].intValue())
+            assertEquals(48, diagnostics["reserve_candidate_limit"].intValue())
+            assertEquals(32, diagnostics["max_size_attempts"].intValue())
+            val preparation = diagnostics["preparation"]
+            assertEquals(18, preparation["examined_candidates"].intValue())
+            assertEquals(18, preparation["size_attempts"].intValue())
+            assertEquals(14, preparation["budget_rejected_candidates"].intValue())
+            assertEquals(0, preparation["candidate_errors"].intValue())
+            assertEquals(2, preparation["refilled_candidates"].intValue())
+            assertEquals(4, preparation["final_shortlisted_candidates"].intValue())
+            assertEquals(reason.name, preparation["stop_reason"].stringValue())
+            assertNull(preparation["sizeAttempts"])
+        }
     }
 
     @Test

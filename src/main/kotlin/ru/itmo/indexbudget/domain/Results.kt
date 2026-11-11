@@ -134,6 +134,8 @@ data class AnalysisReport(
     val incumbentsCoincide: Boolean? = null,
     /** Effective mode after CLI override; available even when the input could not be retained. */
     val analysisMode: AnalysisMode = AnalysisMode.NORMAL,
+    /** Effective shortlist strategy, including baseline-only and interrupted runs. */
+    val candidateRanking: CandidateRanking = input?.candidateRanking ?: CandidateRanking.FREQUENCY,
 ) {
     // Derived once per immutable report, including copies used by render fixtures.
     val summary: RecommendationSummary = ReportSummary.recommendation(this)

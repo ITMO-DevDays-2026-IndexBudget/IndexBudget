@@ -180,10 +180,16 @@ class IncludeCandidatesTest {
         assertEquals(8, scope.retainedIncludeDefinitions)
         assertEquals(24, scope.retainedDefinitions)
         assertEquals(16, batch.candidates.size)
+        assertEquals(8, batch.reserve.size)
         assertEquals("12", batch.diagnostics.decisions.single { it.reason == CandidateReason.LOCAL_CANDIDATE_LIMIT }
             .details["include_before"])
-        assertTrue(batch.candidates.all { it.definition.keys.size in 1..2 && it.definition.includedColumns.size <= 2 })
-        assertTrue(batch.diagnostics.decisions.any { it.reason == CandidateReason.GLOBAL_CANDIDATE_LIMIT })
+        val pool = batch.candidates + batch.reserve
+        assertEquals(24, pool.map { it.id }.toSet().size)
+        assertEquals(8, pool.count { it.definition.includedColumns.isNotEmpty() })
+        assertTrue(pool.all { it.definition.keys.size in 1..2 && it.definition.includedColumns.size <= 2 })
+        assertTrue(pool.filter { it.definition.includedColumns.isNotEmpty() }.all { it.definition.keys.size == 2 })
+        assertTrue(batch.diagnostics.warnings.any { it.code == WarningCode.GLOBAL_CANDIDATE_LIMIT })
+        assertFalse(batch.diagnostics.decisions.any { it.reason == CandidateReason.GLOBAL_CANDIDATE_LIMIT })
     }
 
     @Test

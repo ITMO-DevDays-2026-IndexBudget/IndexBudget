@@ -7,6 +7,7 @@ import ru.itmo.indexbudget.domain.*
 import ru.itmo.indexbudget.fixtures.ContractFixtures
 import tools.jackson.databind.json.JsonMapper
 import java.nio.file.Path
+import java.time.Instant
 
 class ReportSummaryTest {
     private val mapper = JsonMapper.builder().build()
@@ -181,6 +182,56 @@ class ReportSummaryTest {
         val json = mapper.readTree(JsonReportWriter().render(report))
         assertEquals("zero_baseline", json["query_effects"][0]["selected"]["relative_status"].stringValue())
         assertTrue(json["queries"][0]["regression"].booleanValue())
+    }
+
+    @Test
+    fun `HTML provenance rows preserve profile windows completeness coverage and example sources`() {
+        val input = WorkloadReader().read(Path.of("examples/workload-v2-provenance.json"))
+        val metadata = requireNotNull(input.provenance).copy(
+            windows = listOf(
+                ObservationWindow("normal", Instant.parse("2026-11-10T08:00:00Z"),
+                    Instant.parse("2026-11-10T09:00:00Z"), false, ObservationCoverage(null, 0, 0.0, null)),
+                ObservationWindow("campaign", Instant.parse("2026-11-10T10:00:00Z"),
+                    Instant.parse("2026-11-10T12:00:00Z"), true, ObservationCoverage(12, 34, 56.0, 78.0)),
+            ),
+            queryExamples = listOf(
+                QueryExample("records_by_group", QueryExampleSource.USER_SUPPLIED_LITERALS),
+                QueryExample("records_by_value", QueryExampleSource.ORIGINAL_LITERAL_SQL),
+            ),
+        )
+        val source = ContractFixtures.report()
+        val report = builder.build(input.copy(provenance = metadata), source.candidates, source.result, RunContext())
+        val provenanceHtml = HtmlReportRenderer().render(report).substringAfter("id=\"provenance\"").substringBefore("</section>")
+        val rows = Regex("<tr>(.*?)</tr>").findAll(provenanceHtml).map { row ->
+            Regex("<t[hd][^>]*>(.*?)</t[hd]>").findAll(row.groupValues[1]).map { it.groupValues[1] }.toList()
+        }.toList()
+        assertEquals(listOf(
+            listOf("normal", "2026-11-10T08:00:00Z", "2026-11-10T09:00:00Z", "Неполное", "Нет данных / 0"),
+            listOf("campaign", "2026-11-10T10:00:00Z", "2026-11-10T12:00:00Z", "Полное", "12 / 34"),
+            listOf("normal", "0", "Нет данных"),
+            listOf("campaign", "56", "78"),
+        ), rows.filter { it.firstOrNull() in setOf("normal", "campaign") })
+        assertEquals(listOf(
+            listOf("records_by_group", "Репрезентативные литералы пользователя"),
+            listOf("records_by_value", "Исходный SQL с литералами"),
+        ), rows.filter { it.firstOrNull() in setOf("records_by_group", "records_by_value") })
+    }
+
+    @Test
+    fun `summary does not restore a saved zero ratio after recognizing positive cost underflow`() {
+        val source = ContractFixtures.report()
+        val original = requireNotNull(source.result.selected)
+        val selected = original.copy(metrics = original.metrics.copy(
+            baselineMeanCost = 5e305, meanCost = 5e-309, meanRatio = 0.0,
+        ))
+        val report = source.copy(result = SearchResult.Completed(Objective.ROBUST,
+            requireNotNull(source.result.baseline), selected, selected))
+        assertEquals(RelativeValueStatus.OUT_OF_RANGE, report.summary.meanEffect.relativeStatus)
+        assertNull(report.summary.meanEffect.ratio)
+        assertEquals(5e-309, report.summary.meanEffect.cost)
+        val json = mapper.readTree(JsonReportWriter().render(report))["summary"]["mean_effect"]
+        assertEquals("out_of_range", json["relative_status"].stringValue())
+        assertTrue(json["ratio"].isNull)
     }
 
     @Test
