@@ -36,20 +36,36 @@ class HtmlReportRenderer : ReportRenderer {
             <a href="#provenance"><span>08</span>Происхождение нагрузки</a></nav>
             <div class="nav-note">Planner cost — оценка планировщика. Фактическое время запросов здесь не измеряется.</div></aside>
             <main id="main">""")
-        overview(report)
-        comparison(report)
-        manualComparison(report)
-        profiles(report)
-        indexes(report)
-        queries(report)
-        search(report)
-        run(report)
-        provenance(report)
-        append("""<footer>IndexBudget · Спецификация """)
-        append(h(report.specVersion))
-        append(" · Оценки помогают выбрать набор для отдельной физической проверки.</footer></main></div><script>")
+        append(renderContent(report))
+        append("</main></div><script>")
         append(script)
         append("</script></body></html>")
+    }
+
+    /** The same saved report, embedded without document chrome; ordinal prefixes isolate local anchors. */
+    fun renderContent(report: AnalysisReport, prefix: String = ""): String {
+        require(prefix.isEmpty() || prefix.matches(Regex("variant-[1-5]-")))
+        val content = buildString {
+            overview(report)
+            comparison(report)
+            manualComparison(report)
+            profiles(report)
+            indexes(report)
+            queries(report)
+            search(report)
+            run(report)
+            provenance(report)
+            append("""<footer>IndexBudget · Спецификация """)
+            append(h(report.specVersion))
+            append(" · Оценки помогают выбрать набор для отдельной физической проверки.</footer>")
+        }
+        if (prefix.isEmpty()) return content
+        // Only renderer-owned HTML attributes are rewritten; SQL/text has already been escaped.
+        return content.replace(Regex("""(\s(?:id|for)=")([^"]+)(")""")) {
+            it.groupValues[1] + prefix + it.groupValues[2] + it.groupValues[3]
+        }.replace(Regex("""(\shref="#)([^"]+)(")""")) {
+            it.groupValues[1] + prefix + it.groupValues[2] + it.groupValues[3]
+        }
     }
 
     private fun StringBuilder.manualComparison(report: AnalysisReport) {

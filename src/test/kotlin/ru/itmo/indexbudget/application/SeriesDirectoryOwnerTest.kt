@@ -27,6 +27,8 @@ class SeriesDirectoryOwnerTest {
         val result = BudgetSeriesResult(SeriesStatus.FAILED, emptyList())
         writer.publish(result, null, null, finished = true)
         val original = Files.readAllBytes(output.resolve("series.json"))
+        val originalHtml = Files.readAllBytes(output.resolve("series.html"))
+        val originalReport = Files.readAllBytes(output.resolve("report.html"))
         val artifacts = Files.createDirectory(output.resolve("point-01"))
         Files.writeString(artifacts.resolve("indexes.sql"), "published by B")
 
@@ -34,6 +36,8 @@ class SeriesDirectoryOwnerTest {
 
         assertEquals(ErrorCode.EXPORT_FAILED, rejected.error.code)
         assertArrayEquals(original, Files.readAllBytes(output.resolve("series.json")))
+        assertArrayEquals(originalHtml, Files.readAllBytes(output.resolve("series.html")))
+        assertArrayEquals(originalReport, Files.readAllBytes(output.resolve("report.html")))
         assertEquals("published by B", Files.readString(artifacts.resolve("indexes.sql")))
         assertEquals("series-b", Files.readString(output.resolve(SeriesDirectoryOwner.MARKER)))
     }
@@ -72,10 +76,44 @@ class SeriesDirectoryOwnerTest {
         val writer = BudgetSeriesWriter(SeriesDirectoryOwner.claim(output, context.runId), ContractFixtures.workload(), request, context)
         writer.publish(BudgetSeriesResult(SeriesStatus.FAILED, emptyList()), null, null, finished = false)
         val original = Files.readAllBytes(output.resolve("series.json"))
+        val originalHtml = Files.readAllBytes(output.resolve("series.html"))
         Files.writeString(output.resolve(SeriesDirectoryOwner.MARKER), "series-b")
         assertEquals(ErrorCode.EXPORT_FAILED, assertThrows(AnalysisException::class.java) {
             writer.publish(BudgetSeriesResult(SeriesStatus.FAILED, emptyList()), null, null, finished = true)
         }.error.code)
         assertArrayEquals(original, Files.readAllBytes(output.resolve("series.json")))
+        assertArrayEquals(originalHtml, Files.readAllBytes(output.resolve("series.html")))
+    }
+
+    @Test
+    fun `HTML retains exact decimal budget labels from the published JSON snapshot`() {
+        val output = directory.resolve("precise-series")
+        val context = RunContext(runId = "precise-series")
+        val request = BudgetSeriesRequest(SeriesBudget.WRITE,
+            listOf("0.100000000000000000001", "1", "2").map(::BigDecimal))
+        val writer = BudgetSeriesWriter(SeriesDirectoryOwner.claim(output, context.runId), ContractFixtures.workload(), request, context)
+        writer.publish(BudgetSeriesResult(SeriesStatus.FAILED, emptyList()), null, null, finished = true)
+        assertTrue(Files.readString(output.resolve("series.json")).contains("0.100000000000000000001"))
+        assertTrue(Files.readString(output.resolve("series.html")).contains("0,100000000000000000001"))
+    }
+
+    @Test
+    fun `publication failure removes stale HTML but preserves previously exported points`() {
+        val output = directory.resolve("series")
+        val context = RunContext(runId = "series-a")
+        val writer = BudgetSeriesWriter(SeriesDirectoryOwner.claim(output, context.runId), ContractFixtures.workload(), request, context)
+        val result = BudgetSeriesResult(SeriesStatus.FAILED, emptyList())
+        writer.publish(result, null, null, finished = false)
+        val point = Files.createDirectory(output.resolve("point-01"))
+        Files.writeString(point.resolve("report.html"), "saved point")
+        Files.move(output.resolve("series.json"), output.resolve("previous.json"))
+        Files.createDirectory(output.resolve("series.json"))
+        Files.writeString(output.resolve("series.json/blocker"), "simulate publication failure")
+        val failure = assertThrows(AnalysisException::class.java) { writer.publish(result, null, null, finished = true) }
+        assertEquals(ErrorCode.EXPORT_FAILED, failure.error.code)
+        assertFalse(Files.exists(output.resolve("series.html")))
+        assertFalse(Files.exists(output.resolve("report.html")))
+        assertEquals("saved point", Files.readString(point.resolve("report.html")))
+        Files.list(output).use { paths -> assertFalse(paths.anyMatch { it.fileName.toString().endsWith(".tmp") }) }
     }
 }

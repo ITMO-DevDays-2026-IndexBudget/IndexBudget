@@ -13,6 +13,7 @@ import ru.itmo.indexbudget.postgres.JdbcAnalysisSession
 import ru.itmo.indexbudget.report.AtomicReportExporter
 import ru.itmo.indexbudget.report.DefaultReportBuilder
 import ru.itmo.indexbudget.report.HtmlReportRenderer
+import ru.itmo.indexbudget.report.HtmlBudgetSeriesRenderer
 import ru.itmo.indexbudget.report.ReportExporter
 import ru.itmo.indexbudget.sql.JSqlParserSqlAnalyzer
 import tools.jackson.databind.json.JsonMapper
@@ -106,6 +107,20 @@ class BudgetSeriesHypopgIntegrationTest {
                         listOf(BigDecimal.ZERO, BigDecimal.ONE, BigDecimal.TWO)), directory.resolve("series"), context)
 
                 assertEquals(SeriesStatus.COMPLETED, result.status)
+                val summary = JsonMapper.builder().build().readTree(Files.readString(directory.resolve("series/series.json")))
+                val summaryHtml = Files.readString(directory.resolve("series/series.html"))
+                assertEquals(HtmlBudgetSeriesRenderer().render(summary), summaryHtml)
+                val unifiedHtml = Files.readString(directory.resolve("series/report.html"))
+                assertEquals(HtmlBudgetSeriesRenderer().render(summary,
+                    result.points.associate { it.ordinal to requireNotNull(it.report) }), unifiedHtml)
+                result.points.forEach { point ->
+                    assertTrue(unifiedHtml.contains(requireNotNull(point.runId)))
+                    assertTrue(unifiedHtml.contains("id=\"variant-${point.ordinal}-query-0\""))
+                }
+                for (point in result.points) for (artifact in point.artifacts.values) {
+                    assertTrue(summaryHtml.contains("href=\"$artifact\""))
+                    assertTrue(Files.isRegularFile(directory.resolve("series").resolve(artifact)))
+                }
                 assertEquals(listOf(SeriesPointStatus.COMPLETED, SeriesPointStatus.COMPLETED, SeriesPointStatus.COMPLETED),
                     result.points.map { it.status })
                 assertEquals(listOf(0, 1, 2), result.points.map { checkNotNull(it.result?.selected).evaluation.candidateIds.size })
@@ -144,7 +159,6 @@ class BudgetSeriesHypopgIntegrationTest {
                     assertEquals(contexts[index + 1].statistics().explainAttempts,
                         evaluateCalls[index + 1] * input.queries.size)
                 }
-                val summary = JsonMapper().readTree(Files.readString(directory.resolve("series/series.json")))
                 assertEquals(1, summary["schema_version"].intValue())
                 assertEquals(3, summary["points"].size())
                 assertEquals(poolIds, List(summary["preparation"]["candidate_ids"].size()) { summary["preparation"]["candidate_ids"][it].stringValue() })
@@ -161,6 +175,18 @@ class BudgetSeriesHypopgIntegrationTest {
                 assertEquals(0, scalar(admin,
                     "SELECT count(*) FROM pg_catalog.pg_indexes WHERE schemaname = '$schema'"),
                     "Series analysis must create no physical indexes")
+                // Optional persistent demo of real planner results; no connection details are copied.
+                System.getenv("INDEXBUDGET_SERIES_TEST_OUTPUT")?.let { destination ->
+                    val output = Path.of(destination)
+                    require(!Files.exists(output)) { "Use a new directory for the real series demo" }
+                    val source = directory.resolve("series")
+                    Files.walk(source).use { paths ->
+                        paths.forEach { path ->
+                            val target = output.resolve(source.relativize(path))
+                            if (Files.isDirectory(path)) Files.createDirectories(target) else Files.copy(path, target)
+                        }
+                    }
+                }
             } finally {
                 execute(admin, "DROP SCHEMA IF EXISTS $schema CASCADE")
             }

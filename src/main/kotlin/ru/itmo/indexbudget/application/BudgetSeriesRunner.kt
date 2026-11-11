@@ -8,7 +8,7 @@ fun interface BudgetSeriesRunner {
 }
 
 data class SeriesPreparation(val pool: PreparedCandidatePool, val conditions: SeriesConditions)
-data class SeriesPointRun(val result: SearchResult, val conditions: SeriesConditions?)
+data class SeriesPointRun(val result: SearchResult, val conditions: SeriesConditions?, val report: AnalysisReport? = null)
 
 /** Implemented by the ordinary pipeline; each call owns and closes a separate session. */
 interface SeriesAnalysisRunner {

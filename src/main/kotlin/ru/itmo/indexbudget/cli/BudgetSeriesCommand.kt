@@ -155,6 +155,8 @@ class BudgetSeriesCommand(
             Prepare one pool of up to 16 candidates at the maximum budget, with refill only during preparation.
             Every point uses a fresh RunContext, JDBC session and cache, and publishes separate JSON/HTML/SQL.
             series.json records point statuses, selected indexes, metrics, budgets and relative artifact links.
+            Open report.html for offline budget comparisons and full details of the selected variant.
+            series.html remains available as a separate comparison summary.
             Baseline/catalog changes are marked as non-comparable; planner cost is not runtime.
             Stderr separates scope=preparation from scope=point ordinal=N, including progress and failures.
             Each completed invocation prints all six limits, five counters, stop reasons and saved errors.
