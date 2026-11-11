@@ -29,6 +29,119 @@ import java.nio.file.Path
 import java.time.Duration
 
 class AnalysisPipelineTest {
+    @ParameterizedTest
+    @ValueSource(booleans = [false, true])
+    fun `ordinary run and series preparation reject resolution changes before baseline`(preparation: Boolean) {
+        val changes = listOf<(ResolvedWorkload) -> ResolvedWorkload>(
+            { it.copy(input = it.input.copy(objective = Objective.MEAN)) },
+            { it.copy(queries = it.queries.dropLast(1)) },
+            { it.copy(queries = it.queries.map { query -> query.copy(sql = query.sql + " ") }) },
+        )
+        for (change in changes) {
+            val run = Harness()
+            run.transformResolved = change
+
+            if (preparation) {
+                assertThrows(IllegalArgumentException::class.java) {
+                    run.createPipeline().prepareSeriesPool(run.input, run.context)
+                }
+            } else {
+                val result = run.execute() as SearchResult.Failed
+                assertEquals(ErrorCode.INTERNAL_ERROR, result.error.code)
+                assertNull(result.baseline)
+            }
+
+            assertTrue(run.evaluatedSets.isEmpty())
+            assertFalse("generate" in run.events)
+            assertEquals(1, run.openCalls)
+            assertEquals(1, run.closeCalls)
+            assertEquals(1, run.unregisterCalls)
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = [false, true])
+    fun `ordinary run and series preparation validate resolved write profile before baseline`(preparation: Boolean) {
+        val input = ContractFixtures.workload().copy(tableWriteRates = emptyMap())
+        val run = Harness(input)
+
+        val error = if (preparation) {
+            assertThrows(AnalysisException::class.java) {
+                run.createPipeline().prepareSeriesPool(input, run.context)
+            }.error
+        } else (run.execute() as SearchResult.Failed).error
+
+        assertEquals(ErrorCode.INVALID_WRITE_PROFILE, error.code)
+        assertTrue(run.evaluatedSets.isEmpty())
+        assertEquals(1, run.closeCalls)
+        assertEquals(1, run.unregisterCalls)
+    }
+
+    @Test
+    fun `series preparation rejects incomplete baseline and releases its session`() {
+        val run = Harness()
+        run.baselineAction = {
+            val baseline = ContractFixtures.baselineEvaluation()
+            baseline.copy(costByQueryId = baseline.costByQueryId.filterKeys { it == "records_by_group" },
+                plansByQueryId = baseline.plansByQueryId.filterKeys { it == "records_by_group" })
+        }
+
+        val error = assertThrows(AnalysisException::class.java) {
+            run.createPipeline().prepareSeriesPool(run.input, run.context)
+        }.error
+
+        assertEquals(ErrorCode.EXPLAIN_FAILED, error.code)
+        assertEquals(listOf(emptyList<String>()), run.evaluatedSets)
+        assertFalse("generate" in run.events)
+        assertFalse("report" in run.events)
+        assertEquals(1, run.closeCalls)
+        assertEquals(1, run.unregisterCalls)
+    }
+
+    @Test
+    fun `series preparation stops after late baseline and closes without candidate work`() {
+        val run = Harness()
+        run.afterBaseline = { run.advance(60) }
+
+        val error = assertThrows(AnalysisException::class.java) {
+            run.createPipeline().prepareSeriesPool(run.input, run.context)
+        }.error
+
+        assertEquals(ErrorCode.DEADLINE_EXCEEDED, error.code)
+        assertEquals(RunStatistics(2, 1, 1), run.context.statistics())
+        assertFalse(AnalysisPhase.BASELINE in run.context.completedPhases())
+        assertFalse("generate" in run.events)
+        assertFalse("report" in run.events)
+        assertEquals(1, run.cancelCalls)
+        assertEquals(1, run.closeCalls)
+        assertEquals(1, run.unregisterCalls)
+    }
+
+    @Test
+    fun `series preparation preserves primary failure and all safe cleanup failures`() {
+        for (primaryFailure in listOf(false, true)) {
+            val run = Harness()
+            if (primaryFailure) run.onGenerate = { problem(ErrorCode.NUMERIC_ERROR) }
+            run.failClose = true
+            run.failUnregister = true
+
+            val failure = assertThrows(AnalysisException::class.java) {
+                run.createPipeline().prepareSeriesPool(run.input, run.context)
+            }
+
+            assertEquals(if (primaryFailure) ErrorCode.NUMERIC_ERROR else ErrorCode.DB_CONNECTION_ERROR,
+                failure.error.code)
+            assertEquals(if (primaryFailure) 2 else 1, failure.suppressed.size)
+            assertTrue(failure.suppressed.all {
+                it is AnalysisException && it.error.code == ErrorCode.DB_CONNECTION_ERROR &&
+                    it.error.message == "Analysis session cleanup failed."
+            })
+            assertEquals(1, run.closeCalls)
+            assertEquals(1, run.unregisterCalls)
+            assertFalse("report" in run.events)
+        }
+    }
+
     @Test
     fun `candidate ranking receives saved full baseline once and result retains selected strategy`() {
         val run = Harness(ContractFixtures.workload().copy(candidateRanking = CandidateRanking.BASELINE_COST))
@@ -876,12 +989,14 @@ class AnalysisPipelineTest {
         var exportRemaining: Duration? = null
         var cancelRegistered: (() -> Unit)? = null
         var failClose = false
+        var failUnregister = false
         var publishInvalidCheckpoint = false
         var returnedSearchFailure: ErrorCode? = null
         var catalogWarnings = emptyList<AnalysisWarning>()
         var baselineAction: (() -> EvaluationResult)? = null
         var beforeEvaluation: (List<String>) -> Unit = {}
         var onParse: () -> Unit = {}
+        var transformResolved: (ResolvedWorkload) -> ResolvedWorkload = { it }
         var onGenerate: () -> Unit = {}
         var generationBaseline: EvaluationResult? = null
         var afterBaseline: () -> Unit = {}
@@ -1068,7 +1183,7 @@ class AnalysisPipelineTest {
                     }
                     override fun resolve(parsed: ParsedWorkload, catalog: CatalogSnapshot, context: RunContext): ResolvedWorkload {
                         observe("resolve", context)
-                        return ContractFixtures.resolvedWorkload().copy(input = input)
+                        return transformResolved(ContractFixtures.resolvedWorkload().copy(input = input))
                     }
                 },
                 sessionFactory = object : AnalysisSessionFactory {
@@ -1112,7 +1227,11 @@ class AnalysisPipelineTest {
                 },
                 shutdownCancellation = ShutdownCancellation { cancel ->
                     cancelRegistered = cancel
-                    AutoCloseable { unregisterCalls++; events += "unregister" }
+                    AutoCloseable {
+                        unregisterCalls++
+                        events += "unregister"
+                        if (failUnregister) throw IOException("private registration cleanup details")
+                    }
                 },
             )
         }

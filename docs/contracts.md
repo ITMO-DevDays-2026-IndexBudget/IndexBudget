@@ -224,7 +224,7 @@ Deadline/cancellation общего `RunContext` проверяются межд�
 
 `CandidatePreparation(metrics).prepare(batch, session, input, context, onPrepared)` возвращает `CandidatePreparationResult(reportBatch, searchBatch)`: полную очередь для отчёта и допустимый список для поиска. Callback публикует сохранённые факты подготовки до следующей операции, чтобы прерывание не теряло уже полученные оценки.
 
-Общий путь `prepareFixedPool` использует наибольшие бюджеты серии и тот же refill до 16; результат — `PreparedCandidatePool(input, reportBatch, candidates)`. `selectFixedPool(pool, input, context)` разрешает только уменьшение storage/write budget при неизменном остальном входе и возвращает `CandidatePreparationResult` без JDBC, новых размеров и refill. `AnalysisPipeline.runWithFixedPool(input, outputDirectory, context, pool)` вызывает `selectFixedPool` до открытия JDBC-сессии и до раннего завершения по нулевым бюджетам. Несовместимый вход даёт `INVALID_INPUT` без сессии. Затем выполняются обычные parse/catalog/resolution/baseline в собственной сессии, а повторные генерация/подготовка пропускаются. Даже при нулевых бюджетах точки сохраняется полный `reportBatch` фиксированного пула. Между точками не передаётся кэш оценок наборов. Проверка сопоставимости baseline/каталога и orchestration всей серии остаются задачей #75; этот стык не добавляет пакетный CLI. [Числовой пример и диагностика](candidate-refill.md).
+Общий путь `prepareFixedPool` использует наибольшие бюджеты серии и тот же refill до 16; результат — `PreparedCandidatePool(input, reportBatch, candidates)`. `selectFixedPool(pool, input, context)` разрешает только уменьшение storage/write budget при неизменном остальном входе и возвращает `CandidatePreparationResult` без JDBC, новых размеров и refill. `AnalysisPipeline.runWithFixedPool(input, outputDirectory, context, pool)` вызывает `selectFixedPool` до открытия JDBC-сессии и до раннего завершения по нулевым бюджетам. Несовместимый вход даёт `INVALID_INPUT` без сессии. Затем выполняются обычные parse/catalog/resolution/baseline в собственной сессии, а повторные генерация/подготовка пропускаются. Даже при нулевых бюджетах точки сохраняется полный `reportBatch` фиксированного пула. Между точками не передаётся кэш оценок наборов. Orchestration `analyze-series` использует этот стык для общего пула и проверяет наблюдаемые условия baseline/каталога относительно подготовки; [контракт серии](budget-series.md). [Числовой пример и диагностика](candidate-refill.md).
 
 ## Модули и стыки
 
@@ -679,3 +679,12 @@ EXPLAIN, deadline без нового cleanup SQL, rollback, повтор пос
 текущую точку отдельно; общий shortlist точки показывает число допустимых для неё кандидатов.
 Значение `initial_shortlisted_candidates` по умолчанию наследует `shortlisted_candidates`,
 в том числе для producers, заполняющих только прежнее поле.
+
+
+## Серия бюджетов (#75)
+
+Команда `analyze-series` читает обычный workload v2 и отдельный запрос серии v1. В запросе фиксируются `budget`, 3–5 различных значений `values` и общий `timeout_seconds` от 1 до 86400 секунд (default 600); CLI `--series-timeout-seconds` имеет приоритет над валидным JSON. Бюджет storage принимает неотрицательный Long, write — конечное неотрицательное число без положительного underflow. При write-серии обязателен полный профиль записи. Общие SQL/профили/objective/режим/рейтинг/второй бюджет не меняются.
+
+Подготовка при максимальном бюджете строит до 16 кандидатов через `prepareFixedPool`. Каждая последующая точка вызывает pipeline с этим пулом, своим RunContext, baseline и выделенной сессией; size/refill/ordinary run cache между точками не переносятся. Допустимость наборов и метрики остаются в общей модели domain. Общий deadline ограничивает всю серию вместе с подготовкой и локальными пределами режима.
+
+Точки публикуют свои обычные report v3 JSON/HTML/SQL в отдельных подкаталогах; сводка содержит готовые результаты и относительные ссылки, не выполняя повторный EXPLAIN. Ошибка/остановка не удаляет ранее опубликованные точки. Условия подготовки и каждой точки сопоставляются по наблюдаемым baseline, каталогу и доступным версиям; обнаруженный drift отмечается явно. Это не гарантия неизменности всей БД и не два поиска в одинаковом пуле оценённых комбинаций. [CLI, точный формат сводки и ограничения](budget-series.md).

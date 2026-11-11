@@ -25,7 +25,48 @@ class AnalysisPipeline(
     private val reportExporter: ReportExporter,
     private val resolvedValidator: ResolvedWorkloadValidator = ResolvedWorkloadValidator(),
     private val shutdownCancellation: ShutdownCancellation = JvmShutdownCancellation(),
-) : AnalysisRunner {
+) : AnalysisRunner, SeriesAnalysisRunner {
+    override fun prepareSeriesPool(input: WorkloadInput, context: RunContext): SeriesPreparation {
+        val scope = SessionScope(context)
+        var primary: Throwable? = null
+        try {
+            context.selectAnalysisMode(input.analysisMode)
+            val (session, catalog, resolved) = introspect(input, context, scope, refreshVersions = true)
+            context.completePhase()
+            val baseline = evaluateBaseline(session, resolved, input, context)
+            val assessment = assessBaseline(input, baseline)
+            context.checkDeadline()
+            context.completePhase()
+            context.enterPhase(AnalysisPhase.CANDIDATES)
+            val batch = if (baselineStop(input, assessment) != null) CandidateBatch(emptyList()) else
+                candidateGenerator.generate(resolved, catalog, context, baseline)
+            val pool = CandidatePreparation(metrics).prepareFixedPool(batch, session, input, context)
+            context.checkDeadline()
+            context.completePhase()
+            val conditions = checked(context) {
+                SeriesConditionCapture.capture(catalog, baseline, session.databaseVersions, session.sourceFingerprint)
+            }
+            return SeriesPreparation(pool, conditions)
+        } catch (error: Throwable) {
+            primary = error
+            throw error
+        } finally {
+            val cleanup = scope.cleanup().map { AnalysisException(it) }
+            val original = primary
+            if (original != null) cleanup.forEach(original::addSuppressed)
+            else cleanup.firstOrNull()?.let { first ->
+                cleanup.drop(1).forEach(first::addSuppressed)
+                throw first
+            }
+        }
+    }
+
+    override fun runSeriesPoint(input: WorkloadInput, outputDirectory: Path, context: RunContext,
+        pool: PreparedCandidatePool): SeriesPointRun {
+        var conditions: SeriesConditions? = null
+        val result = runInternal(input, outputDirectory, context, pool) { conditions = it }
+        return SeriesPointRun(result, conditions)
+    }
     override fun run(input: WorkloadInput, outputDirectory: Path, context: RunContext): SearchResult =
         runInternal(input, outputDirectory, context, null)
 
@@ -42,6 +83,7 @@ class AnalysisPipeline(
         outputDirectory: Path,
         context: RunContext,
         fixedPool: PreparedCandidatePool?,
+        onConditions: (SeriesConditions) -> Unit = {},
     ): SearchResult {
         var manual: ManualComparison? = input.manualIndexes?.let { ManualComparison(ManualComparisonStatus.NOT_EVALUATED) }
         val manualEvaluator = ManualIndexEvaluator()
@@ -53,60 +95,30 @@ class AnalysisPipeline(
         val cleanupErrors = mutableListOf<AnalysisError>()
         val operationStopReasons = mutableListOf<StopReason>()
         val catalogWarnings = mutableListOf<AnalysisWarning>()
-        val activeSession = AtomicReference<AnalysisSession?>()
-        var registration: AutoCloseable? = null
+        var scope: SessionScope? = null
         try {
             context.selectAnalysisMode(input.analysisMode)
             val fixedSelection = fixedPool?.let { pool ->
                 CandidatePreparation(metrics).selectFixedPool(pool, input, context)
                     .also { candidateBatch = it.reportBatch }
             }
-            registration = shutdownCancellation.register {
-                context.cancel()
-                // The adapter owns thread-safe cancellation of a pending statement/connection.
-                try { activeSession.get()?.cancel() } catch (_: Exception) { /* close runs in finally */ }
-            }
-            context.enterPhase(AnalysisPhase.INTROSPECTION)
-            val parsed = checked(context) { sqlAnalyzer.parse(input, context) }
-            val session = sessionFactory.open(context)
-            activeSession.set(session)
-            context.recordDatabaseVersions(session.databaseVersions)
-            context.checkDeadline()
-            val catalog = checked(context) { session.readCatalog(parsed.referencedTables, context) }
-            catalogWarnings += catalog.warnings
-            val resolved = checked(context) { sqlAnalyzer.resolve(parsed, catalog, context) }
-            require(resolved.input == input) { "Resolution must preserve the validated input" }
-            require(resolved.queries.map { it.id } == input.queries.map { it.id }) {
-                "Resolution must preserve every shared query"
-            }
-            require(resolved.queries.map { it.sql } == input.queries.map { it.sql }) {
-                "Resolution must preserve original SQL"
-            }
-            resolvedValidator.validate(resolved, context)
+            val sessionScope = SessionScope(context)
+            scope = sessionScope
+            val (session, catalog, resolved) = introspect(input, context, sessionScope,
+                refreshVersions = fixedPool != null, onCatalog = { catalogWarnings += it.warnings })
             input.manualIndexes?.let { manual = manualEvaluator.prepare(it, catalog, resolved, context) }
             context.completePhase()
 
-            context.startSearch()
-            context.enterPhase(AnalysisPhase.BASELINE)
-            val evaluatedBaseline = session.evaluate(emptyList(), resolved, context)
-            requireCoverage(evaluatedBaseline, input.queries.map { it.id }.toSet())
-            require(evaluatedBaseline.candidateIds.isEmpty()) { "Baseline must be the empty index set" }
+            val evaluatedBaseline = evaluateBaseline(session, resolved, input, context)
             baseline = evaluatedBaseline
-            val budget = metrics.assessBudget(emptyList(), input)
-            require(budget.admissible) { "The empty set must be admissible" }
-            val baselineAssessment = metrics.assessEvaluation(input, evaluatedBaseline, evaluatedBaseline, budget.usage)
-            require(baselineAssessment is EvaluationAssessment.Accepted) { "Baseline must be admissible" }
+            if (fixedPool != null) onConditions(SeriesConditionCapture.capture(catalog, evaluatedBaseline, session.databaseVersions, session.sourceFingerprint))
+            val baselineAssessment = assessBaseline(input, evaluatedBaseline)
             val empty = EvaluatedConfiguration(evaluatedBaseline, baselineAssessment.metrics)
             checkpoint = SearchCheckpoint(empty, empty)
             // Save the full baseline before detecting a late return from an external operation.
             context.checkDeadline()
             context.completePhase()
-            val earlyStop = when {
-                input.constraints.storageBudgetBytes == 0L -> StopReason.ZERO_STORAGE_BUDGET
-                input.constraints.maxIndexes == 0 -> StopReason.ZERO_MAX_INDEXES
-                !baselineAssessment.searchRequired -> StopReason.ZERO_BASELINE
-                else -> null
-            }
+            val earlyStop = baselineStop(input, baselineAssessment)
             if (earlyStop != null) {
                 result = SearchResult.Completed(input.objective, evaluatedBaseline, empty, empty,
                     SearchDiagnostics(stopReasons = listOf(earlyStop)))
@@ -167,14 +179,7 @@ class AnalysisPipeline(
             // Unexpected parser/driver/implementation exceptions may contain SQL or credentials.
             failure = AnalysisError(ErrorCode.INTERNAL_ERROR, "Analysis component failed unexpectedly.")
         } finally {
-            val session = activeSession.getAndSet(null)
-            if (session != null) {
-                if (context.isCancelled || context.remainingTime().isZero) {
-                    try { session.cancel() } catch (_: Exception) { cleanupErrors += cleanupError() }
-                }
-                try { session.close() } catch (_: Exception) { cleanupErrors += cleanupError() }
-            }
-            try { registration?.close() } catch (_: Exception) { cleanupErrors += cleanupError() }
+            cleanupErrors += scope?.cleanup().orEmpty()
         }
 
         val finalResult = finalizeResult(
@@ -210,6 +215,100 @@ class AnalysisPipeline(
             throw exportError()
         }
         return finalResult
+    }
+
+    /** One owner for the session and its cancellation registration in either invocation path. */
+    private inner class SessionScope(private val context: RunContext) {
+        private val active = AtomicReference<AnalysisSession?>()
+        private val registration = shutdownCancellation.register {
+            context.cancel()
+            // The adapter owns thread-safe cancellation of pending statements/connections.
+            try { active.get()?.cancel() } catch (_: Exception) { /* cleanup remains authoritative */ }
+        }
+
+        fun open(): AnalysisSession {
+            val session = sessionFactory.open(context)
+            active.set(session)
+            context.recordDatabaseVersions(session.databaseVersions)
+            context.checkDeadline()
+            return session
+        }
+
+        /** Return safe errors so each caller retains its own failure/partial policy. */
+        fun cleanup(): List<AnalysisError> {
+            val errors = mutableListOf<AnalysisError>()
+            val session = active.getAndSet(null)
+            if (session != null) {
+                if (context.isCancelled || context.remainingTime().isZero) {
+                    try { session.cancel() } catch (_: Exception) { errors += cleanupError() }
+                }
+                try { session.close() } catch (_: Exception) { errors += cleanupError() }
+            }
+            try { registration.close() } catch (_: Exception) { errors += cleanupError() }
+            return errors
+        }
+    }
+
+    private data class Introspection(
+        val session: AnalysisSession,
+        val catalog: CatalogSnapshot,
+        val resolved: ResolvedWorkload,
+    )
+
+    /** Keep SQL preservation and resolved write-profile validation identical for both paths. */
+    private fun introspect(
+        input: WorkloadInput,
+        context: RunContext,
+        scope: SessionScope,
+        refreshVersions: Boolean,
+        onCatalog: (CatalogSnapshot) -> Unit = {},
+    ): Introspection {
+        context.enterPhase(AnalysisPhase.INTROSPECTION)
+        val parsed = checked(context) { sqlAnalyzer.parse(input, context) }
+        val session = scope.open()
+        val catalog = checked(context) { session.readCatalog(parsed.referencedTables, context) }
+        if (refreshVersions) context.recordDatabaseVersions(checked(context) { session.readDatabaseVersions(context) })
+        onCatalog(catalog)
+        val resolved = checked(context) { sqlAnalyzer.resolve(parsed, catalog, context) }
+        require(resolved.input == input) { "Resolution must preserve the validated input" }
+        require(resolved.queries.map { it.id } == input.queries.map { it.id }) {
+            "Resolution must preserve every shared query"
+        }
+        require(resolved.queries.map { it.sql } == input.queries.map { it.sql }) {
+            "Resolution must preserve original SQL"
+        }
+        resolvedValidator.validate(resolved, context)
+        return Introspection(session, catalog, resolved)
+    }
+
+    private fun evaluateBaseline(
+        session: AnalysisSession,
+        resolved: ResolvedWorkload,
+        input: WorkloadInput,
+        context: RunContext,
+    ): EvaluationResult {
+        context.startSearch()
+        context.enterPhase(AnalysisPhase.BASELINE)
+        val baseline = session.evaluate(emptyList(), resolved, context)
+        requireCoverage(baseline, input.queries.map { it.id }.toSet())
+        require(baseline.candidateIds.isEmpty()) { "Baseline must be the empty index set" }
+        // The ordinary run must save a checkpoint before checking a late evaluator return.
+        return baseline
+    }
+
+    private fun assessBaseline(input: WorkloadInput, baseline: EvaluationResult): EvaluationAssessment.Accepted {
+        val budget = metrics.assessBudget(emptyList(), input)
+        require(budget.admissible) { "The empty set must be admissible" }
+        val assessment = metrics.assessEvaluation(input, baseline, baseline, budget.usage)
+        require(assessment is EvaluationAssessment.Accepted) { "Baseline must be admissible" }
+        return assessment
+    }
+
+    private fun baselineStop(input: WorkloadInput, assessment: EvaluationAssessment.Accepted): StopReason? = when {
+        input.constraints.storageBudgetBytes == 0L -> StopReason.ZERO_STORAGE_BUDGET
+        input.constraints.maxIndexes == 0 -> StopReason.ZERO_MAX_INDEXES
+        !assessment.searchRequired -> StopReason.ZERO_BASELINE
+        else -> null
     }
 
     private fun finalizeResult(

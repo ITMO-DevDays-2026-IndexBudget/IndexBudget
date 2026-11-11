@@ -36,5 +36,6 @@ export INDEXBUDGET_HYPOPG_TEST_PASSWORD=''
 ./gradlew --no-daemon test --rerun-tasks \
     --tests 'ru.itmo.indexbudget.postgres.JdbcAnalysisSessionIntegrationTest' \
     --tests 'ru.itmo.indexbudget.application.CandidateRefillHypopgIntegrationTest' \
+    --tests 'ru.itmo.indexbudget.application.BudgetSeriesHypopgIntegrationTest' \
     --tests 'ru.itmo.indexbudget.application.CandidateRankingHypopgIntegrationTest' \
     --tests 'ru.itmo.indexbudget.comparison.ManualComparisonIntegrationTest'

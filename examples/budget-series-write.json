@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "budget": "write_budget_units_per_hour",
+  "values": [0, 4100, 8200, 16400],
+  "timeout_seconds": 600
+}

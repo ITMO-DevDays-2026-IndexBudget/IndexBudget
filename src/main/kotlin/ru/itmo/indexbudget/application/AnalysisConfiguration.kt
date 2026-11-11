@@ -5,6 +5,9 @@ import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import ru.itmo.indexbudget.candidates.CandidateGenerator
 import ru.itmo.indexbudget.candidates.ProfileAwareCandidateGenerator
+import ru.itmo.indexbudget.domain.AnalysisError
+import ru.itmo.indexbudget.domain.AnalysisException
+import ru.itmo.indexbudget.domain.ErrorCode
 import ru.itmo.indexbudget.domain.MetricsCalculator
 import ru.itmo.indexbudget.domain.MetricsCalculatorImpl
 import ru.itmo.indexbudget.domain.ObjectiveComparator
@@ -35,6 +38,15 @@ class AnalysisConfiguration {
 
     @Bean
     fun analysisSessionFactory(): AnalysisSessionFactory = JdbcAnalysisSessionFactory()
+
+    @Bean
+    fun budgetSeriesRunner(analysisRunner: AnalysisRunner): BudgetSeriesRunner {
+        val series = analysisRunner as? SeriesAnalysisRunner
+        return if (series != null) BudgetSeriesPipeline(series) else BudgetSeriesRunner { _, _, _, _ ->
+            throw AnalysisException(AnalysisError(
+                ErrorCode.NOT_IMPLEMENTED, "Budget series analysis components are not connected."))
+        }
+    }
 
     @Bean
     fun analysisRunner(
