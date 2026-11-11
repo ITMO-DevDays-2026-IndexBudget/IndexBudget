@@ -252,6 +252,28 @@ class JdbcAnalysisSessionTest {
     }
 
     @Test
+    fun `every preset reaches the JDBC boundary without publishing an incomplete vector`() {
+        for (mode in AnalysisMode.entries) {
+            val jdbc = FakeJdbc(listOf(plan(10)))
+            val context = RunContext(analysisMode = mode, clock = NanoClock { 0L })
+            // Simulate work already charged to this invocation before the final available slot.
+            repeat(mode.limits.maxExplainAttempts - 1) { context.reserveExplainAttempt() }
+            JdbcAnalysisSession(jdbc.connection).use { session ->
+                val error = assertThrows(AnalysisException::class.java) {
+                    session.evaluate(emptyList(), workload(2), context)
+                }
+                assertEquals(ErrorCode.EXPLAIN_LIMIT, error.error.code, mode.name)
+                assertEquals(1, jdbc.explains().size, mode.name)
+                assertEquals(mode.limits.maxExplainAttempts, context.statistics().explainAttempts)
+                assertEquals(1, context.statistics().evaluationAttempts)
+                assertEquals(0, context.statistics().completedEvaluations)
+                jdbc.assertResourcesReleased()
+            }
+            assertTrue(jdbc.closed)
+        }
+    }
+
+    @Test
     fun `explain progress is published after SQL starts and expiration prevents completion`() {
         var now = 0L
         var eventsAtDeadline = 0

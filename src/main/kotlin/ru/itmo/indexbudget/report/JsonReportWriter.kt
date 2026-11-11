@@ -23,6 +23,7 @@ class JsonReportWriter {
             "duration_millis" to report.durationMillis,
             "environment" to environment(report.environment),
             "status" to result.status.name.lowercase(),
+            "analysis_mode" to report.analysisMode.name.lowercase(),
             "selected_objective" to result.selectedObjective.name.lowercase(),
             "comparison_scope" to report.comparisonScope.name.lowercase(),
             "incumbents_coincide" to report.incumbentsCoincide,

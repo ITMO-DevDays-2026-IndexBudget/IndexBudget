@@ -58,7 +58,9 @@ class HtmlReportRenderer : ReportRenderer {
         if (report.environment.applicationVersion == "fixture") {
             append("<p class=\"notice demo\"><strong>Демонстрационные данные.</strong> Синтетическая фикстура для проверки отчёта; это не результат анализа PostgreSQL.</p>")
         }
-        append("<div class=\"run-strip\"><span>Критерий поиска <strong>")
+        append("<div class=\"run-strip\"><span>Режим анализа <strong>")
+        text(modeName(report.analysisMode))
+        append("</strong></span><span>Критерий поиска <strong>")
         text(result.selectedObjective.name.lowercase(Locale.ROOT))
         append("</strong></span><span>Длительность <strong>").append(h(number(report.durationMillis))).append(" мс</strong></span>")
         append("<span>Причина остановки <strong>")
@@ -237,6 +239,7 @@ class HtmlReportRenderer : ReportRenderer {
 
     private fun StringBuilder.search(report: AnalysisReport) {
         section("search", "06", "Границы поиска", "Что было исследовано и где сработали ограничения")
+        append("<p>Режим анализа: ").append(h(modeName(report.analysisMode))).append(".</p>")
         val search = report.result.diagnostics
         val candidates = report.candidates.diagnostics
         val stats = search.statistics
@@ -312,6 +315,7 @@ class HtmlReportRenderer : ReportRenderer {
         entry("SHA-256 входа", report.inputHash ?: "Нет данных")
         entry("Schema / spec", "${report.schemaVersion} / ${report.specVersion}")
         entry("Статус", report.result.status.name.lowercase(Locale.ROOT))
+        entry("Режим анализа", modeName(report.analysisMode))
         entry("Причины остановки", report.result.diagnostics.stopReasons.joinToString { it.name }.ifEmpty { "Нет данных" })
         entry("Завершённые этапы", report.result.diagnostics.completedPhases.joinToString(" → ") { it.name.lowercase(Locale.ROOT) }.ifEmpty { "Нет завершённых этапов" })
         entry("Приложение", report.environment.applicationVersion)
@@ -366,6 +370,12 @@ class HtmlReportRenderer : ReportRenderer {
     private fun StringBuilder.entry(label: String, value: String) { append("<div><dt>").append(h(label)).append("</dt><dd>").append(h(value)).append("</dd></div>") }
     private fun StringBuilder.pre(value: String) { append("<pre><code>").append(h(value)).append("</code></pre>") }
     private fun StringBuilder.text(value: String) { append(h(value)) }
+
+    private fun modeName(mode: AnalysisMode): String = mode.name.lowercase(Locale.ROOT) + " · " + when (mode) {
+        AnalysisMode.FAST -> "Быстрый"
+        AnalysisMode.NORMAL -> "Обычный"
+        AnalysisMode.DEEP -> "Глубокий"
+    }
 
     private fun number(value: Number?): String {
         if (value == null) return "Нет данных"

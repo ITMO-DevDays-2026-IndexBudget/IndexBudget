@@ -7,6 +7,7 @@ import ru.itmo.indexbudget.application.UnavailableAnalysisRunner
 import ru.itmo.indexbudget.application.WorkloadReader
 import ru.itmo.indexbudget.domain.AnalysisError
 import ru.itmo.indexbudget.domain.AnalysisException
+import ru.itmo.indexbudget.domain.AnalysisMode
 import ru.itmo.indexbudget.domain.AnalysisPhase
 import ru.itmo.indexbudget.domain.ErrorCode
 import ru.itmo.indexbudget.domain.RunContext
@@ -57,21 +58,36 @@ class IndexBudgetCli(
             val value = args.getOrNull(offset + 1)
             if (option !in ANALYZE_OPTIONS || option in options ||
                 value == null || value.startsWith("--") || value.isBlank()) {
-                return fail(err, ErrorCode.INVALID_INPUT, "Expected --workload <path> --output-dir <path>, once each.")
+                return fail(err, ErrorCode.INVALID_INPUT,
+                    "Expected --workload <path> --output-dir <path> [--analysis-mode fast|normal|deep], once each.")
             }
             options[option] = value
             offset += 2
         }
-        if (options.keys != ANALYZE_OPTIONS) {
+        if (!options.keys.containsAll(REQUIRED_ANALYZE_OPTIONS)) {
             return fail(err, ErrorCode.INVALID_INPUT, "Both --workload and --output-dir are required.")
+        }
+        val modeOverride = options["--analysis-mode"]?.let { value ->
+            AnalysisMode.entries.firstOrNull { it.name.lowercase() == value }
+                ?: return fail(err, ErrorCode.INVALID_INPUT, "--analysis-mode must be fast, normal or deep.")
         }
         val input: WorkloadInput
         val outputPath: Path
         try {
+            // JSON may request deep; use the maximum only until the reader resolves its mode.
+            // Applying the selected preset keeps elapsed startup/reading time on the same clock.
+            context.selectAnalysisMode(modeOverride ?: AnalysisMode.DEEP)
             context.enterPhase(AnalysisPhase.VALIDATION)
             val workloadPath = Path.of(options.getValue("--workload"))
             outputPath = Path.of(options.getValue("--output-dir"))
-            input = workloadReader.read(workloadPath, context)
+            input = workloadReader.read(workloadPath, context, modeOverride)
+            val limits = context.limits
+            err.println("stage=validation analysis_mode=${context.analysisMode.name.lowercase()} " +
+                "command_timeout_millis=${limits.commandTimeout.toMillis()} " +
+                "search_timeout_millis=${limits.searchTimeout.toMillis()} " +
+                "explain_timeout_millis=${limits.explainTimeout.toMillis()} " +
+                "connect_timeout_millis=${limits.connectTimeout.toMillis()} " +
+                "max_explain_attempts=${limits.maxExplainAttempts} max_repair_attempts=${limits.maxRepairAttempts}")
             context.checkDeadline()
             outputDirectoryValidator.validate(outputPath)
             context.checkDeadline()
@@ -90,6 +106,9 @@ class IndexBudgetCli(
 
         return try {
             val result = analysisRunner.run(input, outputPath, context)
+            val reasons = result.diagnostics.stopReasons.map { it.name } +
+                listOfNotNull((result as? SearchResult.Failed)?.error?.code?.name)
+            printSummary(err, context, result.status.name.lowercase(), reasons.distinct())
             if (result is SearchResult.Failed) {
                 fail(err, result.error)
             } else {
@@ -99,10 +118,20 @@ class IndexBudgetCli(
                 result.status.exitCode
             }
         } catch (failure: AnalysisException) {
+            printSummary(err, context, "failed", listOf(failure.error.code.name))
             fail(err, failure.error)
         } catch (_: Exception) {
+            printSummary(err, context, "failed", listOf(ErrorCode.INTERNAL_ERROR.name))
             fail(err, ErrorCode.INTERNAL_ERROR, "Analysis failed unexpectedly.")
         }
+    }
+
+    private fun printSummary(err: PrintWriter, context: RunContext, status: String, stopReasons: List<String>) {
+        val counters = context.statistics()
+        err.println("stage=finished status=$status analysis_mode=${context.analysisMode.name.lowercase()} " +
+            "explain_attempts=${counters.explainAttempts} evaluation_attempts=${counters.evaluationAttempts} " +
+            "completed_sets=${counters.completedEvaluations} cache_hits=${counters.cacheHits} " +
+            "repair_attempts=${counters.repairAttempts} stop_reasons=${stopReasons.joinToString(",")}")
     }
 
     private fun fail(err: PrintWriter, code: ErrorCode, message: String): Int {
@@ -124,20 +153,30 @@ class IndexBudgetCli(
     }
 
     companion object {
-        private val ANALYZE_OPTIONS = setOf("--workload", "--output-dir")
+        private val REQUIRED_ANALYZE_OPTIONS = setOf("--workload", "--output-dir")
+        private val ANALYZE_OPTIONS = REQUIRED_ANALYZE_OPTIONS + "--analysis-mode"
         private val USAGE = """
             IndexBudget — PostgreSQL index selection CLI
 
             Usage:
               indexbudget --help
               indexbudget --version
-              indexbudget analyze --workload <path> --output-dir <path>
+              indexbudget analyze --workload <path> --output-dir <path> [--analysis-mode fast|normal|deep]
 
             Validates JSON v2, shared queries, frequency profiles and budgets.
             Use a new or empty output directory for each run.
-            Runs the analysis pipeline when all production components are connected.
-            Missing components produce NOT_IMPLEMENTED (exit 1), without reports or a database connection.
+            Runs SQL resolution, bounded shortlist, HypoPG, greedy + repair and HTML/JSON/SQL export.
+            Requires a prepared PostgreSQL database with HypoPG; analysis creates no physical indexes.
             Progress on stderr contains stages and actual EXPLAIN/set/cache counters.
+
+            Analysis modes (CLI overrides optional JSON analysis_mode; default: normal):
+              fast:   command 30s, search 20s, EXPLAIN attempts 500, repair attempts 8.
+              normal: command 90s, search 60s, EXPLAIN attempts 2000, repair attempts 28.
+              deep:   command 300s, search 240s, EXPLAIN attempts 10000, repair attempts 256.
+            Every mode uses a 2s EXPLAIN timeout and a 5s connection timeout, capped by remaining time.
+            Search budget starts before baseline. Modes keep the same pool of up to 16 candidates
+            and greedy/fixed-S0 repair. Limits are budgets; exact runtime or better quality is not guaranteed.
+            Final stderr summary includes all counters and stop reasons.
 
             Exit codes: 0 completed/help; 1 failed; 2 invalid input; 3 partial.
             PostgreSQL configuration for the pipeline: INDEXBUDGET_DATABASE_URL.

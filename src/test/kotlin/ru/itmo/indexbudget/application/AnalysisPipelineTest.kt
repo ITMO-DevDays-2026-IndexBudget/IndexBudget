@@ -30,6 +30,49 @@ import java.time.Duration
 
 class AnalysisPipelineTest {
     @ParameterizedTest
+    @EnumSource(AnalysisMode::class)
+    fun `each mode reaches the session and preserves full incumbents after its actual deadline`(mode: AnalysisMode) {
+        val run = Harness(ContractFixtures.workload().copy(analysisMode = mode))
+        run.onParse = {
+            assertEquals(mode, run.context.analysisMode)
+            assertEquals(mode.limits, run.context.limits)
+        }
+        run.afterCheckpoint = { run.advance(mode.limits.commandTimeout.seconds) }
+
+        val result = run.execute()
+
+        assertEquals(RunStatus.PARTIAL, result.status)
+        assertTrue(StopReason.DEADLINE_EXCEEDED in result.diagnostics.stopReasons)
+        assertEquals(mode.limits, result.diagnostics.limits)
+        assertEquals(ContractFixtures.robustConfiguration(), result.bestRobust)
+        assertEquals(ContractFixtures.meanConfiguration(), result.bestMean)
+        assertEquals(3, run.evaluatedSets.size)
+        assertEquals(6, result.diagnostics.statistics.explainAttempts)
+        assertEquals(mode, run.report?.analysisMode)
+        assertEquals(Duration.ZERO, run.exportRemaining)
+        assertEquals(1, run.closeCalls)
+    }
+
+    @ParameterizedTest
+    @EnumSource(AnalysisMode::class)
+    fun `deadline without a full baseline is failed in every mode`(mode: AnalysisMode) {
+        val run = Harness(ContractFixtures.workload().copy(analysisMode = mode))
+        run.beforeEvaluation = { run.advance(mode.limits.searchTimeout.seconds) }
+
+        val result = run.execute()
+
+        assertEquals(RunStatus.FAILED, result.status)
+        assertEquals(ErrorCode.DEADLINE_EXCEEDED, (result as SearchResult.Failed).error.code)
+        assertNull(result.baseline)
+        assertNull(result.selected)
+        assertEquals(mode.limits, result.diagnostics.limits)
+        assertEquals(0, result.diagnostics.statistics.explainAttempts)
+        assertEquals(1, run.evaluatedSets.size)
+        assertEquals(mode, run.report?.analysisMode)
+        assertEquals(1, run.closeCalls)
+    }
+
+    @ParameterizedTest
     @EnumSource(Objective::class)
     fun `production greedy and metrics supply both incumbents to the closed-session report`(objective: Objective) {
         val input = ContractFixtures.workload(objective).let {
@@ -708,6 +751,7 @@ class AnalysisPipelineTest {
     fun `report inconsistent with this run is rejected before exporter is called`() {
         val corruptions = listOf<Pair<String, (AnalysisReport) -> AnalysisReport>>(
             "runId" to { report -> report.copy(runId = "different-run") },
+            "analysisMode" to { report -> report.copy(analysisMode = AnalysisMode.DEEP) },
             "inputHash" to { report -> report.copy(inputHash = "b".repeat(64)) },
             "input" to { report -> report.copy(input = checkNotNull(report.input).copy(objective = Objective.MEAN)) },
             "result" to { report -> report.copy(result = SearchResult.Failed(
@@ -1029,7 +1073,8 @@ class AnalysisPipelineTest {
                     observe("report", reportContext)
                     assertTrue(closed || openCalls == 0)
                     transformReport(AnalysisReport(context.runId, context.inputHash, context.elapsedTime().toMillis(),
-                        EnvironmentInfo("test", "test"), result, workload, candidates))
+                        EnvironmentInfo("test", "test"), result, workload, candidates,
+                        analysisMode = context.analysisMode))
                 },
                 reportExporter = ReportExporter { built, output, exportContext ->
                     observe("export", exportContext)

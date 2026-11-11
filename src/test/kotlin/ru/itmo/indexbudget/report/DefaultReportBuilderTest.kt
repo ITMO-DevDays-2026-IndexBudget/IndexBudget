@@ -58,6 +58,30 @@ class DefaultReportBuilderTest {
     }
 
     @Test
+    fun `builder retains the effective mode when finalizing every status without database work`() {
+        for (mode in AnalysisMode.entries) {
+            for (status in RunStatus.entries) {
+                val source = ContractFixtures.report(status = status)
+                var nanos = 0L
+                val context = RunContext(clock = NanoClock { nanos })
+                context.selectAnalysisMode(mode)
+                context.recordInputHash("b".repeat(64))
+                nanos = mode.limits.commandTimeout.toNanos()
+                context.cancel()
+                val before = context.statistics()
+
+                val report = builder.build(requireNotNull(source.input).copy(analysisMode = mode),
+                    source.candidates, source.result, context)
+
+                assertEquals(mode, report.analysisMode)
+                assertEquals("b".repeat(64), report.inputHash)
+                assertSame(source.result, report.result)
+                assertEquals(before, context.statistics())
+            }
+        }
+    }
+
+    @Test
     fun `failed numeric baseline is retained without retrying failed metrics`() {
         val source = ContractFixtures.report(status = RunStatus.FAILED)
         val failed = (source.result as SearchResult.Failed).copy(

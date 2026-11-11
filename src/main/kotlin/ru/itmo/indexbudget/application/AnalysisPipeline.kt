@@ -37,6 +37,7 @@ class AnalysisPipeline(
         val activeSession = AtomicReference<AnalysisSession?>()
         var registration: AutoCloseable? = null
         try {
+            context.selectAnalysisMode(input.analysisMode)
             registration = shutdownCancellation.register {
                 context.cancel()
                 // The adapter owns thread-safe cancellation of a pending statement/connection.
@@ -162,6 +163,7 @@ class AnalysisPipeline(
         try {
             val report = reportBuilder.build(input, candidateBatch, finalResult, context)
             require(report.runId == context.runId && report.inputHash == context.inputHash &&
+                report.analysisMode == context.analysisMode &&
                 report.result == finalResult && report.input == input) {
                 "Report must describe this invocation and saved result"
             }
