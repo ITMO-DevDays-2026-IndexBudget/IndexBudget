@@ -252,6 +252,16 @@ class MetricsCalculatorImplTest {
         assertEquals("tiny", exception.error.profileId)
     }
 
+    @Test
+    fun `positive profile ratio underflow is a numeric error instead of a zero metric`() {
+        val workload = workload(profile("tiny_ratio", 1.0, 1.0, 0.0))
+        val exception = assertThrows(AnalysisException::class.java) {
+            impl.calculate(workload, evaluation(1e200, 0.0), evaluation(1e-200, 0.0), usage)
+        }
+        assertEquals(ErrorCode.NUMERIC_ERROR, exception.error.code)
+        assertEquals("tiny_ratio", exception.error.profileId)
+    }
+
     @ParameterizedTest(name = "baseline={0}, cost={1}")
     @CsvSource("1e308,0", "1e-308,1")
     fun `overflowing percentage is rejected even when ratios are finite`(baseline: Double, cost: Double) {

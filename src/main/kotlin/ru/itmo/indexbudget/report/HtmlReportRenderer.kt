@@ -26,7 +26,8 @@ class HtmlReportRenderer : ReportRenderer {
             <a href="#overview"><span>01</span>Обзор</a><a href="#comparison"><span>02</span>Robust и mean</a>
             <a href="#profiles"><span>03</span>Профили нагрузки</a><a href="#indexes"><span>04</span>Индексы и бюджеты</a>
             <a href="#queries"><span>05</span>Запросы и планы</a><a href="#search"><span>06</span>Границы поиска</a>
-            <a href="#run"><span>07</span>Данные запуска</a></nav>
+            <a href="#run"><span>07</span>Данные запуска</a>
+            <a href="#provenance"><span>08</span>Происхождение нагрузки</a></nav>
             <div class="nav-note">Planner cost — оценка планировщика. Фактическое время запросов здесь не измеряется.</div></aside>
             <main id="main">""")
         overview(report)
@@ -36,6 +37,7 @@ class HtmlReportRenderer : ReportRenderer {
         queries(report)
         search(report)
         run(report)
+        provenance(report)
         append("""<footer>IndexBudget · Спецификация """)
         append(h(report.specVersion))
         append(" · Оценки помогают выбрать набор для отдельной физической проверки.</footer></main></div></body></html>")
@@ -45,6 +47,7 @@ class HtmlReportRenderer : ReportRenderer {
         val result = report.result
         val selected = result.selected
         val metrics = selected?.metrics
+        val summary = report.summary
         append("<section id=\"overview\" class=\"overview\"><div class=\"eyebrow\">ОТЧЁТ АНАЛИЗА / V")
         append(h(report.schemaVersion)).append("</div><div class=\"title-row\"><h1>Индексы под вашу нагрузку</h1>")
         badge(statusLabel(result.status), result.status.name.lowercase(Locale.ROOT))
@@ -66,15 +69,17 @@ class HtmlReportRenderer : ReportRenderer {
         append("<span>Причина остановки <strong>")
         text(result.diagnostics.stopReasons.takeIf { it.isNotEmpty() }?.joinToString { stopLabel(it) } ?: "Нет данных")
         append("</strong></span></div><div class=\"metric-grid\">")
-        metric("Худшая нормированная стоимость", setRatio(metrics, metrics?.worstRatio), "R · меньше — лучше", "accent")
-        metric("Средняя нормированная стоимость", setRatio(metrics, metrics?.meanRatio), "M · меньше — лучше")
-        metric("Выбранные индексы", number(metrics?.budgetUsage?.indexCount), "Лимит: ${number(report.input?.constraints?.maxIndexes)}")
+        metric("Худшая нормированная стоимость", setRatio(metrics, summary.worstRatio), "R · меньше — лучше", "accent")
+        metric("Средняя нормированная стоимость", setRatio(metrics, summary.meanEffect.ratio), "M · меньше — лучше")
+        metric("Выбранные индексы", number(summary.budgetUsage?.indexCount), "Лимит: ${number(summary.budgetLimits?.maxIndexes)}")
+        metric("Снижение взвешенной стоимости планов", effectPercent(summary.meanEffect), "Положительный процент — снижение cost")
+        metric("SQL с ростом стоимости", number(summary.regressedQueryCount), "R не гарантирует улучшение каждого SQL")
         metric("Полностью оценённые наборы", number(result.diagnostics.statistics.completedEvaluations), "Один общий пул для robust и mean")
         append("</div>")
         if (selected != null && selected.evaluation.candidateIds.isEmpty()) {
             append("<p class=\"notice\">Выбран пустой набор: новые индексы не предлагаются. Baseline включает уже существующие реальные индексы.</p>")
         }
-        append("<p class=\"muted\">Нормированная стоимость: 1 — уровень baseline, ниже 1 — уменьшение planner cost, выше 1 — регрессия. «Нет данных» и «Неприменимо» не означают ноль.</p></section>")
+        append("<p class=\"muted\">Нормированная стоимость: 1 — уровень baseline, ниже 1 — уменьшение planner cost, выше 1 — регрессия. «Нет данных» и «Неприменимо» не означают ноль. M — отношение ожидаемых стоимостей, а не среднее профильных отношений. R — худшее отношение среди профилей, а не гарантия для каждого SQL.</p></section>")
     }
 
     private fun StringBuilder.comparison(report: AnalysisReport) {
@@ -141,14 +146,66 @@ class HtmlReportRenderer : ReportRenderer {
                     ratio(profile?.ratio, profile?.baselineCost), number(profile?.gain), percent(profile?.gainPercent, profile?.baselineCost))
             }
         }
+        append("<details><summary>Сравнение всех сохранённых наборов по профилям</summary>")
+        table(listOf("Профиль", "Baseline cost", "Selected cost", "Best robust cost", "Best mean cost")) {
+            report.profileComparisons.forEach { series ->
+                row(series.id, number(series.baseline.cost), number(series.selected.cost),
+                    number(series.bestRobust.cost), number(series.bestMean.cost))
+            }
+        }
+        append("</details>")
         if (profileIds.isEmpty()) append("<p class=\"empty\">Профили отсутствуют в сохранённой модели.</p>")
         append("<p class=\"muted\">Cost — единицы планировщика с учётом частот. Это не миллисекунды, не измеренное ускорение и не SLA. При нулевом baseline отношение и процент неприменимы.</p></section>")
     }
 
+    private fun effectPercent(effect: CostEffect): String = when {
+        effect.gainPercent != null -> "${number(effect.gainPercent)} %"
+        effect.relativeStatus == RelativeValueStatus.ZERO_BASELINE -> "Неприменимо: нулевой baseline"
+        effect.relativeStatus == RelativeValueStatus.OUT_OF_RANGE -> "Вне числового диапазона"
+        else -> "Нет данных"
+    }
+
+    private fun StringBuilder.provenance(report: AnalysisReport) {
+        section("provenance", "08", "Происхождение нагрузки", "Наблюдения и примеры параметров")
+        val provenance = report.workloadProvenance
+        if (provenance == null) {
+            append("<p>Происхождение не задано. Для ручного workload источник и охват наблюдений неизвестны.</p></section>")
+            return
+        }
+        append("<dl class=\"values\">")
+        entry("Источник", "pg_stat_statements")
+        entry("Идентификатор источника", provenance.sourceId.toString())
+        entry("Правило отбора", provenance.selectionRule)
+        append("</dl><p>Охват относится к доступным полным записям окна, а не ко всему трафику сервера. Неизвестные значения не заменяются нулём.</p>")
+        table(listOf("Профиль", "Начало (UTC)", "Конец (UTC)", "Полнота наблюдения", "Вызовы: выбрано / доступно")) {
+            provenance.windows.forEach { window ->
+                row(window.profileId, window.startedAt.toString(), window.finishedAt.toString(),
+                    if (window.complete) "Полное" else "Неполное",
+                    "${number(window.coverage.selectedCalls)} / ${number(window.coverage.availableCalls)}")
+            }
+        }
+        append("<h3>Историческое время выполнения</h3><p>Измерено до рекомендации, в миллисекундах. Эти данные не являются прогнозом времени с новыми индексами и не пересчитываются из planner cost.</p>")
+        table(listOf("Профиль", "Выбранные записи, мс", "Доступные полные записи, мс")) {
+            provenance.windows.forEach { window ->
+                row(window.profileId, number(window.coverage.selectedExecTimeMillis), number(window.coverage.availableExecTimeMillis))
+            }
+        }
+        append("<h3>Примеры SQL</h3><p>Пример с литералами представляет запись статистики; его план не характеризует все возможные значения параметров.</p>")
+        table(listOf("SQL", "Происхождение примера")) {
+            provenance.queryExamples.forEach { example ->
+                row(example.queryId, when (example.source) {
+                    QueryExampleSource.USER_SUPPLIED_LITERALS -> "Репрезентативные литералы пользователя"
+                    QueryExampleSource.ORIGINAL_LITERAL_SQL -> "Исходный SQL с литералами"
+                })
+            }
+        }
+        append("</section>")
+    }
+
     private fun StringBuilder.indexes(report: AnalysisReport) {
         section("indexes", "04", "Индексы и бюджеты", "Расходы выбранного набора")
-        val usage = report.result.selected?.metrics?.budgetUsage
-        val constraints = report.input?.constraints
+        val usage = report.summary.budgetUsage
+        val constraints = report.summary.budgetLimits
         append("<div class=\"budget-grid\"><div class=\"budget-card\"><h3>Место</h3><p class=\"budget-number\">")
         text(number(usage?.budgetedBytes))
         append(" <small>/ ").append(h(number(constraints?.storageBudgetBytes))).append(" байт</small></p><p class=\"budget-mib\">")
@@ -209,10 +266,12 @@ class HtmlReportRenderer : ReportRenderer {
         append("<p>Baseline сохраняет существующие реальные индексы. Final cost относится ко всему выбранному набору. Отдельные SQL могут регрессировать, даже если критерий набора улучшился.</p>")
         val baseline = report.result.baseline
         val selected = report.result.selected?.evaluation
+        val effects = report.queryEffects.associateBy { it.id }
         val profiles = report.input?.profiles.orEmpty()
         val queryIds = (report.input?.queries.orEmpty().map { it.id } + baseline?.costByQueryId.orEmpty().keys + selected?.costByQueryId.orEmpty().keys).distinct()
-        table(listOf("SQL") + profiles.map { "${it.id}, вызовов/час" } + listOf("Baseline cost", "Final cost", "Изменение")) {
+        table(listOf("SQL") + profiles.map { "${it.id}, вызовов/час" } + listOf("Baseline cost", "Final cost", "Снижение cost, %", "Изменение")) {
             queryIds.forEachIndexed { index, id ->
+                val effect = effects[id]?.selected
                 val before = baseline?.costByQueryId?.get(id)
                 val after = selected?.costByQueryId?.get(id)
                 val regression = before != null && after != null && after > before
@@ -221,6 +280,7 @@ class HtmlReportRenderer : ReportRenderer {
                 profiles.forEach { cell(number(it.callsPerHour[id])) }
                 cell(number(before))
                 cell(number(after))
+                cell(effect?.let(::effectPercent) ?: "Нет данных")
                 cell(when {
                     before == null || after == null -> "Нет данных"
                     regression -> "Регрессия"

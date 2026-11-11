@@ -13,6 +13,7 @@ data class WorkloadInput(
     val objective: Objective = Objective.ROBUST,
     val tableWriteRates: Map<String, TableWriteRates>? = null,
     val analysisMode: AnalysisMode = AnalysisMode.NORMAL,
+    val provenance: WorkloadProvenance? = null,
 )
 
 data class QueryInput(val id: String, val sql: String)

@@ -134,4 +134,10 @@ data class AnalysisReport(
     val incumbentsCoincide: Boolean? = null,
     /** Effective mode after CLI override; available even when the input could not be retained. */
     val analysisMode: AnalysisMode = AnalysisMode.NORMAL,
-)
+) {
+    // Derived once per immutable report, including copies used by render fixtures.
+    val summary: RecommendationSummary = ReportSummary.recommendation(this)
+    val profileComparisons: List<CostComparisonSeries> = ReportSummary.profiles(this)
+    val queryEffects: List<CostComparisonSeries> = ReportSummary.queries(this)
+    val workloadProvenance: WorkloadProvenance? = input?.provenance
+}
