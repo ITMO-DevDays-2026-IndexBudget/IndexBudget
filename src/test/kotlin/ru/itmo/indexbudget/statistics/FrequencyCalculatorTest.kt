@@ -104,6 +104,11 @@ class FrequencyCalculatorTest {
         assertUnknown(request, FrequencyReason.DEALLOC_CHANGED)
     }
 
+    @Test fun `negative dealloc counter is a numeric error like other negative counters`() {
+        val request = window().let { it.copy(before = it.before.copy(after = epoch.copy(dealloc = -1))) }
+        assertEquals(ErrorCode.NUMERIC_ERROR, assertThrows(AnalysisException::class.java) { profile(request) }.error.code)
+    }
+
     @Test fun `missing ending epoch cannot establish counter continuity`() {
         assertUnknown(window().let { it.copy(before = it.before.copy(after = null)) }, FrequencyReason.MISSING_EPOCH)
     }
@@ -192,6 +197,16 @@ class FrequencyCalculatorTest {
         assertEquals(Long.MAX_VALUE.toDouble() * 7200, row.callsPerHour)
     }
 
+    @Test fun `small increment of huge accumulated counters subtracts longs before double conversion`() {
+        val before = snapshot(0, listOf(entry(1L shl 53)))
+        val after = snapshot(60, listOf(entry((1L shl 53) + 1L)))
+        val row = profile(window().copy(before = before, after = after)).observations.single()
+        assertEquals(ObservationState.OBSERVED, row.state)
+        assertEquals(1L, row.deltaCalls)
+        assertEquals(2L, row.deltaRows)
+        assertEquals(60.0, row.callsPerHour)
+    }
+
     @Test fun `manifest keeps bigint IDs unknowns and historical units separate`() {
         val request = window().let { it.copy(before = it.before.copy(entries = listOf(entry(100).copy(queryid = Long.MIN_VALUE)))) }
         val result = calculator.calculate(listOf(request))
@@ -218,6 +233,15 @@ class FrequencyCalculatorTest {
         val context = RunContext()
         context.cancel()
         assertEquals(ErrorCode.CANCELLED, assertThrows(AnalysisException::class.java) { calculator.calculate(listOf(window()), context) }.error.code)
+    }
+
+    @Test fun `successful calculation leaves a live context untouched and search still startable`() {
+        val context = RunContext()
+        val statisticsBefore = context.statistics()
+        assertEquals(3600.0, calculator.calculate(listOf(window()), context).profiles.single().observations.single().callsPerHour)
+        assertEquals(statisticsBefore, context.statistics())
+        assertEquals(AnalysisPhase.VALIDATION, context.phase)
+        context.startSearch()
     }
 
     private fun assertUnknown(window: FrequencyWindow, reason: FrequencyReason) {

@@ -51,7 +51,7 @@ class FrequencyCalculator {
         val epochReasons = linkedSetOf<FrequencyReason>()
         if (before.after == null || after.after == null) epochReasons += FrequencyReason.MISSING_EPOCH
         val epochs = listOfNotNull(before.before, before.after, after.before, after.after)
-        requireInput(epochs.all { it.dealloc >= 0 }, "Deallocation counters must be nonnegative.")
+        epochs.forEach { if (it.dealloc < 0) fail(ErrorCode.NUMERIC_ERROR, "Deallocation counters must be nonnegative.") }
         if (epochs.map { instant(it.statsReset) }.distinct().size != 1 ||
             SnapshotReason.STATS_RESET_DURING_READ in before.reasons + after.reasons) epochReasons += FrequencyReason.STATS_RESET
         if (epochs.map { it.dealloc }.distinct().size != 1 ||
@@ -61,32 +61,8 @@ class FrequencyCalculator {
             compareBy<StatisticsKey> { it.dbid }.thenBy { it.userid }.thenBy { it.queryid }.thenBy { it.toplevel })
         val observations = keys.map { key ->
             context.checkDeadline()
-            val first = firstEntries[key]
-            val last = lastEntries[key]
-            val entry = requireNotNull(last ?: first)
-            val faults = epochReasons.toMutableSet()
-            if (first == null) faults += FrequencyReason.NEW_ENTRY
-            if (last == null) faults += FrequencyReason.MISSING_ENTRY
-            if (first != null && last != null) {
-                if (last.calls < first.calls || last.rows < first.rows || last.totalExecTime < first.totalExecTime)
-                    faults += FrequencyReason.COUNTER_DECREASE
-                if (last.calls == first.calls && (last.rows != first.rows || last.totalExecTime != first.totalExecTime))
-                    faults += FrequencyReason.INCONSISTENT_COUNTERS
-                if (first.query != null && last.query != null && first.query != last.query)
-                    faults += FrequencyReason.QUERY_TEXT_CHANGED
-            }
-            if (faults.isNotEmpty()) {
-                FrequencyObservation(key, ObservationState.UNKNOWN, entry.query, entry.textStatus,
-                    null, null, null, null, null, faults)
-            } else {
-                val deltaCalls = requireNotNull(last).calls - requireNotNull(first).calls
-                val executionTime = BigDecimal.valueOf(last.totalExecTime) - BigDecimal.valueOf(first.totalExecTime)
-                val frequency = BigDecimal.valueOf(deltaCalls).multiply(BigDecimal(3600)).divide(duration, MathContext.DECIMAL128)
-                FrequencyObservation(key, if (deltaCalls == 0L) ObservationState.ZERO else ObservationState.OBSERVED,
-                    entry.query, entry.textStatus, deltaCalls, finite(frequency), last.rows - first.rows,
-                    finite(executionTime), if (deltaCalls == 0L) null else finite(executionTime.divide(BigDecimal.valueOf(deltaCalls), MathContext.DECIMAL128)),
-                    emptySet())
-            }
+            observation(key, firstEntries[key], lastEntries[key],
+                entryFaults(firstEntries[key], lastEntries[key], epochReasons), duration)
         }
         fun total(value: (FrequencyObservation) -> Double?): Double = finite(observations.fold(BigDecimal.ZERO) { sum, row ->
             context.checkDeadline()
@@ -95,6 +71,58 @@ class FrequencyCalculator {
         return FrequencyProfile(window.id, window.weight, normalizedWeight, before.snapshotId, after.snapshotId,
             period, observations, reasons, before.reasons.toList(), after.reasons.toList(), unidentifiedBefore, unidentifiedAfter,
             total { it.callsPerHour }, total { it.totalExecTimeMillis })
+    }
+
+    /** Continuity faults of one full key: epoch problems plus new/missing entries and counter regressions. */
+    private fun entryFaults(
+        first: StatisticsEntry?,
+        last: StatisticsEntry?,
+        epochReasons: Set<FrequencyReason>,
+    ): Set<FrequencyReason> {
+        val faults = epochReasons.toMutableSet()
+        if (first == null) faults += FrequencyReason.NEW_ENTRY
+        if (last == null) faults += FrequencyReason.MISSING_ENTRY
+        if (first != null && last != null) {
+            if (last.calls < first.calls || last.rows < first.rows || last.totalExecTime < first.totalExecTime)
+                faults += FrequencyReason.COUNTER_DECREASE
+            if (last.calls == first.calls && (last.rows != first.rows || last.totalExecTime != first.totalExecTime))
+                faults += FrequencyReason.INCONSISTENT_COUNTERS
+            if (first.query != null && last.query != null && first.query != last.query)
+                faults += FrequencyReason.QUERY_TEXT_CHANGED
+        }
+        return faults
+    }
+
+    /** Builds one observation from an entry pair: UNKNOWN keeps null increments, otherwise counters are subtracted as Long/BigDecimal before conversion. */
+    private fun observation(
+        key: StatisticsKey,
+        first: StatisticsEntry?,
+        last: StatisticsEntry?,
+        faults: Set<FrequencyReason>,
+        durationSeconds: BigDecimal,
+    ): FrequencyObservation {
+        val entry = requireNotNull(last ?: first)
+        if (faults.isNotEmpty()) return FrequencyObservation(
+            key = key, state = ObservationState.UNKNOWN, query = entry.query, textStatus = entry.textStatus,
+            deltaCalls = null, callsPerHour = null, deltaRows = null,
+            totalExecTimeMillis = null, meanExecTimeMillis = null, reasons = faults,
+        )
+        val start = requireNotNull(first)
+        val end = requireNotNull(last)
+        val deltaCalls = end.calls - start.calls
+        val deltaRows = end.rows - start.rows
+        val executionTime = BigDecimal.valueOf(end.totalExecTime) - BigDecimal.valueOf(start.totalExecTime)
+        val callsPerHour = BigDecimal.valueOf(deltaCalls).multiply(BigDecimal(3600)).divide(durationSeconds, MathContext.DECIMAL128)
+        return FrequencyObservation(
+            key = key,
+            state = if (deltaCalls == 0L) ObservationState.ZERO else ObservationState.OBSERVED,
+            query = entry.query, textStatus = entry.textStatus,
+            deltaCalls = deltaCalls, callsPerHour = finite(callsPerHour), deltaRows = deltaRows,
+            totalExecTimeMillis = finite(executionTime),
+            meanExecTimeMillis = if (deltaCalls == 0L) null
+                else finite(executionTime.divide(BigDecimal.valueOf(deltaCalls), MathContext.DECIMAL128)),
+            reasons = emptySet(),
+        )
     }
 
     private fun index(snapshot: StatisticsSnapshot, context: RunContext): Map<StatisticsKey, StatisticsEntry> {
