@@ -19,7 +19,11 @@ class ProfileAwareCandidateGenerator(
                 "Enumerator exceeded the bounded scope contract"
             }
             val canonical = canonicalizer.canonicalize(scope)
-            val local = canonical.candidates.sortedWith(localOrder).take(LOCAL_LIMIT)
+            val ordered = canonical.candidates.sortedWith(localOrder)
+            // Reserve up to eight places for covering variants without starving ordinary pairs.
+            val covering = ordered.filter { it.definition.includedColumns.isNotEmpty() }.take(8)
+            val local = ordered.filter { it.definition.includedColumns.isEmpty() }
+                .take(LOCAL_LIMIT - covering.size) + covering
             context.checkDeadline()
             survivors += local
             scopes += LocalGenerationStatistics(
@@ -31,6 +35,8 @@ class ProfileAwareCandidateGenerator(
                 deduplicatedDefinitions = canonical.deduplicatedDefinitions,
                 retainedDefinitions = local.size,
                 excludedColumns = scope.excludedColumns,
+                enumeratedIncludeDefinitions = scope.variants.count { it.definition.includedColumns.isNotEmpty() },
+                retainedIncludeDefinitions = covering.size,
                 candidatesAfterExistingDeduplication = canonical.candidates.size,
                 unindexableVariants = canonical.unindexableVariants,
             )
@@ -42,6 +48,9 @@ class ProfileAwareCandidateGenerator(
                     "schema" to scope.table.schema, "table" to scope.table.name,
                     "candidates_before" to canonical.candidates.size.toString(),
                     "candidates_after" to local.size.toString(),
+                    "include_before" to ordered.count { it.definition.includedColumns.isNotEmpty() }.toString(),
+                    "include_after" to covering.size.toString(),
+                    "include_limit" to "8",
                 )
                 // Aggregate scope diagnostics, not a retained copy of all generation events.
                 decisions += CandidateDecision(CandidateReason.LOCAL_CANDIDATE_LIMIT,

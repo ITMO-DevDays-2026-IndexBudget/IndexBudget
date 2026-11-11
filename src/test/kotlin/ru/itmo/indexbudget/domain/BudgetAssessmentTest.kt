@@ -18,6 +18,22 @@ class BudgetAssessmentTest {
     )
 
     @Test
+    fun `payload is charged once per column and changes exact write admissibility`() {
+        val plain = candidate("plain", 10)
+        val covering = plain.copy(id = "covering", definition = plain.definition.copy(
+            includedColumns = listOf(ColumnRef(records, "payload"), ColumnRef(records, "extra"))))
+        val budget = workload(storage = 12, write = 12300.0, profile = rates)
+        assertEquals(4100.0, metrics.assessBudget(listOf(plain), budget).usage.writeUnitsPerHour)
+        assertEquals(BudgetUsage(10, 12, 12300.0, 1), metrics.assessBudget(listOf(covering), budget).usage)
+        assertTrue(metrics.assessBudget(listOf(covering), budget).admissible)
+        assertEquals(setOf(BudgetViolation.WRITE_BUDGET), metrics.assessBudget(listOf(covering),
+            budget.copy(constraints = budget.constraints.copy(writeBudgetUnitsPerHour = 12299.0))).violations)
+        assertNull(metrics.assessBudget(listOf(covering), workload()).usage.writeUnitsPerHour)
+        assertTrue(metrics.assessBudget(listOf(covering), workload(write = 0.0,
+            profile = mapOf("public.records" to TableWriteRates(0.0, 0.0, 0.0)))).admissible)
+    }
+
+    @Test
     fun `reserve is rounded per new index before summing`() {
         val candidates = listOf(candidate("a", 1), candidate("b", 1))
         val exact = metrics.assessBudget(candidates, workload(storage = 4))

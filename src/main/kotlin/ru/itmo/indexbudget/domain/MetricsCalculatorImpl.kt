@@ -47,7 +47,7 @@ class MetricsCalculatorImpl : MetricsCalculator {
                 // Keep both accumulation stages exact, including multiplication and the budget comparison.
                 val rowChanges = BigDecimal(rate.insertsPerHour) + BigDecimal(rate.updatesPerHour) +
                     BigDecimal(rate.deletesPerHour)
-                val units = rowChanges * BigDecimal(candidate.definition.keys.size)
+                val units = rowChanges * BigDecimal(candidate.definition.keys.size + candidate.definition.includedColumns.size)
                 val total = checkNotNull(exactWriteUnits) + units
                 // All terms are nonnegative: bounding the total also bounds every intermediate value.
                 if (total > BigDecimal(Double.MAX_VALUE)) {

@@ -96,13 +96,22 @@ data class IndexKey(
     val operatorClass: String? = null,
 )
 
-/** Candidate definitions are nonunique B-trees with one or two physical columns. */
+/** Nonunique B-tree: 1–2 physical keys and up to two distinct non-key payload columns. */
 data class IndexDefinition(
     val table: TableRef,
     val keys: List<IndexKey>,
     val method: String = "btree",
     val unique: Boolean = false,
-)
+    val includedColumns: List<ColumnRef> = emptyList(),
+) {
+    init {
+        require(includedColumns.size <= 2) { "At most two INCLUDE columns" }
+        require(includedColumns.distinct().size == includedColumns.size) { "Repeated INCLUDE column" }
+        require(includedColumns.all { it.table == table && it !in keys.map(IndexKey::column) }) {
+            "INCLUDE columns must belong to the index table and differ from keys"
+        }
+    }
+}
 
 /** Nonordinary indexes stay in the catalog and must not be mistaken for exact candidate duplicates. */
 data class ExistingIndex(

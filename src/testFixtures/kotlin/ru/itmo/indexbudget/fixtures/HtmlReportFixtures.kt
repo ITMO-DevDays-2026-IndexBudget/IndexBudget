@@ -20,6 +20,28 @@ object HtmlReportFixtures {
         }))
     }
 
+    fun covering(): AnalysisReport {
+        val report = completed(sameIncumbents = true)
+        val selected = requireNotNull(report.result.selected)
+        val candidates = report.candidates.candidates.map { candidate ->
+            val definition = candidate.definition.copy(includedColumns = listOf(ColumnRef(candidate.definition.table, "payload")))
+            candidate.copy(definition = definition, ddl = PostgresDdlRenderer().render(definition),
+                generationReasons = candidate.generationReasons + GenerationReason.COVERING_PROJECTION)
+        }
+        val calculator = MetricsCalculatorImpl()
+        val input = requireNotNull(report.input)
+        val assessment = calculator.assessBudget(candidates.filter { it.id in selected.evaluation.candidateIds }, input)
+        val configuration = selected.copy(metrics = calculator.calculate(input, requireNotNull(report.result.baseline),
+            selected.evaluation, assessment.usage))
+        val annotated = candidates.map { candidate ->
+            val usage = calculator.assessBudget(listOf(candidate), input).usage
+            candidate.copy(writeUnitsPerHour = usage.writeUnitsPerHour, budgetedBytes = usage.budgetedBytes)
+        }
+        return report.copy(candidates = report.candidates.copy(candidates = annotated),
+            result = SearchResult.Completed(Objective.ROBUST, requireNotNull(report.result.baseline),
+                configuration, configuration, report.result.diagnostics))
+    }
+
     fun zeroBaseline(): AnalysisReport {
         val report = completed()
         val input = requireNotNull(report.input)
@@ -103,6 +125,7 @@ object HtmlReportFixtures {
 
     fun all(): Map<String, AnalysisReport> = linkedMapOf(
         "different" to completed(),
+        "include" to covering(),
         "same" to completed(sameIncumbents = true),
         "mean" to completed(objective = Objective.MEAN),
         "partial" to ContractFixtures.report(status = RunStatus.PARTIAL),

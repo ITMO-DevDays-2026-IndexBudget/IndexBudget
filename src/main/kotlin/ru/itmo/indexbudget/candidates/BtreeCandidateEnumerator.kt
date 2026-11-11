@@ -27,6 +27,7 @@ class BtreeCandidateEnumerator : CandidateEnumerator {
                 val features = featuresByQuery.getValue(query.id).filterKeys { it.table == table }
                 val shortlist = shortlistColumns(query, table, features, support)
                 val variants = variants(query, table, shortlist.retainedColumns, features, context)
+                val covering = coveringVariants(query, table, variants, context)
                 context.checkDeadline()
                 consume(CandidateScope(
                     queryId = query.id,
@@ -34,9 +35,9 @@ class BtreeCandidateEnumerator : CandidateEnumerator {
                     discoveredColumns = features.size,
                     retainedColumns = shortlist.retainedColumns,
                     excludedColumns = shortlist.excludedColumns,
-                    variants = variants,
-                    decisions = shortlist.decisions,
-                    warnings = shortlist.warnings,
+                    variants = variants + covering.variants,
+                    decisions = shortlist.decisions + covering.decisions,
+                    warnings = shortlist.warnings + covering.warnings,
                 ))
                 // The synchronous consumer may also spend the remaining analysis budget.
                 context.checkDeadline()
@@ -187,6 +188,57 @@ class BtreeCandidateEnumerator : CandidateEnumerator {
             }
         }
         return result
+    }
+
+    private data class CoveringVariants(
+        val variants: List<CandidateVariant> = emptyList(),
+        val decisions: List<CandidateDecision> = emptyList(),
+        val warnings: List<AnalysisWarning> = emptyList(),
+    )
+
+    private fun coveringVariants(
+        query: ResolvedQuery,
+        table: TableRef,
+        plain: List<CandidateVariant>,
+        context: RunContext,
+    ): CoveringVariants {
+        // Never expand a wildcard, including mixed explicit/wildcard projections.
+        if (query.selectsAllColumns) return CoveringVariants()
+        val projection = query.projectedColumns.filter { it.table == table }.toSet()
+        if (projection.isEmpty()) return CoveringVariants()
+        val needed = query.referencedColumns.filter { it.table == table }.toSet() + projection
+        val result = mutableListOf<CandidateVariant>()
+        var payloadLimited = 0
+        var variantLimited = 0
+        val limit = minOf(16, 976 - plain.size)
+        // The ordinary bounded enumeration is deterministic; never enumerate payload subsets.
+        for (base in plain) {
+            context.checkDeadline()
+            val keys = base.definition.keys.map { it.column }.toSet()
+            val payload = projection - keys
+            if (payload.isEmpty()) continue
+            if (payload.size > 2) { payloadLimited++; continue }
+            // Do not call a structure covering when a filter/join/order column is missing.
+            if (!(keys + payload).containsAll(needed)) continue
+            if (result.size == limit) { variantLimited++; continue }
+            result += base.copy(
+                definition = base.definition.copy(includedColumns = payload.sortedWith(columnOrder)),
+                generationReasons = base.generationReasons + GenerationReason.COVERING_PROJECTION,
+            )
+        }
+        val decisions = mutableListOf<CandidateDecision>()
+        val warnings = mutableListOf<AnalysisWarning>()
+        fun limited(count: Int, reason: CandidateReason, code: WarningCode, cap: Int) {
+            if (count == 0) return
+            val details = mapOf("excluded_variants" to count.toString(), "limit" to cap.toString())
+            decisions += CandidateDecision(reason, queryId = query.id, table = table,
+                phase = AnalysisPhase.CANDIDATES, details = details)
+            warnings += AnalysisWarning(code, "Часть INCLUDE-вариантов не генерировалась из-за ограничения.",
+                queryId = query.id, details = details + mapOf("schema" to table.schema, "table" to table.name))
+        }
+        limited(payloadLimited, CandidateReason.INCLUDE_PAYLOAD_LIMIT, WarningCode.INCLUDE_PAYLOAD_LIMIT, 2)
+        limited(variantLimited, CandidateReason.INCLUDE_VARIANT_LIMIT, WarningCode.INCLUDE_VARIANT_LIMIT, limit)
+        return CoveringVariants(result, decisions, warnings)
     }
 
     private fun generationReasonsForPair(

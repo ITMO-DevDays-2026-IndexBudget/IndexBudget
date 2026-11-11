@@ -26,7 +26,8 @@ class ScalarPredicatesTest {
     @Test
     fun `json null tests keep full SQL and exclude only unindexable variants`() {
         val snapshot = catalog.copy(tables = catalog.tables.map { it.copy(columns = it.columns + CatalogColumn("payload", "json")) })
-        for ((nullTest, rejected) in listOf("IS NULL" to 3, "IS NOT NULL" to 2)) {
+        // INCLUDE adds (payload) INCLUDE (id); it too must be rejected because the key has no opclass.
+        for ((nullTest, rejected) in listOf("IS NULL" to 4, "IS NOT NULL" to 3)) {
             val sql = "SELECT id FROM records WHERE payload $nullTest AND id = 1"
             val workload = resolve(sql, snapshot)
             val result = ProfileAwareCandidateGenerator().generate(workload, snapshot, RunContext())
@@ -35,6 +36,8 @@ class ScalarPredicatesTest {
             assertEquals(2, result.diagnostics.localScopes.single().retainedColumns)
             assertEquals(rejected, result.diagnostics.localScopes.single().unindexableVariants)
             assertEquals(1, result.diagnostics.localScopes.single().deduplicatedDefinitions)
+            assertEquals(1, result.diagnostics.localScopes.single().enumeratedIncludeDefinitions)
+            assertEquals(0, result.diagnostics.localScopes.single().retainedIncludeDefinitions)
             val decision = result.diagnostics.decisions.single()
             assertEquals(CandidateReason.NO_BTREE_OPERATOR_CLASS, decision.reason)
             assertEquals("q", decision.queryId)

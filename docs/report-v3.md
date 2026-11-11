@@ -1,7 +1,7 @@
-# Формат отчёта v2
+# Формат отчёта v3
 
 Нормативные требования к поведению — [спецификация v0.2, §8](../IndexBudget-spec-v0.2.md#8-архитектура-cli-и-отчёты).
-Здесь зафиксирован JSON-контракт реализации #19. `DefaultReportBuilder` собирает общий
+Здесь зафиксирован JSON-контракт реализации #19 с расширением INCLUDE #79. `DefaultReportBuilder` собирает общий
 `AnalysisReport`; `JsonReportWriter` переводит его в явно заданную схему, а `ReportRenderer`
 получает ту же модель для HTML. Сериализация внутренних Kotlin-классов не определяет wire-формат.
 
@@ -9,13 +9,15 @@ JSON записывается в UTF-8. Все перечисленные пол
 Статус, objective, comparison scope, фазы, направления ключей и `source` записываются строчными
 английскими значениями. Устойчивые коды ошибок, предупреждений и причин сохраняют верхний регистр.
 Числа costs — единицы планировщика, размеры — байты, длительности — миллисекунды, write units —
-условная модель изменений строк × число ключевых колонок в час. Cost не является временем или SLA.
+условная модель изменений строк × (число ключевых + число INCLUDE-колонок) в час. Cost не является временем или SLA.
+
+Отчёт v3 несовместим с reader v2, который видит только ключи индекса. Обновлённый reader должен сохранять `definition.included_columns` при воспроизведении DDL и учитывать новую модель записи. Вход workload остаётся v2; старые отчёты не перезаписываются и не принимаются экспортёром как v3.
 
 ## Корневые поля `report.json`
 
 | Поле | Тип и смысл |
 | --- | --- |
-| `schema_version`, `spec_version` | `2` и `"0.2"` |
+| `schema_version`, `spec_version` | `3` и `"0.2"` |
 | `run_id` | ID одного запуска, общий для JSON/HTML/SQL |
 | `input_hash` | SHA-256 исходного валидированного JSON; `null`, если hash не был получен при failed |
 | `duration_millis` | Длительность до сборки модели; время записи файлов сюда не входит |
@@ -27,6 +29,7 @@ JSON записывается в UTF-8. Все перечисленные пол
 | `price_of_robustness` | Готовая разность `C_mean(best_robust) - C_mean(best_mean)`; `null` для failed |
 | `profiles` | Исходный порядок профилей; поля `id`, `weight`, `normalized_weight`, `calls_per_hour` |
 | `budgets` | `storage_budget_bytes`, `write_budget_units_per_hour`, `max_indexes` |
+| `write_proxy_model` | Всегда `row_changes_times_key_and_include_columns`; payload оплачивается как ключ |
 | `table_write_rates` | Объект по физическим `schema.table` либо `null`; значения содержат `inserts_per_hour`, `updates_per_hour`, `deletes_per_hour`, `source` |
 | `queries` | Общий список SQL в исходном порядке; поля `id`, `sql`, `baseline_cost`, `selected_cost`, `regression` |
 | `baseline` | Сохранённая полная оценка пустого гипотетического набора; `null`, если полного baseline нет |
@@ -88,7 +91,7 @@ JSON сохранённого EXPLAIN, а не строку с JSON внутри
 
 Элемент `candidates`/`selected_indexes` содержит `id`, `definition`, `source_query_ids`,
 `generation_reasons`, `ddl`, `estimated_bytes`, `budgeted_bytes`, `write_units_per_hour`.
-`definition` содержит `table: {schema, name}`, `method`, `unique`, `keys`. Ключ содержит
+`definition` содержит `table: {schema, name}`, `method`, `unique`, `keys`, `included_columns`. Ключ содержит
 `column: {table: {schema, name}, name}`, `direction`, `nulls`, `collation`, `operator_class`.
 Порядок ключей сохраняется. `source_query_ids` и `generation_reasons` отсортированы.
 
@@ -102,7 +105,8 @@ DDL формирует общий `PostgresDdlRenderer` из разрешённ�
 - `candidates_before_global_deduplication`, `candidates_after_global_deduplication`, `shortlisted_candidates`;
 - `ungenerated_definitions` — `null`, если точное число неизвестно;
 - `local_scopes`: `query_id`, `table`, `discovered_columns`, `retained_columns`, `enumerated_definitions`,
-  `deduplicated_definitions`, `retained_definitions`, `excluded_columns` (структуры `ColumnRef`);
+  `deduplicated_definitions`, `unindexable_variants`, `retained_definitions`, `excluded_columns` (структуры `ColumnRef`),
+  `enumerated_include_definitions`, `retained_include_definitions`;
 - `decisions`, `warnings`.
 
 `diagnostics` содержит `completed_phases`, `stop_reasons`, `statistics`, `limits`, `warnings`,
@@ -130,3 +134,11 @@ JSON и HTML получают один `AnalysisReport`; SQL содержит т
 Экспорт повторно проверяет output-dir и готовит файлы во временном каталоге с run ID перед
 публикацией. Ошибка записи/рендера/публикации — `EXPORT_FAILED` и exit 1; существующие чужие файлы
 не заменяются. Сохранённый partial можно экспортировать после остановки поиска или отмены.
+
+## INCLUDE (#79)
+
+`definition.included_columns` — обязательный массив объектов `{table: {schema, name}, name}`: 0–2 физических колонки той же таблицы, без ключей и повторов, в каноническом порядке имён. Они не имеют direction/nulls/collation/opclass и не увеличивают арность ключа. `generation_reasons` сохраняет `COVERING_PROJECTION` вместе с причинами исходных ключей.
+
+В `candidate_diagnostics.local_scopes` обязательны `enumerated_include_definitions` и `retained_include_definitions` (целые, включая ноль). Отсечения INCLUDE имеют причины `INCLUDE_PAYLOAD_LIMIT` / `INCLUDE_VARIANT_LIMIT` с `excluded_variants` и `limit`; локальный cap содержит также `include_before`, `include_after`, `include_limit`. Глобальный cap относится ко всем кандидатам независимо от payload.
+
+Карточки и список кандидатов показывают INCLUDE, исходный и бюджетный размер и write units. Возможность index-only scan не обещает отсутствие обращений к таблице. SQL-экспорт использует общий DDL renderer, включая payload.
