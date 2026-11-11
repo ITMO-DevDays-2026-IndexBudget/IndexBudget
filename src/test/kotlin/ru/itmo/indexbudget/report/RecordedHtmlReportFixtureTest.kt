@@ -34,6 +34,7 @@ class RecordedHtmlReportFixtureTest {
         assertTrue(plans[1].contains("Index Only Scan"))
         assertTrue(requireNotNull(report.result.baseline).plansByQueryId.values.all { it.json.contains("Seq Scan") })
         val html = HtmlReportRenderer().render(report)
+        ImportedHtmlAssertions.assertReport(report, html)
         val json = JsonReportWriter().render(report)
         for (window in requireNotNull(report.workloadProvenance).windows) {
             assertTrue(html.contains(window.startedAt.toString()))

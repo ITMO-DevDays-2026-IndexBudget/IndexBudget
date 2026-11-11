@@ -209,17 +209,34 @@ async function noPageOverflow(page, message) {
           if (variantMatch) assert.equal(await page.locator('[data-overview-variant]:visible').getAttribute('data-overview-variant'),
             variantMatch[1], 'Direct variant hash selects the matching conclusion');
         } else if (target.pathname.endsWith('.sql')) {
-          let download;
-          const onDownload = value => { download = value; };
-          page.on('download', onDownload);
-          const response = await page.goto(link).catch(error => assert.match(error.message, /Download is starting/));
-          page.off('download', onDownload);
-          if (download) {
-            assert.equal(await download.failure(), null);
-            assert.deepEqual(readFileSync(await download.path()), readFileSync(fileURLToPath(target)));
-          } else {
-            assert.ok(response?.ok());
+          // Chromium may reject goto before it emits download (notably on Linux).
+          // Keep the listener until the asynchronous download has actually arrived.
+          let onDownload, downloadTimeout;
+          const downloaded = new Promise(resolve => {
+            onDownload = resolve;
+            page.on('download', onDownload);
+          });
+          try {
+            let response;
+            try {
+              response = await page.goto(link);
+            } catch (error) {
+              assert.match(error.message, /Download is starting/, link);
+              const download = await Promise.race([
+                downloaded,
+                new Promise((_, reject) => {
+                  downloadTimeout = setTimeout(() => reject(new Error(`Download did not start: ${link}`)), 10_000);
+                }),
+              ]);
+              assert.equal(await download.failure(), null, link);
+              assert.deepEqual(readFileSync(await download.path()), readFileSync(fileURLToPath(target)));
+              continue;
+            }
+            assert.ok(response?.ok(), link);
             assert.deepEqual(await response.body(), readFileSync(fileURLToPath(target)));
+          } finally {
+            clearTimeout(downloadTimeout);
+            page.off('download', onDownload);
           }
         } else {
           const response = await page.goto(link);
