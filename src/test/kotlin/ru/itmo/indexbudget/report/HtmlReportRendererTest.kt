@@ -11,6 +11,38 @@ class HtmlReportRendererTest {
     private val renderer = HtmlReportRenderer()
 
     @Test
+    fun `critical query guards render as planner cost limits with observed ratios`() {
+        val source = HtmlReportFixtures.completed()
+        val report = source.copy(
+            input = source.input?.let {
+                it.copy(constraints = it.constraints.copy(
+                    queryCostGuards = mapOf("records_by_group" to 1.5, "records_by_value" to 1.0)))
+            },
+            costGuards = listOf(
+                CostGuardOutcome("records_by_group", 1.5, 100.0, 120.0, 1.2, zeroBaseline = false, violated = false),
+                CostGuardOutcome("records_by_value", 1.0, 0.0, 5.0, null, zeroBaseline = true, violated = true),
+            ),
+        )
+
+        val queries = section(renderer.render(report), "queries")
+        val guardsTable = capture(queries, "(Ограничения planner cost для критических SQL.*?</table>)", stripTags = false)
+
+        assertTrue(queries.contains("Ограничения planner cost для критических SQL"))
+        assertTrue(queries.contains("не latency и не SLA"))
+        assertEquals(listOf("records_by_group", "1,5", "100", "120", "1,2", "Соблюдено"),
+            rowByKey(guardsTable, "records_by_group"))
+        assertEquals(listOf("records_by_value", "1", "0", "5", "Неприменимо (нулевой baseline)",
+            "Нарушено: положительный cost при нулевом baseline"), rowByKey(guardsTable, "records_by_value"))
+    }
+
+    @Test
+    fun `reports without guards have no guard section`() {
+        val queries = section(renderer.render(HtmlReportFixtures.completed()), "queries")
+
+        assertFalse(queries.contains("Ограничения planner cost"))
+    }
+
+    @Test
     fun `legacy diagnostics show the same original and global shortlist`() {
         val source = HtmlReportFixtures.completed()
         val report = source.copy(candidates = source.candidates.copy(

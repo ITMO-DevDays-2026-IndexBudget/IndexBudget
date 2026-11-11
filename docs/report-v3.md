@@ -30,7 +30,8 @@ JSON записывается в UTF-8. Все перечисленные пол
 | `incumbents_coincide` | Совпадают ли отсортированные IDs двух наборов; `null` для failed |
 | `price_of_robustness` | Готовая разность `C_mean(best_robust) - C_mean(best_mean)`; `null` для failed |
 | `profiles` | Исходный порядок профилей; поля `id`, `weight`, `normalized_weight`, `calls_per_hour` |
-| `budgets` | `storage_budget_bytes`, `write_budget_units_per_hour`, `max_indexes` |
+| `budgets` | `storage_budget_bytes`, `write_budget_units_per_hour`, `max_indexes`, `query_cost_guards` (эхо заданных пределов) |
+| `cost_guards` | Ограничения критических SQL (#78): `basis: "planner_cost_ratio"`, подпись «не latency и не SLA», `max_ratio_by_query_id` и `outcomes` для выбранного набора: `query_id`, `max_ratio`, `baseline_cost`, `selected_cost`, `observed_ratio` (`null` при нулевом baseline), `zero_baseline`, `violated`. Пусто без guards; при failed без выбранного набора `outcomes` пуст |
 | `write_proxy_model` | Всегда `row_changes_times_key_and_include_columns`; payload оплачивается как ключ |
 | `table_write_rates` | Объект по физическим `schema.table` либо `null`; значения содержат `inserts_per_hour`, `updates_per_hour`, `deletes_per_hour`, `source` |
 | `queries` | Общий список SQL в исходном порядке; поля `id`, `sql`, `baseline_cost`, `selected_cost`, `regression` |
@@ -207,3 +208,11 @@ JSON и HTML получают один `AnalysisReport`; SQL содержит т
 В `candidate_diagnostics.local_scopes` обязательны `enumerated_include_definitions` и `retained_include_definitions` (целые, включая ноль). Отсечения INCLUDE имеют причины `INCLUDE_PAYLOAD_LIMIT` / `INCLUDE_VARIANT_LIMIT` с `excluded_variants` и `limit`; локальный cap содержит также `include_before`, `include_after`, `include_limit`. Глобальный cap относится ко всем кандидатам независимо от payload.
 
 Карточки и список кандидатов показывают INCLUDE, исходный и бюджетный размер и write units. Возможность index-only scan не обещает отсутствие обращений к таблице. SQL-экспорт использует общий DDL renderer, включая payload.
+
+## Ручное сравнение (#77)
+
+Необязательные `manual_requested_indexes` и `manual_comparison` описывают отдельную
+ручную оценку вне автоматического shortlist; без неё оба поля равны `null`.
+Статусы, определения, полные costs/метрики, бюджетные нарушения и диагностика описаны
+в [контракте ручного сравнения](manual-index-comparison.md#отчёт). Эти данные не меняют
+`best_robust`, `best_mean`, `selected`, `price_of_robustness` и автоматический SQL.

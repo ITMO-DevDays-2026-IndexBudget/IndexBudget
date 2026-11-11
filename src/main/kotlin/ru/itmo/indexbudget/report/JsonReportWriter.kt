@@ -37,6 +37,12 @@ class JsonReportWriter {
                 "calls_per_hour" to profile.callsPerHour.toSortedMap(),
             ) },
             "budgets" to input?.constraints?.let(::budgets),
+            "cost_guards" to linkedMapOf(
+                "basis" to "planner_cost_ratio",
+                "note" to "Optional per-query constraints on planner cost ratios; not latency or SLA.",
+                "max_ratio_by_query_id" to input?.constraints?.queryCostGuards?.toSortedMap(),
+                "outcomes" to report.costGuards.map(::costGuard),
+            ),
             "write_proxy_model" to "row_changes_times_key_and_include_columns",
             "table_write_rates" to input?.tableWriteRates?.toSortedMap()?.mapValues { (_, rates) -> linkedMapOf(
                 "inserts_per_hour" to rates.insertsPerHour,
@@ -58,12 +64,34 @@ class JsonReportWriter {
             "selected_indexes" to report.candidates.candidates.filter { it.id in selectedIds }.sortedBy { it.id }
                 .map(::candidate),
             "candidates" to report.candidates.candidates.sortedBy { it.id }.map(::candidate),
+            "manual_requested_indexes" to input?.manualIndexes?.map { definition -> linkedMapOf(
+                "schema" to definition.table.schema, "table" to definition.table.name,
+                "keys" to definition.keys.map { key -> linkedMapOf("column" to key.column.name,
+                    "direction" to key.direction.name.lowercase(), "nulls" to key.nulls.name.lowercase()) },
+            ) },
+            "manual_comparison" to report.manualComparison?.let(::manualComparison),
             "candidate_diagnostics" to candidateDiagnostics(report.candidates.diagnostics),
             "diagnostics" to diagnostics(result.diagnostics),
             "error" to (result as? SearchResult.Failed)?.error?.let(::error),
         )
         return mapper.writerWithDefaultPrettyPrinter().writeValueAsString(root) + "\n"
     }
+
+    private fun manualComparison(value: ManualComparison) = linkedMapOf(
+        "origin" to "manual_outside_automatic_shortlist",
+        "comparison_scope" to "separate_manual_evaluation",
+        "status" to value.status.wireValue, "admissible" to value.admissible,
+        "candidates" to value.candidates.map(::candidate),
+        "decisions" to value.decisions.map(::decision),
+        "configuration" to value.evaluation?.let { configuration(it, value.metrics) },
+        "budget_violations" to value.budgetViolations.map { it.name }.sorted(),
+        "evaluation_violations" to value.evaluationViolations.map(::error),
+        "queries" to value.queryComparisons.map { linkedMapOf(
+            "query_id" to it.queryId, "baseline_cost" to it.baselineCost,
+            "manual_cost" to it.selectedCost, "regression" to it.regression,
+        ) },
+        "error" to value.error?.let(::error),
+    )
 
     private fun environment(value: EnvironmentInfo) = linkedMapOf(
         "application_version" to value.applicationVersion,
@@ -77,6 +105,17 @@ class JsonReportWriter {
         "storage_budget_bytes" to value.storageBudgetBytes,
         "write_budget_units_per_hour" to value.writeBudgetUnitsPerHour,
         "max_indexes" to value.maxIndexes,
+        "query_cost_guards" to value.queryCostGuards.toSortedMap(),
+    )
+
+    private fun costGuard(value: CostGuardOutcome) = linkedMapOf(
+        "query_id" to value.queryId,
+        "max_ratio" to value.maxRatio,
+        "baseline_cost" to value.baselineCost,
+        "selected_cost" to value.selectedCost,
+        "observed_ratio" to value.observedRatio,
+        "zero_baseline" to value.zeroBaseline,
+        "violated" to value.violated,
     )
 
     private fun configuration(value: EvaluationResult, metrics: SetMetrics?) = linkedMapOf(

@@ -1,6 +1,7 @@
 package ru.itmo.indexbudget.application
 
 import org.springframework.stereotype.Component
+import ru.itmo.indexbudget.domain.*
 import ru.itmo.indexbudget.domain.AnalysisError
 import ru.itmo.indexbudget.domain.AnalysisException
 import ru.itmo.indexbudget.domain.AnalysisMode
@@ -57,8 +58,9 @@ class WorkloadReader {
         }
         objectNode(root, Location("workload"), setOf(
             "schema_version", "objective", "queries", "profiles", "constraints", "table_write_rates", "analysis_mode",
-            "candidate_ranking",
+            "candidate_ranking", "manual_indexes",
         ))
+        // query_cost_guards keys are cross-checked against queries below, after queries are parsed.
         val requestedMode = when (val value = root.get("analysis_mode")) {
             null -> AnalysisMode.NORMAL
             else -> when (string(value, Location("analysis_mode"))) {
@@ -89,12 +91,14 @@ class WorkloadReader {
         val constraints = constraints(root.get("constraints"))
         context?.checkDeadline()
         val queries = queries(root.get("queries"))
+        validateCostGuards(constraints.queryCostGuards, queries)
         context?.checkDeadline()
         val profiles = profiles(root.get("profiles"), queries)
         context?.checkDeadline()
         ProfileWeights.normalize(profiles)
         context?.checkDeadline()
         val writeRates = writeRates(root.get("table_write_rates"))
+        val manual = manualIndexes(root.get("manual_indexes"))
         if (constraints.writeBudgetUnitsPerHour != null && writeRates == null) {
             invalid(Location("table_write_rates"), "An enabled write budget requires a complete write profile.",
                 ErrorCode.INVALID_WRITE_PROFILE)
@@ -108,8 +112,37 @@ class WorkloadReader {
             context.checkDeadline()
             context.recordInputHash(HexFormat.of().formatHex(digest))
         }
-        return WorkloadInput(queries, profiles, constraints, objective = objective, tableWriteRates = writeRates,
+        return WorkloadInput(queries, profiles, constraints, objective = objective, tableWriteRates = writeRates, manualIndexes = manual,
             analysisMode = analysisMode, candidateRanking = candidateRankingOverride ?: requestedRanking)
+    }
+
+    private fun manualIndexes(node: JsonNode?): List<IndexDefinition>? {
+        if (node == null) return null
+        val location = Location("manual_indexes")
+        return array(node, location, 5).mapIndexed { index, value ->
+            val at = location.child(index.toString())
+            objectNode(value, at, setOf("schema", "table", "keys"))
+            val table = TableRef(identifier(value.get("schema"), at.child("schema")), identifier(value.get("table"), at.child("table")))
+            val keys = array(value.get("keys"), at.child("keys"), 2).mapIndexed { position, key ->
+                val keyAt = at.child("keys").child(position.toString())
+                objectNode(key, keyAt, setOf("column", "direction", "nulls"))
+                val column = identifier(key.get("column"), keyAt.child("column"))
+                val direction = when (key.get("direction")?.let { string(it, keyAt.child("direction")) } ?: "asc") {
+                    "asc" -> SortDirection.ASC
+                    "desc" -> SortDirection.DESC
+                    else -> invalid(keyAt.child("direction"), "Expected asc or desc.")
+                }
+                val nulls = when (key.get("nulls")?.let { string(it, keyAt.child("nulls")) }) {
+                    null -> if (direction == SortDirection.DESC) NullsOrder.FIRST else NullsOrder.LAST
+                    "first" -> NullsOrder.FIRST
+                    "last" -> NullsOrder.LAST
+                    else -> invalid(keyAt.child("nulls"), "Expected first or last.")
+                }
+                IndexKey(ColumnRef(table, column), direction, nulls)
+            }
+            if (keys.map { it.column }.distinct().size != keys.size) invalid(at, "Repeated index key.")
+            IndexDefinition(table, keys)
+        }
     }
 
     /** Sort JSON objects only: array order, string values and absent fields retain their meaning. */
@@ -170,7 +203,8 @@ class WorkloadReader {
 
     private fun constraints(node: JsonNode?): Constraints {
         val location = Location("constraints")
-        val value = objectNode(node, location, setOf("storage_budget_bytes", "write_budget_units_per_hour", "max_indexes"))
+        val value = objectNode(node, location,
+            setOf("storage_budget_bytes", "write_budget_units_per_hour", "max_indexes", "query_cost_guards"))
         val storage = integer(value.get("storage_budget_bytes"), location.child("storage_budget_bytes"))
         if (storage < 0) invalid(location.child("storage_budget_bytes"), "Storage budget must be nonnegative.")
         val writeNode = value.get("write_budget_units_per_hour")
@@ -178,7 +212,34 @@ class WorkloadReader {
         val write = if (writeNode.isNull) null else number(writeNode, location.child("write_budget_units_per_hour"))
         val maxIndexes = value.get("max_indexes")?.let { integer(it, location.child("max_indexes")) } ?: 5L
         if (maxIndexes !in 0L..5L) invalid(location.child("max_indexes"), "max_indexes must be an integer from 0 to 5.")
-        return Constraints(storage, write, maxIndexes.toInt())
+        return Constraints(storage, write, maxIndexes.toInt(), queryCostGuards = costGuards(value.get("query_cost_guards")))
+    }
+
+    /** Ratios, not percents: 1.0 forbids any worsening, 1.1 allows 10% worse planner cost.
+     * An absent field means no guards; an explicit null or any non-object is INVALID_INPUT,
+     * so a malformed configuration never silently disables critical-SQL constraints. */
+    private fun costGuards(node: JsonNode?): Map<String, Double> {
+        if (node == null) return emptyMap()
+        val location = Location("constraints.query_cost_guards")
+        if (!node.isObject) invalid(location, "Expected an object of query ID to maximum cost ratio.")
+        return node.properties().associate { (queryId, value) ->
+            val guardLocation = location.copy(queryId = queryId)
+            val ratio = number(value, guardLocation)
+            if (ratio < 1.0) {
+                invalid(guardLocation, "Cost guard must be a ratio of at least 1.0; 1.0 forbids any worsening.")
+            }
+            queryId to ratio
+        }
+    }
+
+    private fun validateCostGuards(guards: Map<String, Double>, queries: List<QueryInput>) {
+        val knownIds = queries.map { it.id }.toSet()
+        for (queryId in guards.keys.sorted()) {
+            if (queryId !in knownIds) {
+                invalid(Location("constraints.query_cost_guards", queryId = queryId),
+                    "Unknown query ID in query_cost_guards.")
+            }
+        }
     }
 
     private fun queries(node: JsonNode?): List<QueryInput> {
@@ -271,10 +332,16 @@ class WorkloadReader {
         return node.toList()
     }
 
-    private fun string(node: JsonNode?, location: Location): String {
+    private fun identifier(node: JsonNode?, location: Location): String {
+        val value = string(node, location, allowBlank = true)
+        if (value.isEmpty() || '\u0000' in value) invalid(location, "Expected a nonempty identifier without NUL.")
+        return value
+    }
+
+    private fun string(node: JsonNode?, location: Location, allowBlank: Boolean = false): String {
         if (node == null || !node.isString) invalid(location, "Expected a nonblank string.")
         val value = node.stringValue()
-        if (value.isBlank()) invalid(location, "Expected a nonblank string.")
+        if (!allowBlank && value.isBlank()) invalid(location, "Expected a nonblank string.")
         try {
             Charsets.UTF_8.newEncoder().onMalformedInput(CodingErrorAction.REPORT)
                 .encode(java.nio.CharBuffer.wrap(value))

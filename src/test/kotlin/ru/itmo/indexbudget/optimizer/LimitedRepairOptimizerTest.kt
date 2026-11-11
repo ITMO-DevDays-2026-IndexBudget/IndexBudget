@@ -542,6 +542,36 @@ class LimitedRepairOptimizerTest {
     }
 
     @Test
+    fun `a repair combination violating a cost guard is rejected and keeps both incumbents on the baseline`() {
+        val initial = workload(queryCount = 2).input
+        val workload = resolved(initial.copy(constraints =
+            initial.constraints.copy(queryCostGuards = mapOf("q00" to 1.0))))
+        // Singletons keep the baseline costs, so greedy stays on the empty set; only the pair
+        // improves the mean, and it doubles the guarded q00 planner cost.
+        val evaluator = CountingEvaluator(cost = { ids, query ->
+            when {
+                ids == listOf("i00", "i01") -> if (query == "q00") 110.0 else 1.0
+                else -> 100.0
+            }
+        })
+        val context = context()
+        val baseline = baseline(evaluator, workload, context)
+
+        val result = optimize(workload, candidates(2), baseline, evaluator, context)
+
+        assertEquals(RunStatus.COMPLETED, result.status)
+        assertTrue(evaluator.calls.contains(listOf("i00", "i01")))
+        assertEquals(emptyList<String>(), result.bestRobust?.evaluation?.candidateIds)
+        assertEquals(emptyList<String>(), result.bestMean?.evaluation?.candidateIds)
+        assertEquals(emptyList<String>(), result.selected?.evaluation?.candidateIds)
+        assertEquals(1, context.statistics().repairAttempts)
+        assertTrue(result.diagnostics.warnings.any {
+            it.code == WarningCode.CANDIDATE_REJECTED && it.queryId == "q00" &&
+                it.details["code"] == ErrorCode.CRITICAL_QUERY_REGRESSION.name
+        })
+    }
+
+    @Test
     fun `cache hits remain free after the repair cap while only new admissible neighbors are deferred`() {
         val workload = workload(maxIndexes = 3)
         val evaluator = CountingEvaluator(cost = { ids, _ -> if ("i00" in ids) 50.0 else 100.0 })

@@ -31,17 +31,30 @@ interface MetricsCalculator {
     ): SetMetrics
 
     /**
-     * Checks post-evaluation admissibility separately from pre-EXPLAIN budgets.
-     * Rejected sets retain their metrics and profile diagnostics; they do not throw AnalysisException.
-     * Numerical failures from [calculate] still propagate. Assess the baseline before generating
-     * candidates: Accepted.searchRequired=false requires returning that empty baseline without search.
+     * Checks post-evaluation admissibility separately from pre-EXPLAIN budgets: zero-baseline profile
+     * regressions and critical-query planner-cost guards ([Constraints.queryCostGuards]) over the complete
+     * cost vectors. Rejected sets retain their metrics and per-SQL/per-profile diagnostics; they do not
+     * throw AnalysisException and never update incumbents. Guard ratio equality passes; a zero-baseline
+     * guard never divides by zero and treats any positive selected cost as a violation. Numerical
+     * failures from [calculate] or a non-finite guard ratio still propagate. Assess the baseline before
+     * generating candidates: Accepted.searchRequired=false requires returning that empty baseline
+     * without search.
      */
     fun assessEvaluation(
         workload: WorkloadInput,
         baseline: EvaluationResult,
         evaluation: EvaluationResult,
         usage: BudgetUsage,
-    ): EvaluationAssessment = EvaluationAssessment.assess(calculate(workload, baseline, evaluation, usage))
+    ): EvaluationAssessment {
+        val metrics = calculate(workload, baseline, evaluation, usage)
+        val guardViolations = CostGuards.violationErrors(
+            CostGuards.evaluate(workload.constraints.queryCostGuards, baseline, evaluation),
+        )
+        val assessed = EvaluationAssessment.assess(metrics)
+        if (guardViolations.isEmpty()) return assessed
+        val profileViolations = (assessed as? EvaluationAssessment.Rejected)?.violations.orEmpty()
+        return EvaluationAssessment.Rejected(metrics, profileViolations + guardViolations)
+    }
 }
 
 interface ObjectiveComparator {

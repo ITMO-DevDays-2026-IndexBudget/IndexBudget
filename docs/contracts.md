@@ -1,5 +1,9 @@
 # Контракты компонентов v0.2
 
+Расчёт частот по выходу коллектора #65: `FrequencyCalculator.calculate` принимает
+1–3 `FrequencyWindow`, возвращает частоты и диагностический manifest для #67.
+[Ключи, периоды, политика неполноты и формат profiles v1](statistics-frequencies.md).
+
 Модели и интерфейсы задают стыки совместной реализации [#3](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/issues/3) и [#14](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/issues/14). Источник поведения — [спецификация v0.2](../IndexBudget-spec-v0.2.md). Реализованы валидация JSON v2, orchestration, AST-валидация и разрешение SQL, JDBC-каталог, сессия HypoPG, полный ограниченный генератор кандидатов, профильные метрики, расчёт бюджетов, компаратор, проверка допустимости после оценки, жадный поиск и ограниченный repair с кэшем одного запуска. Реализованы сборка отчёта v3 и согласованный экспорт JSON/SQL; для реального запуска ещё нужен HTML-renderer (#20). Проверки orchestration используют подставные реализации недостающих интерфейсов.
 
 Проект пока собирается одним Gradle-модулем. Пакеты `cli`, `application`, `domain`, `sql`, `candidates`, `optimizer`, `postgres` и `report` обозначают границы ответственности. Доменные модели и интерфейсы расчётов не зависят от Spring, JDBC, Jackson и JSqlParser AST.
@@ -237,11 +241,12 @@ Write units рассчитываются по исходным rates табли�
 
 ### Допустимость после оценки (#43)
 
-`MetricsCalculator.assessEvaluation(workload, baseline, evaluation, usage)` вызывает общий `calculate` и возвращает `EvaluationAssessment`. Это отдельная от `assessBudget` проверка: бюджет известен до EXPLAIN, а zero-baseline регрессия определяется по уже полученному полному вектору costs. Домен проверяет готовые профильные метрики, без второго калькулятора и без новых запросов к БД.
+`MetricsCalculator.assessEvaluation(workload, baseline, evaluation, usage)` вызывает общий `calculate` и возвращает `EvaluationAssessment`. Это отдельная от `assessBudget` проверка: бюджет известен до EXPLAIN, а zero-baseline регрессия и ограничения критических SQL определяются по уже полученному полному вектору costs. Домен проверяет готовые профильные метрики, без второго калькулятора и без новых запросов к БД.
 
 - `Accepted(metrics, searchRequired)` означает отсутствие zero-baseline регрессий. При хотя бы одном положительном `B_s` значение `searchRequired` равно `true`.
 - `Accepted(metrics, searchRequired = false)` сообщает, что все `B_s` равны нулю. При оценке baseline pipeline возвращает пустой набор с `StopReason.ZERO_BASELINE`, `M/R = null`, не вызывая генерацию, оценку размеров и поиск. Нулевой бюджет места или `max_indexes = 0` также могут завершить запуск раньше со своей причиной.
 - `Rejected(metrics, violations)` содержит все профили с `B_s = 0` и `C_s(S) > 0`, в порядке profile ID. Каждая запись — `AnalysisError` с `code = ZERO_BASELINE_REGRESSION` и `profileId`. Абсолютные costs/gains и вычисленные отношения остальных профилей сохраняются в `metrics`; нулевой профиль по-прежнему имеет `ratio/gainPercent = null`.
+- Guards критических SQL (#78, `Constraints.queryCostGuards`) проверяются той же `assessEvaluation` через единую реализацию `CostGuards`: для каждого guarded query ID набор допустим при `cost(q,S)/cost(q,empty) <= limit` (равенство проходит); нарушение добавляет `AnalysisError` c `code = CRITICAL_QUERY_REGRESSION`, `queryId` и details `limit`/`observed_ratio`/`baseline_cost`/`selected_cost` после профильных нарушений. При `cost(q,empty) = 0` отношение не вычисляется (`observed_ratio` остаётся неизвестным, не нулём и не бесконечностью), а любой положительный `cost(q,S)` нарушает guard. Неконечное отношение — `NUMERIC_ERROR`. Профильные и guard-нарушения сообщаются вместе.
 
 `Rejected` — нормальный отказ конкретному набору, а не `AnalysisException`, `NUMERIC_ERROR` или основание завершить весь запуск как failed/partial. Поиск сохраняет причину вместе с ID набора, не обновляет ни один incumbent и рассматривает следующий набор. Если все baseline нулевые, но переданная оценка имеет положительные costs, результат остаётся `Rejected`, а не разрешением выбрать её как baseline. Численные ошибки при расчёте сохраняют прежний контракт `AnalysisException(NUMERIC_ERROR)`.
 
@@ -588,6 +593,16 @@ EXPLAIN, deadline без нового cleanup SQL, rollback, повтор пос
 `bash demo/check-hypopg.sh` создаёт отдельный контейнер; CI job `postgres-hypopg-integration`
 использует тот же runner. Unit tests отдельно проверяют повреждённый JSON, численные ошибки,
 счётчики и безопасную диагностику; они не заменяют интеграцию с PostgreSQL.
+
+## Ручной набор (план #64)
+
+`WorkloadInput.manualIndexes` — необязательные 1–5 структурированных B-tree определений.
+`ManualIndexEvaluator.prepare` разрешает их по общему каталогу и canonicalizer до baseline;
+`evaluate` после поиска использует ту же AnalysisSession, MetricsCalculator и RunContext.
+`AnalysisReport.manualComparison` передаётся экспортёрам отдельно от SearchResult;
+он не становится incumbent и не входит в автоматический shortlist/SQL.
+Строгий JSON-вход, бюджетные отказы и выходные поля описаны в
+[manual-index-comparison.md](manual-index-comparison.md).
 
 ## Снимки pg_stat_statements (план #64)
 
