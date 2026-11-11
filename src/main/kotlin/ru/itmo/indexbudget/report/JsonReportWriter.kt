@@ -24,6 +24,7 @@ class JsonReportWriter {
             "duration_millis" to report.durationMillis,
             "environment" to environment(report.environment),
             "status" to result.status.name.lowercase(),
+            "analysis_mode" to report.analysisMode.name.lowercase(),
             "selected_objective" to result.selectedObjective.name.lowercase(),
             "comparison_scope" to report.comparisonScope.name.lowercase(),
             "incumbents_coincide" to report.incumbentsCoincide,
@@ -125,6 +126,9 @@ class JsonReportWriter {
             ) },
         ),
         "source_query_ids" to value.sourceQueryIds.sorted(),
+        "source_branches" to value.sourceBranches.sortedWith(compareBy({ it.queryId }, { it.conditionPath })).map {
+            linkedMapOf("query_id" to it.queryId, "condition_path" to it.conditionPath)
+        },
         "generation_reasons" to value.generationReasons.map { it.name }.sorted(),
         "ddl" to value.ddl,
         "estimated_bytes" to value.estimatedBytes,
@@ -143,6 +147,13 @@ class JsonReportWriter {
         "reserve_candidates" to value.reserveCandidates,
         "reserve_candidate_limit" to value.reserveCandidateLimit,
         "max_size_attempts" to value.maxSizeAttempts,
+        "preparation_scope" to value.preparationScope.name.lowercase(),
+        "fixed_pool_selection" to value.fixedPoolSelection?.let { point -> linkedMapOf(
+            "pool_candidates" to point.poolCandidates,
+            "admissible_candidates" to point.admissibleCandidates,
+            "budget_rejected_candidates" to point.budgetRejectedCandidates,
+            "size_attempts" to point.sizeAttempts,
+        ) },
         "preparation" to value.preparation?.let { preparation -> linkedMapOf(
             "examined_candidates" to preparation.examinedCandidates,
             "size_attempts" to preparation.sizeAttempts,

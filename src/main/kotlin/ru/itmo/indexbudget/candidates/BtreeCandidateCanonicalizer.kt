@@ -74,6 +74,7 @@ class BtreeCandidateCanonicalizer(
             context.checkDeadline()
             require(variant.definition.table == scope.table) { "Variant must belong to its scope" }
             require(scope.queryId in variant.sourceQueryIds) { "Variant must retain its source query" }
+            require(variant.sourceBranches.all { it.queryId in variant.sourceQueryIds }) { "Branch must belong to a source query" }
             val resolved = resolveDefaults(variant.definition)
             val missing = resolved.keys.filter { it.operatorClass == null }
             if (missing.isNotEmpty()) {
@@ -87,6 +88,7 @@ class BtreeCandidateCanonicalizer(
                 definition = definition,
                 sourceQueryIds = variant.sourceQueryIds.toSortedSet(),
                 generationReasons = variant.generationReasons.sortedBy { it.ordinal }.toSet(),
+                sourceBranches = variant.sourceBranches.sortedWith(branchOrder).toSet(),
                 ddl = renderer.render(definition),
             )
             add(grouped, candidate)
@@ -146,6 +148,7 @@ class BtreeCandidateCanonicalizer(
         val previous = grouped[candidate.definition]
         grouped[candidate.definition] = candidate.copy(
             sourceQueryIds = (previous?.sourceQueryIds.orEmpty() + candidate.sourceQueryIds).toSortedSet(),
+            sourceBranches = (previous?.sourceBranches.orEmpty() + candidate.sourceBranches).sortedWith(branchOrder).toSet(),
             generationReasons = (previous?.generationReasons.orEmpty() + candidate.generationReasons)
                 .sortedBy { it.ordinal }.toSet(),
         )
@@ -174,4 +177,8 @@ class BtreeCandidateCanonicalizer(
     }
 
     private fun catalogError(message: String): Nothing = throw AnalysisException(AnalysisError(ErrorCode.CATALOG_ERROR, message))
+
+    private companion object {
+        val branchOrder = compareBy<CandidateSourceBranch>({ it.queryId }, { it.conditionPath })
+    }
 }

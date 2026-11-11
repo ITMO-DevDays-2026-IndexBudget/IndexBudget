@@ -12,6 +12,9 @@ import ru.itmo.indexbudget.postgres.AnalysisSession
 import ru.itmo.indexbudget.postgres.AnalysisSessionFactory
 import ru.itmo.indexbudget.report.DefaultReportBuilder
 import ru.itmo.indexbudget.report.ReportExporter
+import ru.itmo.indexbudget.report.JsonReportWriter
+import ru.itmo.indexbudget.report.HtmlReportRenderer
+import tools.jackson.databind.json.JsonMapper
 import ru.itmo.indexbudget.sql.ParsedWorkload
 import ru.itmo.indexbudget.sql.SqlAnalyzer
 import java.nio.file.Path
@@ -133,6 +136,39 @@ class CandidateRefillPipelineTest {
         assertEquals(18, point.report.candidates.candidates.size)
         assertEquals(pool.reportBatch.candidates, point.report.candidates.candidates)
         assertEquals(pool.reportBatch.diagnostics.preparation, point.report.candidates.diagnostics.preparation)
+        val diagnostics = point.report.candidates.diagnostics
+        assertEquals(CandidatePreparationScope.COMMON_POOL, diagnostics.preparationScope)
+        assertEquals(FixedPoolSelectionStatistics(4, 0, 4), diagnostics.fixedPoolSelection)
+        val json = JsonMapper.builder().build().readTree(JsonReportWriter().render(point.report))["candidate_diagnostics"]
+        assertEquals("common_pool", json["preparation_scope"].stringValue())
+        assertEquals(18, json["preparation"]["size_attempts"].intValue())
+        assertEquals(0, json["fixed_pool_selection"]["size_attempts"].intValue())
+        assertEquals(0, json["fixed_pool_selection"]["admissible_candidates"].intValue())
+        assertEquals(4, json["fixed_pool_selection"]["budget_rejected_candidates"].intValue())
+        val html = HtmlReportRenderer().render(point.report)
+        assertTrue(html.contains("Общая подготовка пула"))
+        assertTrue(html.contains("Текущая бюджетная точка"))
+        assertTrue(html.contains("<h3>Общий shortlist</h3><p>0 / 16</p>"))
+    }
+
+    @Test
+    fun `positive fixed pool point filters candidates and reaches optimizer without new sizes`() {
+        val preparation = Harness(withReserve = true)
+        preparation.candidateSizes = mapOf("c15" to 100L, "c16" to 90L)
+        val pool = preparation.prepareFixedPool()
+        val point = Harness(withReserve = true)
+        val input = point.input.copy(constraints = point.input.constraints.copy(storageBudgetBytes = 60))
+
+        val result = point.execute(input, pool)
+
+        assertEquals(RunStatus.COMPLETED, result.status)
+        assertEquals(listOf("c17"), result.selected?.evaluation?.candidateIds)
+        assertEquals(100.0, result.baseline?.costByQueryId?.get("wide"))
+        assertEquals(listOf(emptyList(), listOf("c17"), listOf("c18")), point.evaluatedSets)
+        assertEquals(0, point.generateCalls)
+        assertTrue(point.sizeCalls.isEmpty())
+        assertEquals(1, point.closeCalls)
+        assertEquals(FixedPoolSelectionStatistics(4, 2, 2), point.report.candidates.diagnostics.fixedPoolSelection)
     }
 
     @Test
@@ -207,6 +243,7 @@ class CandidateRefillPipelineTest {
             .also { require(it.size == 18) }
         val sizeCalls = mutableListOf<String>()
         val evaluatedSets = mutableListOf<List<String>>()
+        var candidateSizes: Map<String, Long> = emptyMap()
         var onSize: (IndexCandidate) -> Unit = {}
         var closeCalls = 0
         var openCalls = 0
@@ -223,7 +260,7 @@ class CandidateRefillPipelineTest {
                 assertFalse(closed)
                 sizeCalls += candidate.id
                 onSize(candidate)
-                return if (pool.indexOfFirst { it.id == candidate.id } < 14) 1000 else 50
+                return candidateSizes[candidate.id] ?: if (pool.indexOfFirst { it.id == candidate.id } < 14) 1000 else 50
             }
 
             override fun evaluate(candidates: List<IndexCandidate>, workload: ResolvedWorkload,

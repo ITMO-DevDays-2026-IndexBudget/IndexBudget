@@ -58,7 +58,9 @@ class HtmlReportRenderer : ReportRenderer {
         if (report.environment.applicationVersion == "fixture") {
             append("<p class=\"notice demo\"><strong>Демонстрационные данные.</strong> Синтетическая фикстура для проверки отчёта; это не результат анализа PostgreSQL.</p>")
         }
-        append("<div class=\"run-strip\"><span>Критерий поиска <strong>")
+        append("<div class=\"run-strip\"><span>Режим анализа <strong>")
+        text(modeName(report.analysisMode))
+        append("</strong></span><span>Критерий поиска <strong>")
         text(result.selectedObjective.name.lowercase(Locale.ROOT))
         append("</strong></span><span>Длительность <strong>").append(h(number(report.durationMillis))).append(" мс</strong></span>")
         append("<span>Причина остановки <strong>")
@@ -177,6 +179,9 @@ class HtmlReportRenderer : ReportRenderer {
                         ?.joinToString { it.name } ?: "Нет")
                     entry("Write units/час", number(candidate.writeUnitsPerHour))
                     entry("Источники SQL", candidate.sourceQueryIds.sorted().joinToString())
+                    if (candidate.sourceBranches.isNotEmpty()) entry("Ветви условий", candidate.sourceBranches
+                        .sortedWith(compareBy({ it.queryId }, { it.conditionPath }))
+                        .joinToString { "${it.queryId}: ${it.conditionPath}" })
                     entry("Происхождение", candidate.generationReasons.sortedBy { it.name }.joinToString { it.name })
                     append("</dl>")
                     if (candidate.definition.includedColumns.isNotEmpty()) {
@@ -243,6 +248,7 @@ class HtmlReportRenderer : ReportRenderer {
 
     private fun StringBuilder.search(report: AnalysisReport) {
         section("search", "06", "Границы поиска", "Что было исследовано и где сработали ограничения")
+        append("<p>Режим анализа: ").append(h(modeName(report.analysisMode))).append(".</p>")
         val search = report.result.diagnostics
         val candidates = report.candidates.diagnostics
         val stats = search.statistics
@@ -258,14 +264,25 @@ class HtmlReportRenderer : ReportRenderer {
         append("<div class=\"caps\">")
         cap("01", "Колонки до генерации пар", "${candidates.columnLimitPerQueryTable} на (SQL, таблица)")
         cap("02", "Локальные кандидаты", "${candidates.localCandidateLimit} на (SQL, таблица)")
-        cap("03", "Общий shortlist", "${candidates.preparation?.finalShortlistedCandidates ?: candidates.shortlistedCandidates} / ${candidates.globalCandidateLimit}")
+        cap("03", "Общий shortlist", "${candidates.fixedPoolSelection?.admissibleCandidates ?: candidates.preparation?.finalShortlistedCandidates ?: candidates.shortlistedCandidates} / ${candidates.globalCandidateLimit}")
         append("</div>")
         append("<dl class=\"values\">")
         entry("Исходный shortlist", number(candidates.initialShortlistedCandidates))
         entry("Кандидаты в резерве", "${number(candidates.reserveCandidates)} / ${number(candidates.reserveCandidateLimit)}")
         append("</dl>")
+        if (candidates.preparationScope == CandidatePreparationScope.COMMON_POOL) {
+            append("<p>Статистика подготовки относится к общему пулу при максимальном бюджете.</p>")
+        }
+        candidates.fixedPoolSelection?.let { point ->
+            table(listOf("Текущая бюджетная точка", "Факт")) {
+                row("Кандидаты общего пула", number(point.poolCandidates))
+                row("Допустимы для текущей точки", number(point.admissibleCandidates))
+                row("Бюджетные отказы текущей точки", number(point.budgetRejectedCandidates))
+                row("Попытки оценки размера текущей точки", number(point.sizeAttempts))
+            }
+        }
         candidates.preparation?.let { preparation ->
-            table(listOf("Подготовка кандидатов", "Факт", "Лимит")) {
+            table(listOf(if (candidates.preparationScope == CandidatePreparationScope.COMMON_POOL) "Общая подготовка пула" else "Подготовка кандидатов", "Факт", "Лимит")) {
                 row("Рассмотрено кандидатов", number(preparation.examinedCandidates),
                     number(candidates.initialShortlistedCandidates + candidates.reserveCandidates))
                 row("Попытки оценки размера, включая ошибки", number(preparation.sizeAttempts), number(candidates.maxSizeAttempts))
@@ -321,10 +338,12 @@ class HtmlReportRenderer : ReportRenderer {
             }
         }
         append("</details><details><summary>Все сохранённые кандидаты и оценки</summary>")
-        table(listOf("ID / определение", "Оценка, байт и MiB", "С запасом, байт и MiB", "Write units/час", "Источники SQL")) {
+        table(listOf("ID / определение", "Оценка, байт и MiB", "С запасом, байт и MiB", "Write units/час", "Источники SQL", "Ветви условий")) {
             report.candidates.candidates.forEach { candidate ->
                 row("${candidate.id} / ${definition(candidate)}", storageSize(candidate.estimatedBytes), storageSize(candidate.budgetedBytes),
-                    number(candidate.writeUnitsPerHour), candidate.sourceQueryIds.sorted().joinToString())
+                    number(candidate.writeUnitsPerHour), candidate.sourceQueryIds.sorted().joinToString(),
+                    candidate.sourceBranches.sortedWith(compareBy({ it.queryId }, { it.conditionPath }))
+                        .joinToString { "${it.queryId}: ${it.conditionPath}" }.ifEmpty { "Нет OR-происхождения" })
             }
         }
         append("</details>")
@@ -345,6 +364,7 @@ class HtmlReportRenderer : ReportRenderer {
         entry("SHA-256 входа", report.inputHash ?: "Нет данных")
         entry("Schema / spec", "${report.schemaVersion} / ${report.specVersion}")
         entry("Статус", report.result.status.name.lowercase(Locale.ROOT))
+        entry("Режим анализа", modeName(report.analysisMode))
         entry("Причины остановки", report.result.diagnostics.stopReasons.joinToString { it.name }.ifEmpty { "Нет данных" })
         entry("Завершённые этапы", report.result.diagnostics.completedPhases.joinToString(" → ") { it.name.lowercase(Locale.ROOT) }.ifEmpty { "Нет завершённых этапов" })
         entry("Приложение", report.environment.applicationVersion)
@@ -399,6 +419,12 @@ class HtmlReportRenderer : ReportRenderer {
     private fun StringBuilder.entry(label: String, value: String) { append("<div><dt>").append(h(label)).append("</dt><dd>").append(h(value)).append("</dd></div>") }
     private fun StringBuilder.pre(value: String) { append("<pre><code>").append(h(value)).append("</code></pre>") }
     private fun StringBuilder.text(value: String) { append(h(value)) }
+
+    private fun modeName(mode: AnalysisMode): String = mode.name.lowercase(Locale.ROOT) + " · " + when (mode) {
+        AnalysisMode.FAST -> "Быстрый"
+        AnalysisMode.NORMAL -> "Обычный"
+        AnalysisMode.DEEP -> "Глубокий"
+    }
 
     private fun number(value: Number?): String {
         if (value == null) return "Нет данных"

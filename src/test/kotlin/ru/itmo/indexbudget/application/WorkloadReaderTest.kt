@@ -13,14 +13,17 @@ import org.junit.jupiter.params.provider.Arguments
 import org.junit.jupiter.params.provider.MethodSource
 import ru.itmo.indexbudget.domain.AnalysisError
 import ru.itmo.indexbudget.domain.AnalysisException
+import ru.itmo.indexbudget.domain.AnalysisMode
 import ru.itmo.indexbudget.domain.ErrorCode
 import ru.itmo.indexbudget.domain.Objective
+import ru.itmo.indexbudget.domain.NanoClock
 import ru.itmo.indexbudget.domain.RunContext
 import ru.itmo.indexbudget.domain.WorkloadInput
 import ru.itmo.indexbudget.domain.WriteRateSource
 import tools.jackson.databind.json.JsonMapper
 import java.nio.file.Files
 import java.nio.file.Path
+import java.time.Duration
 
 class WorkloadReaderTest {
     @TempDir
@@ -61,6 +64,91 @@ class WorkloadReaderTest {
             assertEquals("objective", failure(json(objective = objective)).details["field"])
         }
         failure(json(constraints = constraintsJson(maxIndexes = "null")))
+    }
+
+    @Test
+    fun `analysis mode is optional and accepts only the documented lowercase presets`() {
+        assertEquals(AnalysisMode.NORMAL, read(json()).analysisMode)
+        for (mode in AnalysisMode.entries) {
+            assertEquals(mode, read(json(analysisMode = quote(mode.name.lowercase()))).analysisMode)
+        }
+        for (mode in listOf("\"other\"", "\"FAST\"", "null", "42", "false", "\"\"", "{}")) {
+            assertEquals("analysis_mode", failure(json(analysisMode = mode)).details["field"])
+        }
+    }
+
+    @Test
+    fun `reader applies effective preset but fingerprints the original JSON`() {
+        val path = directory.resolve("mode-override.json")
+        val source = json(analysisMode = "\"fast\"")
+        Files.writeString(path, source)
+        val context = RunContext()
+
+        val input = reader.read(path, context, AnalysisMode.DEEP)
+
+        assertEquals(AnalysisMode.DEEP, input.analysisMode)
+        assertEquals(AnalysisMode.DEEP, context.analysisMode)
+        assertEquals(AnalysisMode.DEEP.limits, context.limits)
+        assertEquals(fingerprint(source), context.inputHash)
+        assertNotEquals(fingerprint(json(analysisMode = "\"deep\"")), context.inputHash)
+        assertEquals(source, Files.readString(path))
+    }
+
+    @Test
+    fun `JSON deep can use its full command budget but bootstrap cannot extend smaller presets`() {
+        for (mode in AnalysisMode.entries) {
+            val path = Files.writeString(directory.resolve("late-${mode.name}.json"),
+                json(analysisMode = quote(mode.name.lowercase())))
+            var now = 0L
+            val context = RunContext(clock = NanoClock { now })
+            now = Duration.ofSeconds(100).toNanos()
+
+            if (mode == AnalysisMode.DEEP) {
+                assertEquals(mode, reader.read(path, context).analysisMode)
+                assertEquals(Duration.ofSeconds(200), context.remainingCommandTime())
+                assertTrue(context.inputHash != null)
+            } else {
+                val error = assertThrows(AnalysisException::class.java) { reader.read(path, context) }.error
+                assertEquals(ErrorCode.DEADLINE_EXCEEDED, error.code)
+                assertEquals(Duration.ZERO, context.remainingCommandTime())
+                assertNull(context.inputHash)
+            }
+            assertEquals(mode, context.analysisMode)
+            assertEquals(Duration.ofSeconds(100), context.elapsedTime())
+        }
+    }
+
+    @Test
+    fun `explicit fast override cannot borrow the bootstrap budget from JSON deep`() {
+        val path = Files.writeString(directory.resolve("late-fast-override.json"), json(analysisMode = "\"deep\""))
+        var now = 0L
+        val context = RunContext(clock = NanoClock { now })
+        now = Duration.ofSeconds(100).toNanos()
+
+        val error = assertThrows(AnalysisException::class.java) {
+            reader.read(path, context, AnalysisMode.FAST)
+        }.error
+
+        assertEquals(ErrorCode.DEADLINE_EXCEEDED, error.code)
+        assertEquals(AnalysisMode.FAST, context.analysisMode)
+        assertEquals(Duration.ofSeconds(100), context.elapsedTime())
+        assertEquals(Duration.ZERO, context.remainingCommandTime())
+        assertNull(context.inputHash)
+    }
+
+    @Test
+    fun `override does not bypass validation of JSON mode or duplicate keys`() {
+        val path = directory.resolve("invalid-mode-override.json")
+        for (source in listOf(json(analysisMode = "null"),
+            json(analysisMode = "\"deep\",\"analysis_mode\":\"fast\""))) {
+            Files.writeString(path, source)
+            val context = RunContext()
+            val error = assertThrows(AnalysisException::class.java) {
+                reader.read(path, context, AnalysisMode.NORMAL)
+            }.error
+            assertEquals(ErrorCode.INVALID_INPUT, error.code)
+            assertNull(context.inputHash)
+        }
     }
 
     @Test
@@ -369,6 +457,7 @@ class WorkloadReaderTest {
             json() to json(objective = "\"robust\""),
             json(constraints = constraintsJson(maxIndexes = null)) to json(),
             json() to json(writeRates = "null"),
+            json() to json(analysisMode = "\"normal\""),
         )) {
             assertEquals(read(omitted), read(explicit))
             assertNotEquals(fingerprint(omitted), fingerprint(explicit))
@@ -417,9 +506,11 @@ class WorkloadReaderTest {
         writeRates: String? = null,
         constraints: String = constraintsJson(),
         schemaVersion: String? = "2",
+        analysisMode: String? = null,
     ): String = listOfNotNull(
         schemaVersion?.let { "\"schema_version\":$it" },
         objective?.let { "\"objective\":$it" },
+        analysisMode?.let { "\"analysis_mode\":$it" },
         "\"queries\":[${queries.joinToString(",")} ]",
         "\"profiles\":[${profiles.joinToString(",")} ]",
         "\"constraints\":$constraints",

@@ -58,7 +58,7 @@ class CandidatePreparation(private val metrics: MetricsCalculator) {
         fun reject(candidate: IndexCandidate, violations: Set<BudgetViolation>) {
             budgetRejected++
             decisions += violations.map { violation ->
-                CandidateDecision(CandidateReason.valueOf(violation.name), candidate.id,
+                CandidateDecision(violation.toCandidateReason(), candidate.id,
                     table = candidate.definition.table, phase = AnalysisPhase.CANDIDATES)
             }
         }
@@ -170,14 +170,19 @@ class CandidatePreparation(private val metrics: MetricsCalculator) {
             context.checkDeadline()
             val budget = metrics.assessBudget(listOf(candidate), input)
             decisions += budget.violations.map { violation ->
-                CandidateDecision(CandidateReason.valueOf(violation.name), candidate.id,
+                CandidateDecision(violation.toCandidateReason(), candidate.id,
                     table = candidate.definition.table, phase = AnalysisPhase.CANDIDATES,
                     details = mapOf("pool_scope" to "fixed"))
             }
             budget.admissible
         }
         context.checkDeadline()
-        val diagnostics = pool.reportBatch.diagnostics.copy(decisions = pool.reportBatch.diagnostics.decisions + decisions)
+        val diagnostics = pool.reportBatch.diagnostics.copy(
+            decisions = pool.reportBatch.diagnostics.decisions + decisions,
+            preparationScope = CandidatePreparationScope.COMMON_POOL,
+            fixedPoolSelection = FixedPoolSelectionStatistics(pool.candidates.size, accepted.size,
+                pool.candidates.size - accepted.size),
+        )
         return CandidatePreparationResult(pool.reportBatch.copy(diagnostics = diagnostics), CandidateBatch(accepted, diagnostics))
     }
 }

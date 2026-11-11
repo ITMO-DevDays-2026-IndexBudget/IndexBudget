@@ -42,6 +42,7 @@ class AnalysisException(val error: AnalysisError, cause: Throwable? = null) :
     RuntimeException(error.message, cause)
 
 enum class WarningCode {
+    OR_BRANCH_AWARE_GENERATION,
     MISSING_STATISTICS,
     COLUMN_SHORTLIST_TRUNCATED,
     LOCAL_CANDIDATE_LIMIT,

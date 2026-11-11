@@ -11,6 +11,18 @@ class JsonReportWriterTest {
     private val writer = JsonReportWriter()
 
     @Test
+    fun `legacy diagnostics preserve the initial shortlist alias`() {
+        val source = ContractFixtures.report()
+        val report = source.copy(candidates = source.candidates.copy(
+            diagnostics = CandidateDiagnostics(shortlistedCandidates = 16)))
+        val json = mapper.readTree(writer.render(report))["candidate_diagnostics"]
+        assertEquals(16, json["shortlisted_candidates"].intValue())
+        assertEquals(16, json["initial_shortlisted_candidates"].intValue())
+        assertEquals("run", json["preparation_scope"].stringValue())
+        assertTrue(json["fixed_pool_selection"].isNull)
+    }
+
+    @Test
     fun `wire v3 exposes both incumbents from one pool and embeds saved plan JSON`() {
         val report = ContractFixtures.report(objective = Objective.MEAN)
         val json = mapper.readTree(writer.render(report))
@@ -20,6 +32,7 @@ class JsonReportWriterTest {
         assertEquals(report.runId, json["run_id"].stringValue())
         assertEquals(report.inputHash, json["input_hash"].stringValue())
         assertEquals("completed", json["status"].stringValue())
+        assertEquals("normal", json["analysis_mode"].stringValue())
         assertEquals("mean", json["selected_objective"].stringValue())
         assertEquals("evaluated_sets", json["comparison_scope"].stringValue())
         assertFalse(json["incumbents_coincide"].booleanValue())
@@ -111,6 +124,48 @@ class JsonReportWriterTest {
         assertEquals("EXPLAIN_FAILED", json["diagnostics"]["errors"][0]["code"].stringValue())
         assertEquals(json["best_robust"], json["best_mean"])
         assertFalse(json["baseline"]["plans_by_query_id"].isNull)
+    }
+
+    @Test
+    fun `every mode preserves effective limits counters and stop reasons in all statuses`() {
+        for (mode in AnalysisMode.entries) {
+            for (status in RunStatus.entries) {
+                val source = ContractFixtures.report(status = status)
+                val diagnostics = source.result.diagnostics.copy(
+                    limits = mode.limits,
+                    statistics = RunStatistics(47, 19, 17, 3, 7),
+                )
+                val result = when (val saved = source.result) {
+                    is SearchResult.Completed -> saved.copy(diagnostics = diagnostics)
+                    is SearchResult.Partial -> saved.copy(diagnostics = diagnostics)
+                    is SearchResult.Failed -> saved.copy(diagnostics = diagnostics)
+                }
+                // The effective mode is a run fact, including a failed report with no source input.
+                val report = source.copy(analysisMode = mode, result = result,
+                    input = if (status == RunStatus.FAILED) null else source.input)
+                val json = mapper.readTree(writer.render(report))
+
+                assertEquals(mode.name.lowercase(), json["analysis_mode"].stringValue())
+                assertEquals(status.name.lowercase(), json["status"].stringValue())
+                val limits = json["diagnostics"]["limits"]
+                assertEquals(mode.limits.commandTimeout.toMillis(), limits["command_timeout_millis"].longValue())
+                assertEquals(mode.limits.searchTimeout.toMillis(), limits["search_timeout_millis"].longValue())
+                assertEquals(mode.limits.explainTimeout.toMillis(), limits["explain_timeout_millis"].longValue())
+                assertEquals(mode.limits.connectTimeout.toMillis(), limits["connect_timeout_millis"].longValue())
+                assertEquals(mode.limits.maxExplainAttempts, limits["max_explain_attempts"].intValue())
+                assertEquals(mode.limits.maxRepairAttempts, limits["max_repair_attempts"].intValue())
+                val counters = json["diagnostics"]["statistics"]
+                assertEquals(47, counters["explain_attempts"].intValue())
+                assertEquals(19, counters["evaluation_attempts"].intValue())
+                assertEquals(17, counters["completed_evaluations"].intValue())
+                assertEquals(3, counters["cache_hits"].intValue())
+                assertEquals(7, counters["repair_attempts"].intValue())
+                assertEquals(diagnostics.stopReasons.map { it.name },
+                    json["diagnostics"]["stop_reasons"].toList().map { it.stringValue() })
+                assertSame(source.result.baseline, report.result.baseline)
+                assertSame(source.result.selected, report.result.selected)
+            }
+        }
     }
 
     @Test

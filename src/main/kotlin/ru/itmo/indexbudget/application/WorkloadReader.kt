@@ -3,6 +3,7 @@ package ru.itmo.indexbudget.application
 import org.springframework.stereotype.Component
 import ru.itmo.indexbudget.domain.AnalysisError
 import ru.itmo.indexbudget.domain.AnalysisException
+import ru.itmo.indexbudget.domain.AnalysisMode
 import ru.itmo.indexbudget.domain.Constraints
 import ru.itmo.indexbudget.domain.ErrorCode
 import ru.itmo.indexbudget.domain.Objective
@@ -35,7 +36,15 @@ class WorkloadReader {
         .enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS)
         .build()
 
-    fun read(path: Path, context: RunContext? = null): WorkloadInput {
+    fun read(
+        path: Path,
+        context: RunContext? = null,
+        analysisModeOverride: AnalysisMode? = null,
+    ): WorkloadInput {
+        // Until the JSON mode is known, allow the largest preset while reading/parsing the source.
+        // The clock is never restarted: selecting the actual mode below immediately checks its
+        // own command budget, and every remaining validation/analysis operation uses that preset.
+        context?.selectAnalysisMode(analysisModeOverride ?: AnalysisMode.DEEP)
         context?.checkDeadline()
         val root = readJsonObject(path, context)
         val version = root.get("schema_version")
@@ -45,8 +54,19 @@ class WorkloadReader {
                 ErrorCode.UNSUPPORTED_SCHEMA_VERSION)
         }
         objectNode(root, Location("workload"), setOf(
-            "schema_version", "objective", "queries", "profiles", "constraints", "table_write_rates",
+            "schema_version", "objective", "queries", "profiles", "constraints", "table_write_rates", "analysis_mode",
         ))
+        val requestedMode = when (val value = root.get("analysis_mode")) {
+            null -> AnalysisMode.NORMAL
+            else -> when (string(value, Location("analysis_mode"))) {
+                "fast" -> AnalysisMode.FAST
+                "normal" -> AnalysisMode.NORMAL
+                "deep" -> AnalysisMode.DEEP
+                else -> invalid(Location("analysis_mode"), "Expected fast, normal or deep.")
+            }
+        }
+        val analysisMode = analysisModeOverride ?: requestedMode
+        context?.selectAnalysisMode(analysisMode)
         val objective = when (val value = root.get("objective")) {
             null -> Objective.ROBUST
             else -> when (string(value, Location("objective"))) {
@@ -77,7 +97,8 @@ class WorkloadReader {
             context.checkDeadline()
             context.recordInputHash(HexFormat.of().formatHex(digest))
         }
-        return WorkloadInput(queries, profiles, constraints, objective = objective, tableWriteRates = writeRates)
+        return WorkloadInput(queries, profiles, constraints, objective = objective, tableWriteRates = writeRates,
+            analysisMode = analysisMode)
     }
 
     /** Sort JSON objects only: array order, string values and absent fields retain their meaning. */

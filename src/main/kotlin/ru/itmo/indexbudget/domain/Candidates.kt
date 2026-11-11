@@ -12,6 +12,9 @@ enum class GenerationReason(val pairPriority: Int? = null) {
 /** Shared local/global pair ordering; all generation reasons remain available as provenance. */
 fun IndexCandidate.bestPairPriority(): Int? = generationReasons.mapNotNull { it.pairPriority }.minOrNull()
 
+/** A structural leaf path in the resolved condition tree, or the unconditional 'order_by' source. */
+data class CandidateSourceBranch(val queryId: String, val conditionPath: String)
+
 /** Unknown estimates stay null, including unvisited reserve entries and rejected candidates. */
 data class IndexCandidate(
     val id: String,
@@ -22,6 +25,7 @@ data class IndexCandidate(
     val estimatedBytes: Long? = null,
     val budgetedBytes: Long? = null,
     val writeUnitsPerHour: Double? = null,
+    val sourceBranches: Set<CandidateSourceBranch> = emptySet(),
 )
 
 enum class CandidateReason {
@@ -79,11 +83,13 @@ data class CandidateDiagnostics(
     val ungeneratedDefinitions: Long? = null,
     val decisions: List<CandidateDecision> = emptyList(),
     val warnings: List<AnalysisWarning> = emptyList(),
-    val initialShortlistedCandidates: Int = 0,
+    val initialShortlistedCandidates: Int = shortlistedCandidates,
     val reserveCandidates: Int = 0,
     val reserveCandidateLimit: Int = CandidatePreparationLimits.RESERVE,
     val maxSizeAttempts: Int = CandidatePreparationLimits.SIZE_ATTEMPTS,
     val preparation: CandidatePreparationStatistics? = null,
+    val preparationScope: CandidatePreparationScope = CandidatePreparationScope.RUN,
+    val fixedPoolSelection: FixedPoolSelectionStatistics? = null,
 )
 
 data class CandidateBatch(
@@ -111,3 +117,18 @@ data class CandidatePreparationStatistics(
     val finalShortlistedCandidates: Int = 0,
     val stopReason: CandidatePreparationStopReason,
 )
+
+enum class CandidatePreparationScope { RUN, COMMON_POOL }
+
+data class FixedPoolSelectionStatistics(
+    val poolCandidates: Int,
+    val admissibleCandidates: Int,
+    val budgetRejectedCandidates: Int,
+    val sizeAttempts: Int = 0,
+)
+
+fun BudgetViolation.toCandidateReason(): CandidateReason = when (this) {
+    BudgetViolation.STORAGE_BUDGET -> CandidateReason.STORAGE_BUDGET
+    BudgetViolation.WRITE_BUDGET -> CandidateReason.WRITE_BUDGET
+    BudgetViolation.MAX_INDEXES -> CandidateReason.MAX_INDEXES
+}

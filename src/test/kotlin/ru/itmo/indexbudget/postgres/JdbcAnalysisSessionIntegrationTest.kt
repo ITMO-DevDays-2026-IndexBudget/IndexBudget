@@ -160,6 +160,46 @@ class JdbcAnalysisSessionIntegrationTest {
     }
 
     @Test
+    fun `OR workload completes real search with exact EXPLAIN and branch origins in artifacts`(@TempDir directory: Path) {
+        val text = """
+            {"schema_version":2,"queries":[
+              {"id":"alternatives","sql":"SELECT id FROM records WHERE a IN (1, 2) OR b BETWEEN 49999 AND 50000"},
+              {"id":"mixed","sql":"SELECT id FROM records WHERE (a = 1 AND b > 1) OR (a > 2 AND b = 3)"}],
+             "profiles":[
+              {"id":"day","weight":2,"calls_per_hour":{"alternatives":10,"mixed":1}},
+              {"id":"night","weight":1,"calls_per_hour":{"alternatives":1,"mixed":10}}],
+             "constraints":{"storage_budget_bytes":8388608,"write_budget_units_per_hour":null,"max_indexes":3}}
+        """.trimIndent()
+        val path = directory.resolve("workload.json")
+        Files.writeString(path, text)
+        val context = RunContext()
+        val input = WorkloadReader().read(path, context)
+        val observed = mutableListOf<ExplainObservation>()
+        session = JdbcAnalysisSession(observingConnection(observed))
+        val pipeline = AnalysisPipeline(JSqlParserSqlAnalyzer(), object : AnalysisSessionFactory {
+            override fun open(context: RunContext): AnalysisSession = session
+        }, ProfileAwareCandidateGenerator(), MetricsCalculatorImpl(), ObjectiveComparatorImpl(),
+            LimitedRepairOptimizer(), DefaultReportBuilder(), AtomicReportExporter(HtmlReportRenderer()))
+        val output = directory.resolve("result")
+        val result = pipeline.run(input, output, context)
+        assertEquals(RunStatus.COMPLETED, result.status)
+        assertEquals(setOf("alternatives", "mixed"), result.baseline?.costByQueryId?.keys)
+        assertTrue(observed.isNotEmpty())
+        assertTrue(observed.all { event -> input.queries.any { event.sql.endsWith(it.sql) } })
+        assertEquals(2, result.diagnostics.warnings.count { it.code == WarningCode.OR_BRANCH_AWARE_GENERATION })
+        val json = Files.readString(output.resolve("report.json"))
+        assertTrue(json.contains("source_branches"))
+        assertTrue(json.contains("condition/L"))
+        assertTrue(json.contains("dnf_expanded"))
+        val html = Files.readString(output.resolve("report.html"))
+        assertTrue(html.contains("Ветви условий"))
+        assertTrue(html.contains("condition/L"))
+        for (name in listOf("report.json", "report.html", "indexes.sql")) {
+            assertTrue(Files.readString(output.resolve(name)).contains(context.runId))
+        }
+    }
+
+    @Test
     fun `json null tests do not fail real pipeline or suppress integer search`(@TempDir directory: Path) {
         sql(admin, "ALTER TABLE $schema.records ADD COLUMN nullable_json json")
         sql(admin, "UPDATE $schema.records SET nullable_json = '{}'::json WHERE id % 2 = 0")

@@ -11,6 +11,16 @@ class HtmlReportRendererTest {
     private val renderer = HtmlReportRenderer()
 
     @Test
+    fun `legacy diagnostics show the same original and global shortlist`() {
+        val source = HtmlReportFixtures.completed()
+        val report = source.copy(candidates = source.candidates.copy(
+            diagnostics = CandidateDiagnostics(shortlistedCandidates = 16)))
+        val search = section(renderer.render(report), "search")
+        assertEquals("16", entryValue(search, "Исходный shortlist"))
+        assertEquals("16 / 16", capture(search, "<h3>Общий shortlist</h3><p>(.*?)</p>"))
+    }
+
+    @Test
     fun `refill diagnostics distinguish original and final shortlist and display every stop reason`() {
         val source = HtmlReportFixtures.completed()
         for (reason in CandidatePreparationStopReason.entries) {

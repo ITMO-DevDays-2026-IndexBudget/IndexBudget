@@ -53,6 +53,7 @@ class AnalysisPipeline(
         val activeSession = AtomicReference<AnalysisSession?>()
         var registration: AutoCloseable? = null
         try {
+            context.selectAnalysisMode(input.analysisMode)
             val fixedSelection = fixedPool?.let { pool ->
                 CandidatePreparation(metrics).selectFixedPool(pool, input, context)
                     .also { candidateBatch = it.reportBatch }
@@ -186,6 +187,7 @@ class AnalysisPipeline(
         try {
             val report = reportBuilder.build(input, candidateBatch, finalResult, context)
             require(report.runId == context.runId && report.inputHash == context.inputHash &&
+                report.analysisMode == context.analysisMode &&
                 report.result == finalResult && report.input == input) {
                 "Report must describe this invocation and saved result"
             }

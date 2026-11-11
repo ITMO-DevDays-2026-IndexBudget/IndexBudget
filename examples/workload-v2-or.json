@@ -1,0 +1,13 @@
+{
+  "schema_version": 2,
+  "objective": "robust",
+  "queries": [
+    {"id": "alternatives", "sql": "SELECT id, value FROM public.records WHERE group_id IN (1, 2) OR value IS NULL"},
+    {"id": "mixed", "sql": "SELECT id, value FROM public.records WHERE group_id = 1 AND (value BETWEEN 10 AND 100 OR value = 200) ORDER BY id"}
+  ],
+  "profiles": [
+    {"id": "day", "weight": 2, "calls_per_hour": {"alternatives": 100, "mixed": 10}},
+    {"id": "night", "weight": 1, "calls_per_hour": {"alternatives": 1, "mixed": 100}}
+  ],
+  "constraints": {"storage_budget_bytes": 67108864, "write_budget_units_per_hour": null, "max_indexes": 5}
+}
