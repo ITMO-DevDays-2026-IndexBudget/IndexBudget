@@ -128,7 +128,7 @@ class AnalysisPipeline(
                     if (result.status == RunStatus.COMPLETED) context.checkDeadline()
                 }
             }
-            if (manual != null && result?.status != RunStatus.FAILED) {
+            if (manual != null && result.status != RunStatus.FAILED) {
                 manual = manualEvaluator.evaluate(checkNotNull(manual), resolved, evaluatedBaseline,
                     session, metrics, context) { manual = it }
             }

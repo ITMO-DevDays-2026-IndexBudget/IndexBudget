@@ -64,7 +64,7 @@ class ManualComparisonIntegrationTest {
                 assertNotNull(result.selected)
                 assertTrue(manual.evaluation!!.costByQueryId.getValue("q1") < result.baseline!!.costByQueryId.getValue("q1"))
                 assertEquals(manual.candidates.map { it.id }, result.selected!!.evaluation.candidateIds)
-                assertEquals(result.selected!!.evaluation.costByQueryId, manual.evaluation!!.costByQueryId)
+                assertEquals(result.selected!!.evaluation.costByQueryId, manual.evaluation.costByQueryId)
                 val json = JsonMapper().readTree(Files.readString(output.resolve("report.json")))
                 assertEquals("separate_manual_evaluation", json["manual_comparison"]["comparison_scope"].stringValue())
                 assertEquals("evaluated_sets", json["comparison_scope"].stringValue())
