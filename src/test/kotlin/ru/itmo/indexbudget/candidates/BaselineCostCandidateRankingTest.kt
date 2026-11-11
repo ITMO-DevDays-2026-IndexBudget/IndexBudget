@@ -44,6 +44,22 @@ class BaselineCostCandidateRankingTest {
     }
 
     @Test
+    fun `each source frequency is multiplied by its own baseline cost before summing`() {
+        val queries = listOf(query("q1", "shared"), query("q2", "shared"),
+            query("q3", "higher"), query("q4", "lower"))
+        val workload = costAware(workload(queries, listOf(Profile("s", 1.0,
+            mapOf("q1" to 100.0, "q2" to 1.0, "q3" to 1.0, "q4" to 1.0)))))
+        val result = generator.generate(workload, catalog(queries), RunContext(),
+            baseline(mapOf("q1" to 1.0, "q2" to 100.0, "q3" to 250.0, "q4" to 150.0)))
+
+        // The shared numerator is 100*1 + 1*100 = 200, between competitors at 250 and 150.
+        assertEquals(listOf("higher", "shared", "lower"), result.candidates.map {
+            it.definition.keys.single().column.name
+        })
+        assertEquals(setOf("q1", "q2"), result.candidates[1].sourceQueryIds)
+    }
+
+    @Test
     fun `cost ranking preserves equal profile turns despite traffic and relative weights`() {
         val queries = (1..18).map { query("q$it", "c$it") }
         val profiles = listOf(

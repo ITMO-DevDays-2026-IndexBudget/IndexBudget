@@ -85,14 +85,12 @@ class ProfileAwareCandidateGenerator(
         }
         context.checkDeadline()
         val pool = canonicalizer.merge(survivors)
-        val selected = select(pool, workload, context, baseline)
+        val selection = select(pool, workload, context, baseline)
+        val selected = selection.candidates
         val zeroSupportIds = if (workload.input.candidateRanking == CandidateRanking.BASELINE_COST) {
             pool.filter { candidate ->
                 context.checkDeadline()
-                candidate.sourceQueryIds.none { queryId ->
-                    requireNotNull(baseline).costByQueryId.getValue(queryId) > 0.0 &&
-                        workload.input.profiles.any { it.callsPerHour.getValue(queryId) > 0.0 }
-                }
+                candidate.id !in selection.supportedCandidateIds
             }.map { it.id }.toSet()
         } else emptySet()
         for (candidate in pool.filter { it.id in zeroSupportIds }) {
@@ -131,12 +129,13 @@ class ProfileAwareCandidateGenerator(
         workload: ResolvedWorkload,
         context: RunContext,
         baseline: EvaluationResult?,
-    ): List<IndexCandidate> {
+    ): Selection {
         val queryIds = workload.queries.map { it.id }.toSet()
         val profiles = workload.input.profiles.sortedBy { it.id }
         require(profiles.size in 1..3 && profiles.map { it.id }.distinct().size == profiles.size) {
             "Expected 1–3 validated profiles with unique IDs"
         }
+        val supportedCandidateIds = mutableSetOf<String>()
         val queues = profiles.map { profile ->
             context.checkDeadline()
             val frequencies = normalizedFrequencies(profile, queryIds, context)
@@ -165,12 +164,17 @@ class ProfileAwareCandidateGenerator(
                 }
                 candidate.id to score
             }
+            val positiveSupportIds = scores.filterValues {
+                context.checkDeadline()
+                it.signum() > 0
+            }.keys
+            supportedCandidateIds += positiveSupportIds
             fun queue(keyCount: Int): ArrayDeque<IndexCandidate> {
                 val order = compareByDescending<IndexCandidate> { scores.getValue(it.id) }
                     .thenBy { if (keyCount == 2) it.bestPairPriority() else null }.thenBy { it.id }
                 val candidates = pool.filter {
                     context.checkDeadline()
-                    it.definition.keys.size == keyCount && scores.getValue(it.id).signum() > 0
+                    it.definition.keys.size == keyCount && it.id in positiveSupportIds
                 }.sortedWith(order)
                 context.checkDeadline()
                 return ArrayDeque(candidates)
@@ -190,8 +194,13 @@ class ProfileAwareCandidateGenerator(
             }
             if (!added) break
         }
-        return selected.values.toList()
+        return Selection(selected.values.toList(), supportedCandidateIds)
     }
+
+    private data class Selection(
+        val candidates: List<IndexCandidate>,
+        val supportedCandidateIds: Set<String>,
+    )
 
     private class ProfileQueues(val singles: ArrayDeque<IndexCandidate>, val pairs: ArrayDeque<IndexCandidate>) {
         private var preferSingles = true

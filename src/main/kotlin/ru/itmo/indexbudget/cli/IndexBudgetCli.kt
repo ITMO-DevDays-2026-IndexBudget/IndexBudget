@@ -78,6 +78,7 @@ class IndexBudgetCli(
             CandidateRanking.entries.firstOrNull { it.wireName == value }
                 ?: return fail(err, ErrorCode.INVALID_INPUT, "--candidate-ranking must be frequency or baseline_cost.")
         }
+        var effectiveRanking: CandidateRanking? = null
         val (input, outputPath) = try {
             // JSON may request deep; use the maximum only until the reader resolves its mode.
             // Applying the selected preset keeps elapsed startup/reading time on the same clock.
@@ -86,25 +87,26 @@ class IndexBudgetCli(
             val workloadPath = Path.of(options.getValue("--workload"))
             val outputPath = Path.of(options.getValue("--output-dir"))
             val input = workloadReader.read(workloadPath, context, modeOverride, rankingOverride)
+            effectiveRanking = input.candidateRanking
             context.checkDeadline()
             outputDirectoryValidator.validate(outputPath)
             context.checkDeadline()
             context.completePhase()
             input to outputPath
         } catch (failure: AnalysisException) {
-            return failValidation(err, context, failure.error)
+            return failValidation(err, context, failure.error, effectiveRanking)
         } catch (_: InvalidPathException) {
             return failValidation(err, context,
-                AnalysisError(ErrorCode.INVALID_INPUT, "Invalid workload or output path."))
+                AnalysisError(ErrorCode.INVALID_INPUT, "Invalid workload or output path."), effectiveRanking)
         } catch (_: IOException) {
             return failValidation(err, context,
-                AnalysisError(ErrorCode.INVALID_INPUT, "Cannot read the workload file."))
+                AnalysisError(ErrorCode.INVALID_INPUT, "Cannot read the workload file."), effectiveRanking)
         } catch (_: JacksonException) {
             return failValidation(err, context,
-                AnalysisError(ErrorCode.INVALID_INPUT, "Workload JSON does not match the v2 input structure."))
+                AnalysisError(ErrorCode.INVALID_INPUT, "Workload JSON does not match the v2 input structure."), effectiveRanking)
         } catch (_: IllegalArgumentException) {
             return failValidation(err, context,
-                AnalysisError(ErrorCode.INVALID_INPUT, "Workload JSON does not match the v2 input structure."))
+                AnalysisError(ErrorCode.INVALID_INPUT, "Workload JSON does not match the v2 input structure."), effectiveRanking)
         }
         printRunLimits(err, context, input.candidateRanking)
 
@@ -141,9 +143,11 @@ class IndexBudgetCli(
             (ranking?.let { " candidate_ranking=${it.wireName}" } ?: ""))
     }
 
-    private fun failValidation(err: PrintWriter, context: RunContext, error: AnalysisError): Int {
-        printRunLimits(err, context)
-        printSummary(err, context, "failed", listOf(error.code.name))
+    private fun failValidation(
+        err: PrintWriter, context: RunContext, error: AnalysisError, ranking: CandidateRanking?,
+    ): Int {
+        printRunLimits(err, context, ranking)
+        printSummary(err, context, "failed", listOf(error.code.name), ranking)
         return fail(err, error)
     }
 
