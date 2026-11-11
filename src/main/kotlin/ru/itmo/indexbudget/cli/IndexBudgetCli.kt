@@ -12,7 +12,6 @@ import ru.itmo.indexbudget.domain.AnalysisPhase
 import ru.itmo.indexbudget.domain.ErrorCode
 import ru.itmo.indexbudget.domain.RunContext
 import ru.itmo.indexbudget.domain.SearchResult
-import ru.itmo.indexbudget.domain.WorkloadInput
 import tools.jackson.core.JacksonException
 import tools.jackson.databind.json.JsonMapper
 import java.io.IOException
@@ -71,38 +70,35 @@ class IndexBudgetCli(
             AnalysisMode.entries.firstOrNull { it.name.lowercase() == value }
                 ?: return fail(err, ErrorCode.INVALID_INPUT, "--analysis-mode must be fast, normal or deep.")
         }
-        val input: WorkloadInput
-        val outputPath: Path
-        try {
+        val (input, outputPath) = try {
             // JSON may request deep; use the maximum only until the reader resolves its mode.
             // Applying the selected preset keeps elapsed startup/reading time on the same clock.
             context.selectAnalysisMode(modeOverride ?: AnalysisMode.DEEP)
             context.enterPhase(AnalysisPhase.VALIDATION)
             val workloadPath = Path.of(options.getValue("--workload"))
-            outputPath = Path.of(options.getValue("--output-dir"))
-            input = workloadReader.read(workloadPath, context, modeOverride)
-            val limits = context.limits
-            err.println("stage=validation analysis_mode=${context.analysisMode.name.lowercase()} " +
-                "command_timeout_millis=${limits.commandTimeout.toMillis()} " +
-                "search_timeout_millis=${limits.searchTimeout.toMillis()} " +
-                "explain_timeout_millis=${limits.explainTimeout.toMillis()} " +
-                "connect_timeout_millis=${limits.connectTimeout.toMillis()} " +
-                "max_explain_attempts=${limits.maxExplainAttempts} max_repair_attempts=${limits.maxRepairAttempts}")
+            val outputPath = Path.of(options.getValue("--output-dir"))
+            val input = workloadReader.read(workloadPath, context, modeOverride)
             context.checkDeadline()
             outputDirectoryValidator.validate(outputPath)
             context.checkDeadline()
             context.completePhase()
+            input to outputPath
         } catch (failure: AnalysisException) {
-            return fail(err, failure.error)
+            return failValidation(err, context, failure.error)
         } catch (_: InvalidPathException) {
-            return fail(err, ErrorCode.INVALID_INPUT, "Invalid workload or output path.")
+            return failValidation(err, context,
+                AnalysisError(ErrorCode.INVALID_INPUT, "Invalid workload or output path."))
         } catch (_: IOException) {
-            return fail(err, ErrorCode.INVALID_INPUT, "Cannot read the workload file.")
+            return failValidation(err, context,
+                AnalysisError(ErrorCode.INVALID_INPUT, "Cannot read the workload file."))
         } catch (_: JacksonException) {
-            return fail(err, ErrorCode.INVALID_INPUT, "Workload JSON does not match the v2 input structure.")
+            return failValidation(err, context,
+                AnalysisError(ErrorCode.INVALID_INPUT, "Workload JSON does not match the v2 input structure."))
         } catch (_: IllegalArgumentException) {
-            return fail(err, ErrorCode.INVALID_INPUT, "Workload JSON does not match the v2 input structure.")
+            return failValidation(err, context,
+                AnalysisError(ErrorCode.INVALID_INPUT, "Workload JSON does not match the v2 input structure."))
         }
+        printRunLimits(err, context)
 
         return try {
             val result = analysisRunner.run(input, outputPath, context)
@@ -124,6 +120,22 @@ class IndexBudgetCli(
             printSummary(err, context, "failed", listOf(ErrorCode.INTERNAL_ERROR.name))
             fail(err, ErrorCode.INTERNAL_ERROR, "Analysis failed unexpectedly.")
         }
+    }
+
+    private fun printRunLimits(err: PrintWriter, context: RunContext) {
+        val limits = context.limits
+        err.println("stage=validation analysis_mode=${context.analysisMode.name.lowercase()} " +
+            "command_timeout_millis=${limits.commandTimeout.toMillis()} " +
+            "search_timeout_millis=${limits.searchTimeout.toMillis()} " +
+            "explain_timeout_millis=${limits.explainTimeout.toMillis()} " +
+            "connect_timeout_millis=${limits.connectTimeout.toMillis()} " +
+            "max_explain_attempts=${limits.maxExplainAttempts} max_repair_attempts=${limits.maxRepairAttempts}")
+    }
+
+    private fun failValidation(err: PrintWriter, context: RunContext, error: AnalysisError): Int {
+        printRunLimits(err, context)
+        printSummary(err, context, "failed", listOf(error.code.name))
+        return fail(err, error)
     }
 
     private fun printSummary(err: PrintWriter, context: RunContext, status: String, stopReasons: List<String>) {

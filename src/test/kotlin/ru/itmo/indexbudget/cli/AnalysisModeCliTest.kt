@@ -102,7 +102,65 @@ class AnalysisModeCliTest {
             assertEquals(if (shouldRun) 1 else 0, calls)
             assertEquals(expected, context.analysisMode)
             assertEquals(Duration.ofSeconds(100), context.elapsedTime())
-            if (!shouldRun) assertTrue(stderr.toString().contains("DEADLINE_EXCEEDED:"))
+            assertRunLimits(stderr.toString(), expected)
+            if (!shouldRun) {
+                assertTrue(stderr.toString().contains("DEADLINE_EXCEEDED:"))
+                assertValidationSummary(stderr.toString(), expected, ErrorCode.DEADLINE_EXCEEDED)
+            }
+        }
+    }
+
+    @Test
+    fun `every preset reports its settings and empty counters at the validation deadline`() {
+        for (mode in AnalysisMode.entries) {
+            for (cliOverride in listOf(false, true)) {
+                var now = 0L
+                val context = RunContext(clock = NanoClock { now })
+                now = mode.limits.commandTimeout.toNanos()
+                val stderr = StringWriter()
+                val output = directory.resolve("expired-${mode.name}-$cliOverride")
+                val options = if (cliOverride) arrayOf("--analysis-mode", mode.name.lowercase()) else emptyArray()
+                val cli = IndexBudgetCli(WorkloadReader(), analysisRunner = AnalysisRunner { _, _, _ ->
+                    error("Expired validation must not start analysis")
+                })
+
+                val code = cli.execute(arrayOf("analyze", "--workload", workload(mode).toString(),
+                    "--output-dir", output.toString(), *options), err = PrintWriter(stderr, true), context = context)
+
+                assertEquals(1, code)
+                assertRunLimits(stderr.toString(), mode)
+                assertValidationSummary(stderr.toString(), mode, ErrorCode.DEADLINE_EXCEEDED)
+                assertEquals(1, stderr.toString().lineSequence().count { it.startsWith("DEADLINE_EXCEEDED:") })
+                assertEquals(RunStatistics(), context.statistics())
+                assertFalse(Files.exists(output))
+            }
+        }
+    }
+
+    @Test
+    fun `output rejection and cancellation report validation failure once without changing exit codes`() {
+        for (mode in AnalysisMode.entries) {
+            for (cancelled in listOf(false, true)) {
+                val output = Files.createDirectory(directory.resolve("rejected-${mode.name}-$cancelled"))
+                val existing = Files.writeString(output.resolve("existing.txt"), "Keep this file")
+                val context = RunContext(clock = NanoClock { 0L })
+                if (cancelled) context.cancel()
+                val stderr = StringWriter()
+                val cli = IndexBudgetCli(WorkloadReader(), analysisRunner = AnalysisRunner { _, _, _ ->
+                    error("Rejected validation must not start analysis")
+                })
+
+                val code = cli.execute(arrayOf("analyze", "--workload", workload(null).toString(),
+                    "--output-dir", output.toString(), "--analysis-mode", mode.name.lowercase()),
+                    err = PrintWriter(stderr, true), context = context)
+
+                assertEquals(if (cancelled) 1 else 2, code)
+                assertRunLimits(stderr.toString(), mode)
+                assertValidationSummary(stderr.toString(), mode,
+                    if (cancelled) ErrorCode.CANCELLED else ErrorCode.OUTPUT_DIRECTORY_NOT_EMPTY)
+                assertEquals("Keep this file", Files.readString(existing))
+                assertEquals(RunStatistics(), context.statistics())
+            }
         }
     }
 
@@ -189,6 +247,37 @@ class AnalysisModeCliTest {
         val source = if (mode == null) original else original.replaceFirst("{",
             "{\"analysis_mode\":\"${mode.name.lowercase()}\",")
         return Files.writeString(directory.resolve("workload-${mode?.name ?: "legacy"}.json"), source)
+    }
+
+    private fun assertRunLimits(stderr: String, mode: AnalysisMode) {
+        val fields = fields(stderr.lineSequence().single { it.startsWith("stage=validation analysis_mode=") })
+        assertEquals(mode.name.lowercase(), fields["analysis_mode"])
+        for ((key, expected) in mapOf(
+            "command_timeout_millis" to mode.limits.commandTimeout.toMillis(),
+            "search_timeout_millis" to mode.limits.searchTimeout.toMillis(),
+            "explain_timeout_millis" to mode.limits.explainTimeout.toMillis(),
+            "connect_timeout_millis" to mode.limits.connectTimeout.toMillis(),
+            "max_explain_attempts" to mode.limits.maxExplainAttempts,
+            "max_repair_attempts" to mode.limits.maxRepairAttempts,
+        )) {
+            assertEquals(expected.toString(), fields[key], key)
+        }
+    }
+
+    private fun assertValidationSummary(stderr: String, mode: AnalysisMode, reason: ErrorCode) {
+        val fields = fields(stderr.lineSequence().single { it.startsWith("stage=finished ") })
+        assertEquals("failed", fields["status"])
+        assertEquals(mode.name.lowercase(), fields["analysis_mode"])
+        assertEquals(reason.name, fields["stop_reasons"])
+        for (counter in listOf("explain_attempts", "evaluation_attempts", "completed_sets", "cache_hits", "repair_attempts")) {
+            assertEquals("0", fields[counter], counter)
+        }
+        assertTrue(stderr.indexOf("stage=validation analysis_mode=") < stderr.indexOf("stage=finished "))
+    }
+
+    private fun fields(line: String): Map<String, String> = line.split(' ').associate {
+        val parts = it.split('=', limit = 2)
+        parts[0] to parts[1]
     }
 
     private fun invoke(runner: AnalysisRunner, workload: Path, vararg options: String): Invocation {

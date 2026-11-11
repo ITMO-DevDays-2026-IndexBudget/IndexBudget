@@ -87,33 +87,9 @@ class AnalysisModeExperiments {
         }
         saveManifest()
         for (mode in AnalysisMode.entries) {
-            val context = RunContext(analysisMode = mode)
-            val input = WorkloadReader().read(workloadPath, context, mode)
-            var report: AnalysisReport? = null
-            val exporter = ReportExporter { value, path, run ->
-                AtomicReportExporter(HtmlReportRenderer()).export(value, path, run)
-                report = value
-            }
-            AnalysisPipeline(analyzer, sessions, generator, metrics, comparator, LimitedRepairOptimizer(),
-                DefaultReportBuilder(metrics), exporter).run(input, output.resolve(mode.name.lowercase()), context)
-            val saved = checkNotNull(report)
+            val saved = runMode(mode, workloadPath, output, generator)
             reports += saved
-            val wire = mapper.readTree(JsonReportWriter().render(saved))
-            val selected = saved.result.selected
-            summaries[mode.name.lowercase()] = linkedMapOf(
-                "status" to saved.result.status.name.lowercase(),
-                "stop_reasons" to saved.result.diagnostics.stopReasons.map { it.name },
-                "duration_millis" to saved.durationMillis,
-                "statistics" to wire["diagnostics"]["statistics"],
-                "limits" to wire["diagnostics"]["limits"],
-                "candidate_ids" to saved.candidates.candidates.map { it.id }.sorted(),
-                "selected_ids" to selected?.evaluation?.candidateIds,
-                "mean_ratio" to selected?.metrics?.meanRatio,
-                "worst_ratio" to selected?.metrics?.worstRatio,
-                "budgeted_bytes" to selected?.metrics?.budgetUsage?.budgetedBytes,
-                "write_units_per_hour" to selected?.metrics?.budgetUsage?.writeUnitsPerHour,
-                "environment" to wire["environment"],
-            )
+            summaries[mode.name.lowercase()] = summarize(saved)
             saveManifest()
             check(saved.result.status != RunStatus.FAILED) { "A run failed; its diagnostics were saved" }
         }
@@ -135,5 +111,43 @@ class AnalysisModeExperiments {
         )
         saveManifest()
         check(baselinesEqual && poolsEqual && hashesEqual) { "Database state, input or candidate pool changed between modes" }
+    }
+
+    private fun runMode(
+        mode: AnalysisMode,
+        workloadPath: Path,
+        output: Path,
+        generator: CandidateGenerator,
+    ): AnalysisReport {
+        val context = RunContext(analysisMode = mode)
+        val input = WorkloadReader().read(workloadPath, context, mode)
+        var report: AnalysisReport? = null
+        val exporter = ReportExporter { value, path, run ->
+            AtomicReportExporter(HtmlReportRenderer()).export(value, path, run)
+            report = value
+        }
+        AnalysisPipeline(analyzer, sessions, generator, metrics, comparator, LimitedRepairOptimizer(),
+            DefaultReportBuilder(metrics), exporter).run(input, output.resolve(mode.name.lowercase()), context)
+        return checkNotNull(report)
+    }
+
+    /** Uses saved results only; summary construction needs neither JDBC nor artifact publication. */
+    internal fun summarize(report: AnalysisReport): Map<String, Any?> {
+        val wire = mapper.readTree(JsonReportWriter().render(report))
+        val selected = report.result.selected
+        return linkedMapOf(
+            "status" to report.result.status.name.lowercase(),
+            "stop_reasons" to report.result.diagnostics.stopReasons.map { it.name },
+            "duration_millis" to report.durationMillis,
+            "statistics" to wire["diagnostics"]["statistics"],
+            "limits" to wire["diagnostics"]["limits"],
+            "candidate_ids" to report.candidates.candidates.map { it.id }.sorted(),
+            "selected_ids" to selected?.evaluation?.candidateIds,
+            "mean_ratio" to selected?.metrics?.meanRatio,
+            "worst_ratio" to selected?.metrics?.worstRatio,
+            "budgeted_bytes" to selected?.metrics?.budgetUsage?.budgetedBytes,
+            "write_units_per_hour" to selected?.metrics?.budgetUsage?.writeUnitsPerHour,
+            "environment" to wire["environment"],
+        )
     }
 }
