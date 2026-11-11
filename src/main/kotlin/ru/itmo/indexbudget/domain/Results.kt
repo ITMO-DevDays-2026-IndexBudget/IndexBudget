@@ -132,4 +132,5 @@ data class AnalysisReport(
     val normalizedProfileWeights: Map<String, Double> = emptyMap(),
     val queryComparisons: List<QueryCostComparison> = emptyList(),
     val incumbentsCoincide: Boolean? = null,
+    val manualComparison: ManualComparison? = null,
 )

@@ -134,6 +134,7 @@ class IndexBudgetCli(
               indexbudget analyze --workload <path> --output-dir <path>
 
             Validates JSON v2, shared queries, frequency profiles and budgets.
+            Optional manual_indexes: 1–5 structured B-tree definitions, evaluated separately after search.
             Use a new or empty output directory for each run.
             Runs the analysis pipeline when all production components are connected.
             Missing components produce NOT_IMPLEMENTED (exit 1), without reports or a database connection.

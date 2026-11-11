@@ -500,3 +500,13 @@ EXPLAIN, deadline без нового cleanup SQL, rollback, повтор пос
 `bash demo/check-hypopg.sh` создаёт отдельный контейнер; CI job `postgres-hypopg-integration`
 использует тот же runner. Unit tests отдельно проверяют повреждённый JSON, численные ошибки,
 счётчики и безопасную диагностику; они не заменяют интеграцию с PostgreSQL.
+
+## Ручной набор (план #64)
+
+`WorkloadInput.manualIndexes` — необязательные 1–5 структурированных B-tree определений.
+`ManualIndexEvaluator.prepare` разрешает их по общему каталогу и canonicalizer до baseline;
+`evaluate` после поиска использует ту же AnalysisSession, MetricsCalculator и RunContext.
+`AnalysisReport.manualComparison` передаётся экспортёрам отдельно от SearchResult;
+он не становится incumbent и не входит в автоматический shortlist/SQL.
+Строгий JSON-вход, бюджетные отказы и выходные поля описаны в
+[manual-index-comparison.md](manual-index-comparison.md).

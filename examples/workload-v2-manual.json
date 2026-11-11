@@ -1,0 +1,60 @@
+{
+  "schema_version": 2,
+  "objective": "robust",
+  "queries": [
+    {
+      "id": "records_by_group",
+      "sql": "SELECT id, value FROM public.records WHERE group_id = 42 ORDER BY created_at DESC LIMIT 20"
+    },
+    {
+      "id": "records_by_value",
+      "sql": "SELECT id, value FROM public.records WHERE value = 7 ORDER BY created_at DESC LIMIT 20"
+    }
+  ],
+  "profiles": [
+    {
+      "id": "normal",
+      "weight": 0.9,
+      "calls_per_hour": {
+        "records_by_group": 3000,
+        "records_by_value": 100
+      }
+    },
+    {
+      "id": "campaign",
+      "weight": 0.1,
+      "calls_per_hour": {
+        "records_by_group": 100,
+        "records_by_value": 3000
+      }
+    }
+  ],
+  "table_write_rates": {
+    "public.records": {
+      "inserts_per_hour": 1000,
+      "updates_per_hour": 3000,
+      "deletes_per_hour": 100,
+      "source": "manual"
+    }
+  },
+  "constraints": {
+    "storage_budget_bytes": 67108864,
+    "write_budget_units_per_hour": 10000,
+    "max_indexes": 5
+  },
+  "manual_indexes": [
+    {
+      "schema": "public",
+      "table": "records",
+      "keys": [
+        {
+          "column": "group_id"
+        },
+        {
+          "column": "created_at",
+          "direction": "desc"
+        }
+      ]
+    }
+  ]
+}

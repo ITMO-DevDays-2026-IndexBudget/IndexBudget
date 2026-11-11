@@ -31,6 +31,7 @@ class HtmlReportRenderer : ReportRenderer {
             <main id="main">""")
         overview(report)
         comparison(report)
+        manualComparison(report)
         profiles(report)
         indexes(report)
         queries(report)
@@ -39,6 +40,43 @@ class HtmlReportRenderer : ReportRenderer {
         append("""<footer>IndexBudget · Спецификация """)
         append(h(report.specVersion))
         append(" · Оценки помогают выбрать набор для отдельной физической проверки.</footer></main></div></body></html>")
+    }
+
+    private fun StringBuilder.manualComparison(report: AnalysisReport) {
+        val manual = report.manualComparison ?: return
+        append("<section id=\"manual-comparison\"><h2>Ручной набор индексов</h2>")
+        append("<p>Отдельная оценка вне автоматического shortlist. Best robust и best mean относятся к обычному поиску.</p>")
+        append("<p>Статус: ").append(h(manual.status)).append(". Допустимость: ")
+        text(if (manual.status != "completed") "Не установлена" else if (manual.admissible) "Допустим" else "Нарушает ограничения")
+        append(".</p>")
+        for (candidate in manual.candidates) {
+            append("<pre>").append(h(candidate.ddl ?: "Нет данных")).append("</pre><p>Оценка размера: ")
+            text(candidate.estimatedBytes?.toString() ?: "Нет данных")
+            append(" байт; с запасом: ").append(h(candidate.budgetedBytes ?: "Нет данных")).append("; write proxy: ")
+            text(candidate.writeUnitsPerHour?.toString() ?: "Нет данных")
+            append("</p>")
+        }
+        manual.metrics?.let { value ->
+            append("<p>M: ").append(h(value.meanRatio ?: "Нет данных")).append("; R: ").append(h(value.worstRatio ?: "Нет данных")).append("</p>")
+            append("<table><thead><tr><th>Профиль</th><th>Baseline cost</th><th>Ручной cost</th><th>Отношение</th></tr></thead><tbody>")
+            for (profile in value.profiles) {
+                append("<tr><td>").append(h(profile.profileId)).append("</td><td>").append(h(profile.baselineCost))
+                append("</td><td>").append(h(profile.cost)).append("</td><td>").append(h(profile.ratio ?: "Нет данных")).append("</td></tr>")
+            }
+            append("</tbody></table>")
+        }
+        for (violation in manual.budgetViolations) append("<p>Нарушение бюджета: ").append(h(violation.name)).append("</p>")
+        for (violation in manual.evaluationViolations) append("<p>").append(h(violation.code.name)).append("</p>")
+        manual.error?.let { append("<p>").append(h(it.code.name)).append(": ").append(h(it.message)).append("</p>") }
+        for (decision in manual.decisions) append("<p>").append(h(decision.reason.name)).append(": ").append(h(decision.details)).append("</p>")
+        append("<table><thead><tr><th>SQL ID</th><th>Baseline</th><th>Ручной cost</th><th>Регрессия</th></tr></thead><tbody>")
+        for (query in manual.queryComparisons) {
+            append("<tr><td>").append(h(query.queryId)).append("</td><td>").append(h(query.baselineCost ?: "Нет данных"))
+            append("</td><td>").append(h(query.selectedCost ?: "Нет данных")).append("</td><td>")
+            text(if (query.regression == true) "Да" else "Нет")
+            append("</td></tr>")
+        }
+        append("</tbody></table><p>Planner cost не является временем; write proxy — модель, не измерение записи.</p></section>")
     }
 
     private fun StringBuilder.overview(report: AnalysisReport) {
@@ -67,7 +105,7 @@ class HtmlReportRenderer : ReportRenderer {
         metric("Худшая нормированная стоимость", setRatio(metrics, metrics?.worstRatio), "R · меньше — лучше", "accent")
         metric("Средняя нормированная стоимость", setRatio(metrics, metrics?.meanRatio), "M · меньше — лучше")
         metric("Выбранные индексы", number(metrics?.budgetUsage?.indexCount), "Лимит: ${number(report.input?.constraints?.maxIndexes)}")
-        metric("Полностью оценённые наборы", number(result.diagnostics.statistics.completedEvaluations), "Один общий пул для robust и mean")
+        metric("Полностью оценённые наборы", number(result.diagnostics.statistics.completedEvaluations), if (report.manualComparison == null) "Один общий пул для robust и mean" else "Включая отдельную ручную оценку")
         append("</div>")
         if (selected != null && selected.evaluation.candidateIds.isEmpty()) {
             append("<p class=\"notice\">Выбран пустой набор: новые индексы не предлагаются. Baseline включает уже существующие реальные индексы.</p>")
