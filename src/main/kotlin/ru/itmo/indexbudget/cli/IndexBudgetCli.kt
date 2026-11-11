@@ -24,6 +24,7 @@ class IndexBudgetCli(
     private val workloadReader: WorkloadReader,
     private val outputDirectoryValidator: OutputDirectoryValidator = OutputDirectoryValidator(),
     private val analysisRunner: AnalysisRunner = UnavailableAnalysisRunner(),
+    private val statisticsCommand: StatisticsCommand = StatisticsCommand(),
 ) {
     private val diagnosticMapper = JsonMapper.builder().build()
 
@@ -33,6 +34,7 @@ class IndexBudgetCli(
         err: PrintWriter = PrintWriter(System.err, true),
         context: RunContext = RunContext(),
     ): Int {
+        if (args.firstOrNull() == "stats") return statisticsCommand.execute(args, out, err)
         context.observeProgress { progress ->
             val counters = progress.statistics
             err.println("stage=${progress.phase.name.lowercase()} explain_attempts=${counters.explainAttempts} " +
@@ -132,6 +134,7 @@ class IndexBudgetCli(
               indexbudget --help
               indexbudget --version
               indexbudget analyze --workload <path> --output-dir <path>
+              indexbudget stats --help
 
             Validates JSON v2, shared queries, frequency profiles and budgets.
             Use a new or empty output directory for each run.
