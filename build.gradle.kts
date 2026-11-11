@@ -27,6 +27,8 @@ dependencies {
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
     testFixturesImplementation(kotlin("stdlib"))
+    testFixturesImplementation(platform(org.springframework.boot.gradle.plugin.SpringBootPlugin.BOM_COORDINATES))
+    testFixturesImplementation("tools.jackson.core:jackson-databind")
 }
 
 kotlin {

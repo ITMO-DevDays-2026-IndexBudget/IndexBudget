@@ -151,12 +151,118 @@ object HtmlReportFixtures {
         return completed().copy(input = input).rebuild()
     }
 
+    fun oneProfile(): AnalysisReport {
+        val report = completed(sameIncumbents = true)
+        val input = requireNotNull(report.input)
+        return report.withProfiles(listOf(input.profiles.first().copy(weight = 1.0)))
+    }
+
+    fun threeProfiles(): AnalysisReport {
+        val report = regression()
+        val input = requireNotNull(report.input)
+        return report.withProfiles(input.profiles + Profile("profile_3", 0.5,
+            input.queries.associate { it.id to 500.0 }))
+    }
+
+    /** Positive baseline with a valid empty recommendation, unlike zero-baseline and failed. */
+    fun empty(): AnalysisReport {
+        val report = completed(sameIncumbents = true)
+        val input = requireNotNull(report.input)
+        val baseline = requireNotNull(report.result.baseline)
+        val calculator = MetricsCalculatorImpl()
+        val configuration = EvaluatedConfiguration(baseline, calculator.calculate(input, baseline, baseline,
+            calculator.assessBudget(emptyList(), input).usage))
+        return report.copy(candidates = CandidateBatch(emptyList()), result = SearchResult.Completed(
+            input.objective, baseline, configuration, configuration,
+            SearchDiagnostics(stopReasons = listOf(StopReason.NO_IMPROVEMENT)),
+        )).rebuild()
+    }
+
+    /** Presentation-only cases: rounding to one decimal must not erase the direction of a change. */
+    fun tinyEffect(increase: Boolean = false): AnalysisReport {
+        val report = oneProfile()
+        val input = requireNotNull(report.input)
+        val baseline = requireNotNull(report.result.baseline)
+        val selected = requireNotNull(report.result.selected)
+        val cost = if (increase) 100.01 else 99.99
+        val evaluation = selected.evaluation.copy(
+            costByQueryId = input.queries.associate { it.id to cost },
+            plansByQueryId = input.queries.associate {
+                it.id to ExplainPlan("""[{"Plan":{"Node Type":"Fixture Scan","Total Cost":$cost}}]""")
+            },
+        )
+        val configuration = selected.copy(evaluation = evaluation,
+            metrics = MetricsCalculatorImpl().calculate(input, baseline, evaluation, selected.metrics.budgetUsage))
+        return report.copy(result = SearchResult.Completed(input.objective, baseline, configuration, configuration,
+            report.result.diagnostics)).rebuild()
+    }
+
+    /** Same table name in two schemas, long source IDs and unabridged SQL/DDL. */
+    fun longNames(): AnalysisReport {
+        val source = completed()
+        val originalInput = requireNotNull(source.input)
+        val queryIds = originalInput.queries.mapIndexed { index, _ -> "observed_query_${index + 1}_" + "abcdef0123456789".repeat(4) }
+        val tableName = "records_from_application_events_current_quarter"
+        val tables = listOf(TableRef("public", tableName), TableRef("archive", tableName))
+        val queries = tables.mapIndexed { index, table -> QueryInput(queryIds[index],
+            "SELECT value FROM \"${table.schema}\".\"${table.name}\" WHERE value = ${index + 1}\n" +
+                "AND value < 100 ORDER BY value ASC LIMIT 100") }
+        val input = originalInput.copy(queries = queries,
+            profiles = originalInput.profiles.map { profile -> profile.copy(
+                callsPerHour = originalInput.queries.mapIndexed { index, query ->
+                    queryIds[index] to profile.callsPerHour.getValue(query.id)
+                }.toMap(),
+            ) },
+            constraints = originalInput.constraints.copy(writeBudgetUnitsPerHour = 20_000.0, maxIndexes = 2),
+            tableWriteRates = tables.associate { "${it.schema}.${it.name}" to TableWriteRates(1000.0, 3000.0, 100.0) },
+        )
+        val candidates = tables.mapIndexed { index, table ->
+            val definition = IndexDefinition(table, listOf(IndexKey(ColumnRef(table, "value"),
+                operatorClass = "pg_catalog.int4_ops")))
+            source.candidates.candidates[index].copy(id = "candidate_${index + 1}_" + "fedcba9876543210".repeat(4),
+                definition = definition, sourceQueryIds = setOf(queryIds[index]), ddl = PostgresDdlRenderer().render(definition))
+        }
+        fun evaluation(ids: List<String>, costs: List<Double>) = EvaluationResult(ids.sorted(),
+            queryIds.zip(costs).toMap(), queryIds.zip(costs).associate { (id, cost) ->
+                id to ExplainPlan("""[{"Plan":{"Node Type":"Fixture Scan","Total Cost":$cost}}]""")
+            })
+        val baseline = evaluation(emptyList(), listOf(100.0, 100.0))
+        val selected = evaluation(candidates.map { it.id }, listOf(45.0, 55.0))
+        val calculator = MetricsCalculatorImpl()
+        val configuration = EvaluatedConfiguration(selected, calculator.calculate(input, baseline, selected,
+            calculator.assessBudget(candidates, input).usage))
+        val annotatedCandidates = candidates.map { candidate -> candidate.copy(
+            writeUnitsPerHour = calculator.assessBudget(listOf(candidate), input).usage.writeUnitsPerHour,
+        ) }
+        return source.copy(input = input, candidates = CandidateBatch(annotatedCandidates),
+            result = SearchResult.Completed(input.objective, baseline, configuration, configuration,
+                source.result.diagnostics)).rebuild()
+    }
+
+    private fun AnalysisReport.withProfiles(profiles: List<Profile>): AnalysisReport {
+        val input = requireNotNull(this.input).copy(profiles = profiles)
+        val baseline = requireNotNull(result.baseline)
+        val calculator = MetricsCalculatorImpl()
+        fun configuration(value: EvaluatedConfiguration) = value.copy(metrics = calculator.calculate(
+            input, baseline, value.evaluation, value.metrics.budgetUsage))
+        return copy(input = input, result = SearchResult.Completed(result.selectedObjective, baseline,
+            configuration(requireNotNull(result.bestRobust)), configuration(requireNotNull(result.bestMean)),
+            result.diagnostics)).rebuild()
+    }
+
     /** Rebuild every derived field after changing the input/result, preserving synthetic run metadata. */
     private fun AnalysisReport.rebuild(): AnalysisReport = DefaultReportBuilder(environment = environment)
         .build(requireNotNull(input), candidates, result, RunContext(runId = runId))
         .copy(inputHash = inputHash, durationMillis = durationMillis)
 
     fun all(): Map<String, AnalysisReport> = linkedMapOf(
+        "one-profile" to oneProfile(),
+        "three-profiles" to threeProfiles(),
+        "empty" to empty(),
+        "tiny-decrease" to tinyEffect(),
+        "tiny-increase" to tinyEffect(increase = true),
+        "long-names" to longNames(),
+        "recorded-import" to RecordedHtmlReportFixture.report(),
         "different" to completed(),
         "fractional" to fractional(),
         "include" to covering(),
@@ -170,7 +276,7 @@ object HtmlReportFixtures {
         "wide" to wide(),
         "regression" to regression(),
         "missing" to ContractFixtures.report(status = RunStatus.FAILED).copy(input = null, inputHash = null),
-    )
+    ).also { it.putAll(RecordedSeriesHtmlReportFixture.all()) }
 }
 
 /** Run via reportPreview; generated files never become dependencies of production analyze. */
@@ -194,6 +300,11 @@ object ReportPreview {
             }
             BudgetSeriesFixtures.generate(target, variant)
         }
+        val recordedSeries = directory.resolve("recorded-series")
+        if (Files.exists(recordedSeries)) Files.walk(recordedSeries).use { paths ->
+            paths.sorted(Comparator.reverseOrder()).forEach(Files::delete)
+        }
+        RecordedSeriesHtmlReportFixture.generate(recordedSeries)
         println("Синтетический отчёт: ${Path.of(args[0]).toAbsolutePath()}")
         println("Варианты для проверки: ${directory.toAbsolutePath()}")
     }

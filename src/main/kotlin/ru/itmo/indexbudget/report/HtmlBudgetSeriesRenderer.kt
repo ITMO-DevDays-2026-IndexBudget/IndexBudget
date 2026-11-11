@@ -1,13 +1,16 @@
 package ru.itmo.indexbudget.report
 
 import tools.jackson.databind.JsonNode
-import ru.itmo.indexbudget.domain.AnalysisReport
+import ru.itmo.indexbudget.domain.*
 import java.math.BigDecimal
 import java.math.RoundingMode
 import java.security.MessageDigest
+import java.text.DecimalFormat
+import java.text.DecimalFormatSymbols
 import java.util.Base64
+import java.util.Locale
 
-/** Read-only view of the exact v1 snapshot published as series.json; only chart geometry is calculated here. */
+/** A view of saved series/report models. No SQL, EXPLAIN or domain metric recalculation. */
 class HtmlBudgetSeriesRenderer {
     private val stylesheet = checkNotNull(javaClass.getResource("/report/report.css")).readText() +
         checkNotNull(javaClass.getResource("/report/series.css")).readText()
@@ -20,270 +23,281 @@ class HtmlBudgetSeriesRenderer {
         require(summary.path("schema_version").intValue() == 1)
         val points = summary.path("points").toList()
         val storage = summary.path("budget").stringValue() == "storage_budget_bytes"
-        val unit = if (storage) "байт" else "write units/ч"
         val candidates = summary.path("preparation").path("candidates").associateBy { it.path("id").stringValue() }
+        val saved = reports.orEmpty()
+        validateReports(summary, points, saved)
+        val initial = defaultPoint(points)?.path("ordinal")?.intValue()
         append("""<!doctype html><html lang="ru"><head><meta charset="utf-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <meta name="viewport" content="width=device-width,initial-scale=1">
             <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; ${if (reports != null) "script-src 'sha256-$scriptHash'; " else ""}base-uri 'none'; form-action 'none'">
             <title>IndexBudget · Сравнение бюджетов</title><style>""")
-        append(stylesheet)
-        append("""</style></head><body><a class="skip" href="#main">К содержанию</a>
-            <header class="topbar"><a class="brand" href="#overview"><span class="brand-icon" aria-hidden="true">▥</span>IndexBudget</a>
-            <span class="top-caption">POSTGRESQL / СЕРИЯ БЮДЖЕТОВ</span><span class="offline">Автономный отчёт</span></header>
-            <div class="layout series-layout">""")
-        navigation(points, reports)
-        append("""<main id="main" class="series-main"><section id="overview" class="overview">
-            <p class="eyebrow">ОДИН ПУЛ КАНДИДАТОВ · НЕЗАВИСИМЫЕ ПОИСКИ</p>
-            <div class="title-row"><h1>Что даёт больший бюджет</h1>""")
-        badge(summary.path("status"))
-        append("</div><p class=\"lead\">Сравнение рассчитанных вариантов по ")
-        append(if (storage) "бюджету места" else "бюджету записи")
-        append(". Эффект — снижение взвешенной стоимости планов, а не измеренное ускорение SQL.</p>")
-        append("<p><a href=\"series.json\">Сводка JSON</a> · Значения бюджета: ")
-        append(summary.path("values").joinToString(" · ") { h(number(it)) })
-        append(" ").append(unit).append("</p>")
-        if (reports != null) append("<p><a href=\"#variant-details\">Перейти к подробному отчёту выбранного варианта ↓</a></p>")
-        if (summary.path("status").stringValue() == "running")
-            notice("Серия ещё выполняется. Ожидающие точки не рассчитаны; обновите файл после завершения.")
-        if (points.any { usable(it) && !it.path("conditions_match").isTrue })
-            notice("Сопоставимость ограничена: условия изменились или не проверены. Разницу нельзя объяснять только бюджетом; отметки × на диаграммах и причины в таблице.")
-        val repeated = points.filter(::usable).groupBy { ids(it) }.values.filter { it.size > 1 }
-        for (group in repeated) notice("Одинаковый набор у точек ${group.joinToString { "№${it.path("ordinal").intValue()}" }}. " +
-            "Дополнительный бюджет не обязан менять рекомендацию; при разных условиях одинаковые индексы могут иметь разный эффект.")
-        val comparable = points.filter { usable(it) && it.path("conditions_match").isTrue }
-            .sortedBy { it.path("budget_value").decimalValue() }
-        if (comparable.zipWithNext().any { (a, b) ->
-                a.path("metrics").path("profiles").any { previous ->
-                    val next = profile(b, previous.path("profile_id").stringValue())
-                    val before = previous.path("gain_percent")
-                    val after = next?.path("gain_percent")
-                    before.isNumber && after?.isNumber == true && after.decimalValue() < before.decimalValue()
-                }
-            }) notice("Обнаружен немонотонный эффект: у большего бюджета снижение cost хотя бы одного профиля меньше. " +
-                "Поиски ограничены и независимы; выбранная цель также может допускать компромисс между профилями.")
-        error(summary.path("preparation").path("error"))
-        append("</section><section id=\"effects\"><h2>Бюджет → эффект профилей</h2>")
-        append("<p class=\"muted\">Выше — больше снижение cost; отрицательное значение — ухудшение. " +
-            "Столбцы идут по возрастанию бюджета. Сплошной столбец — completed, штриховка — partial; × — условия не подтверждены. " +
-            "Failed и skipped не получают вымышленных значений. Линий между точками нет: промежуточные бюджеты не рассчитаны.</p>")
-        val profiles = summary.path("settings").path("profiles").toList().map { it.path("id").stringValue() }
-        val gains = points.filter(::usable).flatMap { it.path("metrics").path("profiles").toList() }
-            .mapNotNull { it.path("gain_percent").takeIf(JsonNode::isNumber)?.decimalValue() }
-        val low = minOf(BigDecimal.ZERO, gains.minOrNull() ?: BigDecimal.ZERO)
-        val high = maxOf(BigDecimal(100), gains.maxOrNull() ?: BigDecimal(100))
-        for (id in profiles) chart(points, id, unit, low, high)
-        append("</section><section id=\"points\"><h2>Бюджет → индексы → расход → статус</h2>")
-        append("<p class=\"muted\">Порядок точек совпадает с запросом серии. M — отношение средних взвешенных costs; " +
-            "R — худшее отношение cost профиля к его baseline. Меньше — лучше. Проценты и расходы взяты из сводки JSON.</p>")
-        append("<table class=\"series-table\"><thead><tr><th>Точка и бюджет</th><th>Индексы</th><th>Эффект и расход</th><th>Статус и файлы</th></tr></thead><tbody>")
-        for (point in points) {
-            val ordinal = point.path("ordinal").intValue()
-            append("<tr id=\"point-$ordinal\"><th scope=\"row\">№$ordinal<br>")
-            append(h(number(point.path("budget_value")))).append(" ").append(unit).append("</th>")
-            append("<td data-label=\"Индексы\">")
-            when {
-                !usable(point) -> append("Нет пригодного результата")
-                ids(point).isEmpty() -> append("Пустой набор · без дополнительных индексов")
-                else -> for (id in ids(point)) {
-                    append("<details><summary>").append(h(id)).append("</summary><pre>")
-                    append(h(candidates[id]?.path("ddl")?.stringValue() ?: "Определение отсутствует в сводке"))
-                    append("</pre></details>")
-                }
+        append(stylesheet).append("""</style></head><body><a class="skip" href="#main">К содержанию</a>
+            <header class="topbar"><a class="brand" href="#overview">IndexBudget</a><span class="top-caption">Отчёт по PostgreSQL</span><a class="header-link" href="#conditions">Как получена оценка</a></header>
+            <div class="layout series-layout"><aside class="series-sidebar"><nav aria-label="Разделы отчёта">
+            <a href="#overview">Вывод</a><a href="#points">Сравнение бюджетов</a>""")
+        if (reports != null) append("<a href=\"#series-queries\">Влияние на запросы</a><a href=\"#series-resources\">Ресурсы и индексы</a><a href=\"#series-workload\">Исходная нагрузка</a>")
+        else append("<a href=\"#series-query-catalog\">SQL и планы</a><a href=\"#series-index-catalog\">Индексы и DDL</a>")
+        append("<a href=\"#conditions\">Методика и ограничения</a><a href=\"#next\">Следующие шаги</a></nav></aside><main id=\"main\">")
+        append("<section id=\"overview\" class=\"overview\"><h1>Индексы при разных бюджетах ").append(if (storage) "места" else "записи").append("</h1>")
+        append(if (storage) "<p class=\"budget-definition\">Бюджет места — лимит размера дополнительных индексов с запасом.</p>"
+            else "<p class=\"budget-definition\">Бюджет записи — лимит условных затрат на обслуживание новых индексов при изменении данных, ед./ч.</p>")
+        if (reports != null && points.isNotEmpty()) {
+            append("<div class=\"series-selector\" hidden><label for=\"series-variant\">Просматриваемый бюджет</label> <select id=\"series-variant\">")
+            for (point in points) {
+                val ordinal = point.path("ordinal").intValue()
+                append("<option value=\"$ordinal\" data-catalog-state=\"").append(when { !usable(point) -> "unavailable"; ids(point).isEmpty() -> "empty"; else -> "selected" }).append("\"").append(if (ordinal == initial) " selected" else "").append(">")
+                    .append(h(budget(point.path("budget_value"), storage))).append(" · вариант $ordinal · ")
+                    .append(h(statusLabel(point.path("status").stringValue()))).append("</option>")
             }
-            append("</td><td data-label=\"Эффект и расход\">")
-            if (usable(point)) {
-                val metrics = point.path("metrics")
-                append("<p>M: ").append(h(metric(metrics.path("mean_ratio"))))
-                append(" · R: ").append(h(metric(metrics.path("worst_ratio")))).append("</p>")
-                append("<p>Средний planner cost: ").append(h(number(metrics.path("baseline_mean_cost"))))
-                    .append(" → ").append(h(number(metrics.path("mean_cost")))).append("</p>")
-                for (p in metrics.path("profiles")) {
-                    append("<p><strong>").append(h(p.path("profile_id").stringValue())).append("</strong>: ")
-                    append(h(effect(p))).append("<br><small>Planner cost: ")
-                    append(h(number(p.path("baseline_cost")))).append(" → ").append(h(number(p.path("cost"))))
-                    append("</small></p>")
-                }
-                val usage = metrics.path("budget_usage")
-                append("<p>Место: оценка ").append(h(number(usage.path("estimated_bytes")))).append(" байт; с запасом ")
-                append(h(number(usage.path("budgeted_bytes")))).append(" байт (×")
-                append(h(number(usage.path("size_safety_factor")))).append(").</p>")
-                val constraints = summary.path("settings").path("constraints")
-                append("<p>Лимит места: ").append(h(number(if (storage) point.path("budget_value") else constraints.path("storage_budget_bytes"))))
-                append(" байт. Индексов: ").append(h(number(usage.path("index_count")))).append(" / ")
-                append(h(number(constraints.path("max_indexes")))).append(".</p>")
-                val writeLimit = if (storage) constraints.path("write_budget_units_per_hour") else point.path("budget_value")
-                append("<p>Запись: ")
-                append(h(number(usage.path("write_units_per_hour")))).append(" write units/ч. ")
-                append(if (writeLimit.isNumber) "Лимит: ${h(number(writeLimit))} write units/ч."
-                    else "Лимит отключён.")
-                if (summary.path("settings").path("table_write_rates").isNull)
-                    append(" Модель записи отключена; неизвестный расход не равен нулю.")
-                append("</p>")
-            } else append("Нет данных")
-            append("</td><td data-label=\"Статус и файлы\">")
-            badge(point.path("status"))
-            append("<p>").append(when {
-                point.path("conditions_match").isTrue -> "Наблюдаемые условия совпали"
-                point.path("conditions_match").isFalse -> "Условия изменились"
-                else -> "Сопоставимость не установлена"
-            }).append("</p>")
-            if (!point.path("condition_changes").isEmpty)
-                append("<p>").append(h(point.path("condition_changes").joinToString { conditionLabel(it.stringValue()) })).append("</p>")
-            if (!point.path("stop_reasons").isEmpty)
-                append("<p>Остановка: ").append(h(point.path("stop_reasons").joinToString { it.stringValue() })).append("</p>")
-            error(point.path("error"))
-            point.path("errors").filter { it != point.path("error") }.forEach { error(it) }
-            append("<p class=\"series-links\">")
-            if (reports?.containsKey(ordinal) == true)
-                append("<a href=\"#variant-$ordinal\">Открыть здесь</a> ")
-            for (name in listOf("report.html", "report.json", "indexes.sql")) {
-                val path = point.path("artifacts").path(name)
-                // Only paths generated by the series writer are navigable; no schemes, traversal or external resources.
-                if (path.isString && path.stringValue() == "point-%02d/$name".format(java.util.Locale.ROOT, ordinal))
-                    append("<a href=\"").append(h(path.stringValue())).append("\">").append(name).append("</a> ")
-            }
-            append("</p></td></tr>")
+            append("</select></div><p class=\"selection-note muted\">Выбор для просмотра, не рекомендация увеличивать бюджет.</p>")
         }
-        append("</tbody></table></section><section id=\"conditions\"><h2>Условия и границы сравнения</h2>")
-        append("<p>Один фиксированный пул кандидатов; каждая точка исследует собственный пул комбинаций. " +
-            "Ограниченный поиск не гарантирует глобальный оптимум или монотонное улучшение при увеличении бюджета. " +
-            "Совпадение каталога, baseline, планов и версий не доказывает неизменность всех данных и настроек БД.</p>")
-        append("<p>Размер — оценка HypoPG с отдельным запасом; write units/ч — условная модель записи. " +
-            "Planner cost не является временем выполнения или обещанием SLA. Полная диагностика доступна в отчётах точек.</p>")
-        append("<dl class=\"values metadata\">")
-        for ((label, value) in listOf(
-            "Серия" to summary.path("series_id"), "Hash workload" to summary.path("source").path("workload_input_hash"),
-            "Источник" to summary.path("source").path("workload_source"),
-            "Цель" to summary.path("settings").path("selected_objective"),
-            "Режим" to summary.path("settings").path("analysis_mode"),
-            "Рейтинг" to summary.path("settings").path("candidate_ranking"),
-            "Длительность, мс" to summary.path("duration_millis"), "Общий лимит, с" to summary.path("timeout_seconds"),
-        )) append("<div><dt>").append(label).append("</dt><dd>")
-            .append(h(if (value.isString) value.stringValue() else number(value))).append("</dd></div>")
-        append("</dl></section>")
-        if (reports != null) detailedReports(summary, points, reports, unit)
-        append("<footer>IndexBudget · Спецификация 0.2 · Сводка серии v1</footer></main></div>")
+        for (point in points) overviewResult(summary, point, candidates, saved[point.path("ordinal").intValue()], storage)
+        if (points.isEmpty()) append("<p>Результаты вариантов ещё не сохранены.</p>")
+        append("<p class=\"cost-definition\"><strong>Planner cost</strong> — оценка затрат PostgreSQL, не время выполнения. Снижение cost не гарантирует ускорения.</p>")
+        if (summary.path("status").stringValue() == "running") notice("Серия ещё выполняется. Не все точки рассчитаны.")
+        if (points.any { usable(it) && !it.path("conditions_match").isTrue }) notice("Сопоставимость ограничена: условия изменились или не проверены. Разницу нельзя объяснять только бюджетом.")
+        val comparable = points.filter { usable(it) && it.path("conditions_match").isTrue }.sortedBy { it.path("budget_value").decimalValue() }
+        if (comparable.zipWithNext().any { (a, b) -> a.path("metrics").path("profiles").any { previous ->
+            val next = profile(b, previous.path("profile_id").stringValue())?.path("gain_percent")
+            previous.path("gain_percent").isNumber && next?.isNumber == true && next.decimalValue() < previous.path("gain_percent").decimalValue()
+        } }) notice("Обнаружен немонотонный эффект: больший бюджет ухудшил оценку хотя бы одного профиля. Поиск ограничен.")
+        error(summary.path("preparation").path("error"))
+        append("</section>")
+        pointsTable(summary, points, candidates, storage, reports != null)
+        if (reports != null) {
+            val renderer = HtmlReportRenderer()
+            val catalog = HtmlSeriesCatalog(saved, summary)
+            append("<div id=\"series-detail-content\"><section id=\"series-queries\">")
+            for (point in points) variant(point) {
+                val report = saved[point.path("ordinal").intValue()]
+                if (report == null) append("<h2>Влияние на запросы</h2><p>Оценки запросов для этого варианта не сохранены.</p>") else {
+                    append(renderer.renderSection(report, HtmlReportSection.QUERIES, prefix(point)))
+                    append(renderer.renderSection(report, HtmlReportSection.PROFILES, prefix(point)))
+                }
+            }
+            append(catalog.queries()).append("</section><section id=\"series-resources\">")
+            for (point in points) variant(point) {
+                val report = saved[point.path("ordinal").intValue()]
+                if (report == null) append("<h2>Ресурсы и индексы</h2><p>Оценка ресурсов отсутствует.</p>")
+                else append(renderer.renderSection(report, HtmlReportSection.INDEXES, prefix(point))
+                    .replace("href=\"#${prefix(point)}resource-model\"", "href=\"#series-resource-model\""))
+            }
+            append(catalog.indexes()).append("</section><section id=\"series-workload\">")
+            // Share identical observations/inputs; never substitute one point's changed provenance for another.
+            val groups = saved.entries.groupBy { (_, r) -> listOf(r.workloadProvenance, r.input?.queries, r.input?.profiles, r.input?.tableWriteRates) }
+            for (group in groups.values) {
+                append("<div data-variants=\"").append(group.joinToString(",") { it.key.toString() }).append("\">")
+                append(renderer.renderSection(group.first().value, HtmlReportSection.PROVENANCE, "variant-${group.first().key}-"))
+                append("</div>")
+            }
+            for (point in points.filter { !saved.containsKey(it.path("ordinal").intValue()) }) variant(point) { append("<h2>Исходная нагрузка</h2><p>Подробные исходные данные не сохранены.</p>") }
+            append("</section></div>")
+        } else {
+            val catalog = HtmlSeriesCatalog(emptyMap(), summary)
+            append(catalog.queries()).append(catalog.indexes())
+        }
+        append("<section id=\"conditions\"><h2>Как получена оценка и где её границы</h2><p>Baseline — оценка с существующими индексами. Новые наборы оценены целиком через HypoPG, без физического построения. Поиск ограничен и не гарантирует лучший возможный набор.</p>")
+        append("<details><summary>Ограничения сравнения</summary><p>Пул кандидатов фиксирован; каждый бюджет исследует собственные комбинации. Глобальный оптимум и монотонное улучшение не гарантированы. Совпадение наблюдаемых каталога, baseline, планов и версий не доказывает неизменность всех данных и настроек БД.</p><p>Planner cost не обещает ускорение или SLA. Место — оценка HypoPG с запасом; write units/ч — условная модель, не количество операций и не измеренное замедление записи.</p></details>")
+        for (group in points.filter(::usable).groupBy { ids(it) }.values.filter { it.size > 1 })
+            append("<details><summary>Одинаковый набор у точек ").append(h(group.joinToString { "№${it.path("ordinal").intValue()}" })).append("</summary><p>Дополнительный бюджет не обязан менять рекомендацию; при разных условиях эффект может отличаться.</p></details>")
+        if (reports != null) {
+            val renderer = HtmlReportRenderer()
+            saved.values.firstOrNull()?.let {
+                append(renderer.renderSection(it, HtmlReportSection.RESOURCE_MODEL).replace("id=\"resource-model\"", "id=\"series-resource-model\""))
+            }
+            append("<details><summary>Критерии, лимиты и диагностика запусков</summary>")
+            for ((ordinal, report) in saved.toSortedMap()) {
+                append("<details class=\"series-detail\" data-variant=\"$ordinal\" id=\"variant-$ordinal\"><summary>Вариант $ordinal · ").append(h(statusLabel(report.result.status.name.lowercase(Locale.ROOT)))).append("</summary>")
+                val sections = listOfNotNull(
+                    HtmlReportSection.COMPARISON.takeIf { (report.input?.profiles?.size ?: report.result.selected?.metrics?.profiles?.size ?: 0) > 1 },
+                    HtmlReportSection.MANUAL_COMPARISON, HtmlReportSection.SEARCH, HtmlReportSection.RUN)
+                for (section in sections) append(renderer.renderSection(report, section, "variant-$ordinal-", includeCandidateCatalog = false))
+                append("</details>")
+            }
+            append("</details>")
+        }
+        append("<details><summary>Идентификатор и параметры серии</summary><p>По умолчанию показан пригодный вариант с наибольшим бюджетом; если его нет — доступная диагностика. Это выбор для просмотра.</p><dl class=\"values\">")
+        entry("Значения бюджета", summary.path("values").joinToString(" · ") { number(it) + " " + if (storage) "байт" else "условных ед./ч" })
+        for ((label, value) in listOf("Серия" to summary.path("series_id"), "Hash workload" to summary.path("source").path("workload_input_hash"), "Источник" to summary.path("source").path("workload_source"), "Цель" to summary.path("settings").path("selected_objective"), "Режим" to summary.path("settings").path("analysis_mode"), "Рейтинг" to summary.path("settings").path("candidate_ranking"), "Длительность, мс" to summary.path("duration_millis"), "Общий лимит, с" to summary.path("timeout_seconds")))
+            entry(label, if (value.isString) value.stringValue() else number(value))
+        append("</dl><p><a href=\"series.json\">Сводка JSON</a></p></details></section><section id=\"next\"><h2>Что делать дальше</h2><ol><li>Уточнить период, охват, частоты и параметры SQL.</li><li>Выбрать допустимый бюджет по таблице сравнения.</li><li>Проверить весь набор на тестовой БД: время запросов, нагрузку записи и фактический размер индексов.</li></ol></section><footer>IndexBudget · Спецификация 0.2 · Оценка для отдельной физической проверки</footer></main></div>")
         if (reports != null) append("<script>").append(script).append("</script>")
         append("</body></html>")
     }
 
-    private fun StringBuilder.navigation(points: List<JsonNode>, reports: Map<Int, AnalysisReport>?) {
-        append("""<aside class="series-sidebar"><div class="nav-label">СРАВНЕНИЕ БЮДЖЕТОВ</div>
-            <nav aria-label="Разделы сравнения бюджетов">
-            <a href="#overview">Обзор серии</a><a href="#effects">Эффект по бюджетам</a>
-            <a href="#points">Варианты и индексы</a><a href="#conditions">Условия сравнения</a>""")
-        if (reports != null) append("<a href=\"#variant-details\">Выбор варианта</a>")
-        append("</nav>")
-        val available = points.filter { reports?.containsKey(it.path("ordinal").intValue()) == true }
-        val selected = defaultPoint(available)
-        if (selected != null) {
-            val ordinal = selected.path("ordinal").intValue()
-            append("<div class=\"nav-label series-nav-label\">ВАРИАНТ №<span id=\"series-nav-variant\">$ordinal</span></div>")
-            append("<nav aria-label=\"Разделы выбранного варианта\" class=\"series-variant-nav\">")
-            for ((index, entry) in listOf(
-                "overview" to "Обзор", "comparison" to "Robust и mean",
-                "profiles" to "Профили нагрузки", "indexes" to "Индексы и бюджеты",
-                "queries" to "Запросы и планы", "search" to "Границы поиска",
-                "run" to "Данные запуска", "provenance" to "Происхождение нагрузки",
-            ).withIndex()) {
-                val (id, label) = entry
-                append("<a data-section=\"$id\" href=\"#variant-$ordinal-$id\"><span>0${index + 1}</span>$label</a>")
-            }
-            append("</nav>")
-        }
-        append("<div class=\"nav-note\">Planner cost — оценка планировщика. Фактическое время запросов здесь не измеряется.</div></aside>")
-    }
-
-    private fun defaultPoint(available: List<JsonNode>): JsonNode? =
-        available.filter(::usable).ifEmpty { available }.maxByOrNull { it.path("budget_value").decimalValue() }
-
-    private fun StringBuilder.detailedReports(summary: JsonNode, points: List<JsonNode>, reports: Map<Int, AnalysisReport>, unit: String) {
-        val available = points.filter { reports.containsKey(it.path("ordinal").intValue()) }
-        val selected = defaultPoint(available)
-        append("<section id=\"variant-details\"><h2>Подробный отчёт варианта</h2>")
-        if (selected == null) {
-            append("<p class=\"empty\">Подробные отчёты пока недоступны. Состояния точек и ошибки показаны в сводке выше.</p></section>")
-            return
-        }
-        append(if (usable(selected))
-            "<p>По умолчанию открыт рассчитанный вариант с наибольшим бюджетом. Это выбор для просмотра, а не рекомендация увеличивать бюджет.</p>"
-            else "<p>Пригодного результата нет. Открыта диагностика доступного варианта с наибольшим бюджетом.</p>")
-        append("<div class=\"series-selector\" hidden><label for=\"series-variant\">Вариант бюджета</label> <select id=\"series-variant\">")
-        for (point in available) {
-            val ordinal = point.path("ordinal").intValue()
-            append("<option value=\"").append(ordinal).append("\"")
-            if (point == selected) append(" selected")
-            append(">№").append(ordinal).append(" · ").append(h(number(point.path("budget_value"))))
-                .append(" ").append(unit).append(" · ").append(h(point.path("status").stringValue())).append("</option>")
-        }
-        append("</select></div><div id=\"series-detail-content\">")
-        val renderer = HtmlReportRenderer()
-        for (point in available) {
-            val ordinal = point.path("ordinal").intValue()
-            val report = reports.getValue(ordinal)
+    private fun validateReports(summary: JsonNode, points: List<JsonNode>, reports: Map<Int, AnalysisReport>) {
+        for (point in points) reports[point.path("ordinal").intValue()]?.let { report ->
             require(report.runId == point.path("run_id").stringValue())
             require(report.inputHash == summary.path("source").path("workload_input_hash").stringValue())
-            require(report.result.status.name.lowercase() == point.path("status").stringValue())
-            require(report.result.selected?.evaluation?.candidateIds?.sorted() ==
-                if (point.path("selected_index_ids").isArray) ids(point) else null)
-            append("<details class=\"series-detail\" id=\"variant-$ordinal\" data-report-prefix=\"variant-$ordinal-\"")
-            if (point == selected) append(" open")
-            append("><summary>№").append(ordinal).append(" · Бюджет ").append(h(number(point.path("budget_value"))))
-                .append(" ").append(unit).append(" · ").append(h(point.path("status").stringValue())).append("</summary>")
-            append(renderer.renderContent(report, "variant-$ordinal-"))
-            append("</details>")
+            require(report.result.status.name.lowercase(Locale.ROOT) == point.path("status").stringValue())
+            require(report.result.selected?.evaluation?.candidateIds?.sorted() == if (point.path("selected_index_ids").isArray) ids(point) else null)
         }
-        append("</div></section>")
+        require(reports.keys.all { ordinal -> points.any { it.path("ordinal").intValue() == ordinal } })
+    }
+    private fun prefix(point: JsonNode) = "variant-${point.path("ordinal").intValue()}-"
+    private fun defaultPoint(points: List<JsonNode>) = points.filter(::usable).ifEmpty { points }.maxByOrNull { it.path("budget_value").decimalValue() }
+    private fun StringBuilder.variant(point: JsonNode, body: StringBuilder.() -> Unit) {
+        val ordinal = point.path("ordinal").intValue()
+        append("<div class=\"variant-section\" data-variant=\"$ordinal\" data-report-prefix=\"variant-$ordinal-\"><p class=\"variant-label muted\">Вариант $ordinal</p>")
+        body(); append("</div>")
     }
 
-    private fun StringBuilder.chart(points: List<JsonNode>, id: String, unit: String, low: BigDecimal, high: BigDecimal) {
-        val ordered = points.sortedBy { it.path("budget_value").decimalValue() }
-        val storage = unit == "байт"
-        append("<article class=\"series-chart\"><h3>").append(h(id)).append("</h3>")
-        append("<p class=\"muted\">Снижение cost, % · общая шкала ")
-            .append(h(compact(low))).append(" … ").append(h(compact(high))).append(" %</p>")
-        append("<div class=\"series-columns\" style=\"--columns:").append(maxOf(1, ordered.size)).append("\">")
-        for (point in ordered) {
-            val ordinal = point.path("ordinal").intValue()
-            val p = profile(point, id)
-            val gain = if (usable(point)) p?.path("gain_percent")?.takeIf(JsonNode::isNumber)?.decimalValue() else null
-            val status = point.path("status").stringValue()
-            val statusText = when (status) {
-                "partial" -> "partial"; "failed" -> "Ошибка"; "skipped" -> "Не рассчитана"; else -> "completed"
-            }
-            val description = if (usable(point)) p?.let(::effect) ?: "Нет данных" else "Нет пригодного результата"
-            val title = "№$ordinal · ${number(point.path("budget_value"))} $unit · $description · $statusText" +
-                if (point.path("conditions_match").isTrue) "" else " · Условия не подтверждены"
-            append("<a class=\"series-column\" href=\"#point-$ordinal\" title=\"").append(h(title))
-                .append("\" aria-label=\"").append(h(title)).append("\">")
-            append("<span class=\"series-value\">").append(if (gain == null) "—" else h(compact(gain)) + " %").append("</span>")
-            append("<span class=\"series-track\"><span class=\"series-zero\" style=\"bottom:")
-                .append(position(BigDecimal.ZERO, low, high)).append("%\"></span>")
-            if (gain != null) {
-                append("<span class=\"series-bar ").append(if (status == "partial") "partial" else "completed")
-                if (gain.signum() < 0) append(" negative")
-                if (gain.signum() == 0) append(" zero")
-                append("\" style=\"bottom:").append(position(minOf(gain, BigDecimal.ZERO), low, high))
-                    .append("%;height:").append(position(gain.abs(), BigDecimal.ZERO, high.subtract(low))).append("%\"></span>")
-            } else append("<span class=\"series-unavailable\">")
-                .append(h(if (usable(point)) description else statusText)).append("</span>")
-            append("</span><span class=\"series-budget\"><strong>")
-            val budget = point.path("budget_value").decimalValue()
-            append(h(compact(if (storage) budget.divide(BigDecimal(1_048_576)) else budget))).append("</strong>")
-            append("<small>№$ordinal")
-            if (gain != null && status == "partial") append(" · partial")
-            if (gain != null && !point.path("conditions_match").isTrue) append(" · ×")
-            append("</small></span></a>")
+    private fun StringBuilder.overviewResult(summary: JsonNode, point: JsonNode, candidates: Map<String, JsonNode>, report: AnalysisReport?, storage: Boolean) {
+        val ordinal = point.path("ordinal").intValue()
+        append("<article class=\"series-result\" id=\"variant-$ordinal-overview\" data-overview-variant=\"$ordinal\"><p class=\"variant-label muted\">Вариант $ordinal · ")
+            .append(h(budget(point.path("budget_value"), storage))).append("</p><h2>Предлагаемый набор</h2>")
+        when {
+            !usable(point) -> append("<p>Рекомендация отсутствует: пригодный результат не сохранён.</p>")
+            ids(point).isEmpty() -> append("<p>Выбран пустой набор. Новые индексы не предлагаются.</p>")
+            else -> append("<p class=\"recommendation\">").append(ids(point).joinToString(" + ") { id -> "<a href=\"#series-index-catalog\"><code>${h(shortDefinition(candidates[id], candidates.values, "Определение неизвестно"))}</code></a>" }).append("</p>")
         }
-        append("</div><p class=\"series-axis-title\">Бюджет, ").append(if (storage) "MiB" else unit)
-            .append("</p><p class=\"muted\">Равные интервалы обозначают отдельные варианты бюджета. ")
-            .append("Точные значения и статусы — в таблице по нажатию на столбец.</p></article>")
+        append("<p class=\"effect-sentence\">Оценочная стоимость запросов с учётом частот: ")
+        val profiles = if (usable(point)) point.path("metrics").path("profiles").toList() else emptyList()
+        if (profiles.isEmpty()) append("Эффект не определён")
+        else append(profiles.joinToString("; ") { profile -> (if (profiles.size > 1) h(profile.path("profile_id").stringValue()) + " — " else "") + h(effectLabel(profile)) })
+        append(" по сравнению с существующими индексами.</p><p class=\"muted\">").append(h(statusLabel(point.path("status").stringValue())))
+        append(". Рост стоимости: ").append(h(report?.summary?.regressedQueryCount?.let { "$it из ${report.input?.queries?.size ?: report.result.baseline?.costByQueryId?.size ?: "нет данных"} SQL" } ?: "нет данных")).append(".</p>")
+        if (point.path("status").stringValue() == "partial") append("<p class=\"warning-text\">Поиск остановлен досрочно; сохранён промежуточный результат.</p>")
+        append("<div class=\"workload-context\"><strong>Основа вывода</strong><p>")
+        val count = report?.input?.queries?.size ?: summary.path("settings").path("queries").takeIf { it.isArray }?.size()
+        append(count ?: "Нет данных").append(" SQL · профилей частот: ").append(summary.path("settings").path("profiles").size()).append(". ")
+        val provenance = report?.workloadProvenance
+        if (provenance == null) {
+            append(when (summary.path("source").path("workload_source").stringValue()) {
+                "manual_json" -> "Ручной workload.json. Период и охват неизвестны; репрезентативность не подтверждена."
+                "pg_stat_statements" -> "pg_stat_statements. Период, полнота и охват наблюдений не сохранены."
+                else -> "Источник, период и охват неизвестны."
+            })
+        } else {
+            append("pg_stat_statements; завершение поиска не подтверждает репрезентативность.</p><ul class=\"observation-windows\">")
+            for (window in provenance.windows) {
+                val d = java.time.Duration.between(window.startedAt, window.finishedAt)
+                val milliseconds = BigDecimal.valueOf(d.seconds).movePointRight(3) + BigDecimal.valueOf(d.nano.toLong()).movePointLeft(6)
+                append("<li>").append(h(window.profileId)).append(" · ").append(h(window.startedAt.toString())).append(" — ")
+                    .append(h(window.finishedAt.toString())).append(" · ").append(h(compact(milliseconds))).append(" мс · ")
+                    .append(if (window.complete) "полное наблюдение" else "<strong class=\"warning-text\">неполное наблюдение</strong>")
+                    .append(" · выбрано вызовов: ").append(h(window.coverage.selectedCalls?.toString() ?: "нет данных"))
+                    .append(" из ").append(h(window.coverage.availableCalls?.toString() ?: "нет данных")).append(" доступных</li>")
+            }
+            append("</ul><p>")
+        }
+        append("</p></div></article>")
+    }
+
+    private fun StringBuilder.pointsTable(summary: JsonNode, points: List<JsonNode>, candidates: Map<String, JsonNode>, storage: Boolean, interactive: Boolean) {
+        val single = summary.path("settings").path("profiles").size() == 1
+        append("<section id=\"points\"><h2>Что меняется с бюджетом</h2><div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Сравнение бюджетов\"><table class=\"series-table\"><caption>Стоимость с учётом частот · сравнение с существующими индексами</caption><thead><tr><th>Бюджет ")
+            .append(if (storage) "места" else "записи, усл. ед./ч").append("</th><th>Дополнительные индексы</th><th>Изменение стоимости</th><th>Ресурсы и статус</th></tr></thead><tbody>")
+        for (point in points) {
+            val ordinal = point.path("ordinal").intValue()
+            append("<tr id=\"point-$ordinal\" data-status=\"").append(h(point.path("status").stringValue())).append("\"><th scope=\"row\">")
+            if (interactive) append("<button type=\"button\" class=\"variant-button\" data-select-variant=\"$ordinal\" aria-pressed=\"false\">") else append("<span>")
+            append(h(budget(point.path("budget_value"), storage))).append(if (interactive) "</button>" else "</span>")
+            append("<small>Вариант $ordinal</small></th><td>")
+            when { !usable(point) -> append("Нет результата"); ids(point).isEmpty() -> append("Пустой набор · без новых индексов")
+                else -> append(ids(point).joinToString(" + ") { "<a href=\"#series-index-catalog\"><code>${h(shortDefinition(candidates[it], candidates.values, "Определение неизвестно"))}</code></a>" }) }
+            append("</td><td>")
+            if (usable(point)) for (profile in point.path("metrics").path("profiles")) {
+                append("<p data-profile-id=\"").append(h(profile.path("profile_id").stringValue())).append("\" data-gain=\"").append(if (profile.path("gain_percent").isNumber) h(profile.path("gain_percent").decimalValue().toString()) else "").append("\">")
+                if (!single) append(h(profile.path("profile_id").stringValue())).append(" · ")
+                append(h(effectLabel(profile))).append("</p>")
+            } else append("Нет оценки")
+            append("</td><td><p>Место с запасом: ").append(if (usable(point)) h(size(point.path("metrics").path("budget_usage").path("budgeted_bytes"))) else "Нет данных").append("</p>")
+            badge(point.path("status"))
+            if (!point.path("conditions_match").isTrue) append("<p class=\"warning-text\">").append(if (point.path("conditions_match").isFalse) "Условия изменились" else "Сопоставимость не установлена").append("</p>")
+            append("<details><summary>Точные значения и диагностика</summary>")
+            pointDetails(summary, point, storage, single)
+            append("</details></td></tr>")
+        }
+        append("</tbody></table></div></section>")
+    }
+
+    private fun StringBuilder.pointDetails(summary: JsonNode, point: JsonNode, storage: Boolean, single: Boolean) {
+        val ordinal = point.path("ordinal").intValue()
+        append("<dl class=\"values\">")
+        entry("Бюджет варианта", number(point.path("budget_value")) + if (storage) " байт" else "\u00a0write units/ч")
+        val metrics = point.path("metrics")
+        if (usable(point)) {
+            if (single) entry("Отношение к baseline", metric(metrics.path("mean_ratio"))) else {
+                entry("Среднее отношение M", metric(metrics.path("mean_ratio"))); entry("Худшее отношение R", metric(metrics.path("worst_ratio")))
+            }
+            entry("Baseline B_mean", number(metrics.path("baseline_mean_cost"))); entry("Selected C_mean", number(metrics.path("mean_cost")))
+            for (p in metrics.path("profiles")) {
+                val label = p.path("profile_id").stringValue()
+                entry("$label · baseline cost", number(p.path("baseline_cost"))); entry("$label · selected cost", number(p.path("cost"))); entry("$label · снижение cost", effect(p))
+            }
+            val usage = metrics.path("budget_usage"); val limits = summary.path("settings").path("constraints")
+            entry("Оценка HypoPG", number(usage.path("estimated_bytes")) + " байт"); entry("Место с запасом", number(usage.path("budgeted_bytes")) + " байт")
+            entry("Коэффициент запаса", number(usage.path("size_safety_factor")))
+            entry("Лимит места", number(if (storage) point.path("budget_value") else limits.path("storage_budget_bytes")) + " байт")
+            entry("Число индексов / лимит", number(usage.path("index_count")) + " / " + number(limits.path("max_indexes")))
+            entry("Запись, write units/ч", number(usage.path("write_units_per_hour")))
+            val writeLimit = if (storage) limits.path("write_budget_units_per_hour") else point.path("budget_value")
+            entry("Лимит записи", if (writeLimit.isNumber) number(writeLimit) + " write units/ч" else "Лимит отключён")
+        }
+        entry("Статус", point.path("status").stringValue())
+        entry("Условия", when { point.path("conditions_match").isTrue -> "Наблюдаемые условия совпали"; point.path("conditions_match").isFalse -> "Условия изменились"; else -> "Сопоставимость не установлена" })
+        entry("Причины изменения условий", point.path("condition_changes").joinToString { conditionLabel(it.stringValue()) }.ifEmpty { "Нет данных" })
+        entry("Причины остановки", point.path("stop_reasons").joinToString { it.stringValue() }.ifEmpty { "Нет данных" })
+        append("</dl>")
+        if (summary.path("settings").path("table_write_rates").isNull) append("<p>Модель записи отключена; неизвестный расход не равен нулю.</p>")
+        error(point.path("error")); point.path("errors").filter { it != point.path("error") }.forEach { error(it) }
+        append("<p class=\"series-links\">")
+        for (name in listOf("report.html", "report.json", "indexes.sql")) {
+            val path = point.path("artifacts").path(name)
+            if (path.isString && path.stringValue() == "point-%02d/$name".format(Locale.ROOT, ordinal)) append("<a href=\"").append(h(path.stringValue())).append("\">").append(name).append("</a> ")
+        }
+        append("</p>")
     }
 
     private fun compact(value: BigDecimal): String {
-        val rounded = value.setScale(2, RoundingMode.HALF_EVEN)
-        return if (rounded.compareTo(value) == 0 || rounded.signum() == 0 && value.signum() != 0) number(value)
-        else "≈${number(rounded)}"
+        val rounded = value.setScale(1, RoundingMode.HALF_UP)
+        if (rounded.abs() >= BigDecimal("1000000000")) {
+            val symbols = DecimalFormatSymbols(Locale.ROOT).apply { decimalSeparator = ',' }
+            return DecimalFormat("0.#E0", symbols).format(value).replace('E', 'e')
+        }
+        return if (rounded.signum() == 0 && value.signum() != 0) number(value) else number(rounded)
+    }
+    private fun compact(value: JsonNode): String = if (value.isNumber) compact(value.decimalValue()) else "Нет данных"
+    private fun percent(value: BigDecimal): String = if (value.signum() != 0 && value.abs() < BigDecimal("0.05")) {
+        if (value.signum() > 0) "< 0,1%" else "−< 0,1%"
+    } else compact(value) + "%"
+    private fun budget(value: JsonNode, storage: Boolean): String = if (storage) size(value) else compact(value) + "\u00a0ед./ч"
+    private fun size(value: JsonNode): String {
+        if (!value.isNumber) return "Нет данных"
+        val bytes = value.decimalValue()
+        val (divisor, unit) = when {
+            bytes >= BigDecimal(1_073_741_824) -> BigDecimal(1_073_741_824) to "GiB"
+            bytes >= BigDecimal(1_048_576) -> BigDecimal(1_048_576) to "MiB"
+            bytes >= BigDecimal(1024) -> BigDecimal(1024) to "KiB"
+            else -> BigDecimal.ONE to "байт"
+        }
+        return compact(bytes.divide(divisor)) + "\u00a0" + unit
+    }
+    private fun effectLabel(profile: JsonNode): String {
+        val value = profile.path("gain_percent")
+        if (!value.isNumber) return effect(profile)
+        val gain = value.decimalValue()
+        return when {
+            gain.signum() == 0 -> "Без изменения"
+            gain.abs() < BigDecimal("0.05") -> if (gain.signum() > 0) "Снижение менее 0,1%" else "Рост менее 0,1%"
+            gain.signum() > 0 -> "Снижение на ${percent(gain)}"
+            else -> "Рост на ${percent(gain.abs())}"
+        }
+    }
+    private fun shortDefinition(candidate: JsonNode?, candidates: Collection<JsonNode>, fallback: String): String {
+        if (candidate == null) return fallback
+        val name = candidate.path("table").stringValue()
+        val schema = candidate.path("schema").stringValue()
+        val ambiguous = candidates.any { it.path("table").stringValue() == name && it.path("schema").stringValue() != schema }
+        val label = if (ambiguous) "$schema.$name" else name
+        val keys = candidate.path("keys").joinToString(", ") { it.path("column").stringValue() }
+        val include = candidate.path("included_columns").takeIf { it.isArray && !it.isEmpty }
+            ?.joinToString(", ", " INCLUDE (", ")") { it.stringValue() }.orEmpty()
+        return "$label($keys)$include"
+    }
+    private fun StringBuilder.entry(label: String, value: String) {
+        append("<div><dt>").append(h(label)).append("</dt><dd>").append(h(value)).append("</dd></div>")
     }
 
     private fun profile(point: JsonNode, id: String) = point.path("metrics").path("profiles")
@@ -301,22 +315,19 @@ class HtmlBudgetSeriesRenderer {
     private fun metric(value: JsonNode) = if (value.isNull) "Неприменимо" else number(value)
     private fun number(value: JsonNode) = if (value.isNumber) number(value.decimalValue()) else "Нет данных"
     private fun number(value: BigDecimal) = value.stripTrailingZeros().toPlainString().replace('.', ',')
-    private fun position(value: BigDecimal, low: BigDecimal, high: BigDecimal): String =
-        if (low == high) "50" else value.subtract(low).multiply(BigDecimal(100))
-            .divide(high.subtract(low), 8, RoundingMode.HALF_EVEN).stripTrailingZeros().toPlainString()
     private fun StringBuilder.notice(text: String) { append("<p class=\"notice warning\">").append(h(text)).append("</p>") }
     private fun StringBuilder.error(error: JsonNode) {
         if (error.isObject) append("<p class=\"notice error\">").append(h(error.path("code").stringValue()))
             .append(": ").append(h(error.path("message").stringValue())).append("</p>")
     }
+    private fun statusLabel(value: String) = when (value) {
+        "completed" -> "Завершён"; "partial" -> "Частичный результат"; "failed" -> "Ошибка"
+        "skipped" -> "Не рассчитан"; "running" -> "Выполняется"; else -> "Нет данных"
+    }
     private fun StringBuilder.badge(status: JsonNode) {
         val value = status.stringValue()
-        val label = when (value) {
-            "completed" -> "Завершён"; "partial" -> "Частичный результат"; "failed" -> "Ошибка"
-            "skipped" -> "Не рассчитана"; "running" -> "Выполняется"; else -> "Нет данных"
-        }
-        append("<span class=\"badge ").append(if (value in setOf("completed", "partial", "failed")) value else "")
-            .append("\">").append(h(value)).append(" · ").append(label).append("</span>")
+        append("<span class=\"series-status ").append(if (value in setOf("completed", "partial", "failed")) value else "")
+            .append("\">").append(h(statusLabel(value))).append("</span>")
     }
     private fun conditionLabel(value: String) = when (value) {
         "catalog" -> "каталог"; "baseline_costs" -> "baseline cost"; "baseline_plans" -> "планы baseline"

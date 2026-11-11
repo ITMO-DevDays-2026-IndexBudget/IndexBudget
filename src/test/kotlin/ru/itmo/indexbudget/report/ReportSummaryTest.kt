@@ -57,10 +57,10 @@ class ReportSummaryTest {
             assertEquals(series.bestRobust.cost, series.baseline.cost)
         }
         val html = HtmlReportRenderer().render(report)
-        assertTrue(html.contains("Есть регрессии SQL: 1"))
-        assertTrue(html.contains("M = C_mean / B_mean — отношение ожидаемых стоимостей"))
-        assertTrue(html.contains("R = max(C_s / B_s) — худшее отношение среди профилей"))
-        assertTrue(html.contains("-100 %"))
+        assertTrue(html.contains("<dt>Регрессии SQL</dt><dd>1 из 2</dd>"))
+        assertTrue(html.contains("M = C_mean / B_mean"))
+        assertTrue(html.contains("R = max(C_s / B_s)"))
+        assertTrue(html.contains("Рост на 100%"))
     }
 
     @Test
@@ -90,7 +90,7 @@ class ReportSummaryTest {
         assertFalse(json["write_limit_enabled"].booleanValue())
         assertTrue(json["budget_usage"]["write_units_per_hour"].isNull)
         assertEquals(0, json["budget_limits"]["storage_budget_bytes"].intValue())
-        assertTrue(HtmlReportRenderer().render(report).contains("Неприменимо: нулевой baseline"))
+        assertTrue(HtmlReportRenderer().render(report).contains("Процент неприменим: нулевой baseline"))
 
         val withWrites = input.copy(tableWriteRates = mapOf("public.records" to TableWriteRates(0.0, 0.0, 0.0)),
             constraints = input.constraints.copy(writeBudgetUnitsPerHour = 0.0))
@@ -202,19 +202,20 @@ class ReportSummaryTest {
         val source = ContractFixtures.report()
         val report = builder.build(input.copy(provenance = metadata), source.candidates, source.result, RunContext())
         val provenanceHtml = HtmlReportRenderer().render(report).substringAfter("id=\"provenance\"").substringBefore("</section>")
-        val rows = Regex("<tr>(.*?)</tr>").findAll(provenanceHtml).map { row ->
+        fun rowsIn(fragment: String) = Regex("<tr>(.*?)</tr>").findAll(fragment).map { row ->
             Regex("<t[hd][^>]*>(.*?)</t[hd]>").findAll(row.groupValues[1]).map { it.groupValues[1] }.toList()
         }.toList()
+        val rows = rowsIn(provenanceHtml)
         assertEquals(listOf(
-            listOf("normal", "2026-11-10T08:00:00Z", "2026-11-10T09:00:00Z", "Неполное", "Нет данных / 0"),
-            listOf("campaign", "2026-11-10T10:00:00Z", "2026-11-10T12:00:00Z", "Полное", "12 / 34"),
+            listOf("normal", "2026-11-10T08:00:00Z", "2026-11-10T09:00:00Z", "60\u00a0мин", "Неполное", "Нет данных / 0"),
+            listOf("campaign", "2026-11-10T10:00:00Z", "2026-11-10T12:00:00Z", "120\u00a0мин", "Полное", "12 / 34"),
             listOf("normal", "0", "Нет данных"),
             listOf("campaign", "56", "78"),
         ), rows.filter { it.firstOrNull() in setOf("normal", "campaign") })
         assertEquals(listOf(
-            listOf("records_by_group", "Репрезентативные литералы пользователя"),
-            listOf("records_by_value", "Исходный SQL с литералами"),
-        ), rows.filter { it.firstOrNull() in setOf("records_by_group", "records_by_value") })
+            listOf("SQL 1", "Репрезентативные литералы пользователя"),
+            listOf("SQL 2", "Исходный SQL с литералами"),
+        ), rowsIn(provenanceHtml.substringAfter("<h3>Примеры SQL</h3>")).filter { it.firstOrNull() in setOf("SQL 1", "SQL 2") })
     }
 
     @Test

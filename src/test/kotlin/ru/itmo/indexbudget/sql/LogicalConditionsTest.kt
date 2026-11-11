@@ -94,11 +94,20 @@ class LogicalConditionsTest {
         val escapedId = "q&lt;&amp;&quot;&#39;&gt;"
         assertFalse(html.contains(specialId))
         for ((candidateId, origins) in expected) {
-            val row = Regex("<tr>.*?</tr>", RegexOption.DOT_MATCHES_ALL).findAll(html)
-                .map { it.value }.single { it.contains("$candidateId /") }
-            val branchCell = Regex("<td>.*?</td>", RegexOption.DOT_MATCHES_ALL).findAll(row).last().value
-            assertEquals("<td>" + (origins.singleOrNull()?.let { "$escapedId: ${it.second}" }
-                ?: "Нет OR-происхождения") + "</td>", branchCell)
+            if (candidateId in evaluation.candidateIds) {
+                val selectedCard = Regex("<article class=\"index-card\" data-selected-index=\"$candidateId\">.*?</article>",
+                    RegexOption.DOT_MATCHES_ALL).findAll(html).single().value
+                val branchValues = Regex("<dt>Ветви условий</dt><dd>(.*?)</dd>").findAll(selectedCard)
+                    .map { it.groupValues[1] }.toList()
+                assertEquals(origins.map { "$escapedId: ${it.second}" }, branchValues)
+                assertFalse(html.contains("$candidateId /"), "Selected candidates have one detailed catalog entry")
+            } else {
+                val row = Regex("<tr>.*?</tr>", RegexOption.DOT_MATCHES_ALL).findAll(html)
+                    .map { it.value }.single { it.contains("$candidateId /") }
+                val branchCell = Regex("<td>.*?</td>", RegexOption.DOT_MATCHES_ALL).findAll(row).last().value
+                assertEquals("<td>" + (origins.singleOrNull()?.let { "$escapedId: ${it.second}" }
+                    ?: "Нет OR-происхождения") + "</td>", branchCell)
+            }
         }
         val card = Regex("<article class=\"index-card\" data-selected-index=\"${id("a")}\">.*?</article>",
             RegexOption.DOT_MATCHES_ALL).find(html)?.value

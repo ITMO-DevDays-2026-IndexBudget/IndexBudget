@@ -17,60 +17,57 @@ class HtmlRecommendationTest {
         val overview = section(html, "overview")
         val selected = report.candidates.candidates.single { it.id in report.summary.selectedIndexIds.orEmpty() }
         assertTrue(overview.contains(selected.definition.table.name + "("))
-        assertTrue(overview.contains("Есть регрессии SQL: 1"))
+        assertTrue(overview.contains("<dt>Регрессии SQL</dt><dd>1 из 2</dd>"))
         assertTrue(overview.contains("href=\"#queries\""))
         assertFalse(overview.contains("Полностью оценённые наборы"))
         assertTrue(section(html, "search").contains("Полностью оценённые наборы"))
         val queries = section(html, "queries")
-        assertTrue(queries.indexOf(">records_by_value</a>") < queries.indexOf(">records_by_group</a>"))
-        assertTrue(queries.contains("href=\"#query-1\">records_by_value"))
+        assertTrue(queries.indexOf("href=\"#query-1\"") < queries.indexOf("href=\"#query-0\""))
+        assertTrue(queries.contains("href=\"#query-1\">SQL 2"))
         assertTrue(queries.contains("id=\"query-1\""))
         assertTrue(section(html, "indexes").contains("не измеренную индивидуальную пользу"))
     }
 
     @Test
-    fun `chart values match JSON and supplied ratios instead of recalculating costs`() {
+    fun `profile table preserves supplied values without reconstructing domain metrics`() {
         val source = HtmlReportFixtures.completed()
         val result = source.result as SearchResult.Completed
         val selected = result.bestRobust.copy(metrics = result.bestRobust.metrics.copy(
             meanRatio = 0.3, worstRatio = 2.0,
             profiles = result.bestRobust.metrics.profiles.mapIndexed { index, profile ->
-                profile.copy(ratio = if (index == 0) 0.25 else 2.0)
+                profile.copy(ratio = if (index == 0) 0.25 else 2.0, gainPercent = if (index == 0) 75.0 else -100.0)
             }))
         val report = source.copy(result = result.copy(bestRobust = selected))
         val html = renderer.render(report)
         val json = jacksonObjectMapper().readTree(JsonReportWriter().render(report))
         val profiles = section(html, "profiles")
-        assertTrue(profiles.contains("style=\"width:12.5%\"")) // ratio 0.25 on a common 0..2 scale
-        assertTrue(profiles.contains("class=\"chart-fill regressed\" style=\"width:100%\""))
-        assertTrue(profiles.contains("class=\"chart-fill baseline\" style=\"width:50%\""))
-        val labels = Regex("<strong>([0-9]+)</strong>").findAll(profiles).map { it.groupValues[1].toDouble() }.toList()
-        assertEquals(listOf(100.0, 25.0, 100.0, 200.0), labels)
-        json["profile_comparisons"].forEachIndexed { index, series ->
-            assertEquals(series["selected"]["ratio"].doubleValue() * 100, labels[index * 2 + 1])
+        assertFalse(profiles.contains("chart-fill"))
+        assertTrue(profiles.contains("Снижение на 75%"))
+        assertTrue(profiles.contains("Рост на 100%"))
+        json["profile_comparisons"].forEach { profile ->
+            val row = Regex("<tr data-profile-id=\"${profile["id"].asString()}\"[^>]*>").find(profiles)?.value
+            assertNotNull(row)
+            assertTrue(requireNotNull(row).contains("data-baseline=\"${profile["selected"]["baseline_cost"].doubleValue()}\""))
+            assertTrue(row.contains("data-cost=\"${profile["selected"]["cost"].doubleValue()}\""))
+            assertTrue(row.contains("data-gain=\"${profile["selected"]["gain_percent"].doubleValue()}\""))
         }
-        val comparison = section(html, "comparison")
-        assertTrue(comparison.contains("style=\"width:15%\"")) // saved M=0.3, not cost/baseline
-        assertTrue(comparison.contains("<strong>30</strong>"))
-        assertTrue(comparison.contains("Общая шкала для обоих наборов"))
+        assertTrue(section(html, "comparison").contains("<dt>Среднее отношение M</dt><dd>0,3</dd>"))
     }
 
     @Test
-    fun `coincident sets render once while zero baseline and failure have no invented bars`() {
-        val same = section(renderer.render(HtmlReportFixtures.completed(sameIncumbents = true)), "comparison")
+    fun `coincident sets render once and unavailable effects remain explicit`() {
+        val same = renderer.render(HtmlReportFixtures.completed(sameIncumbents = true))
         assertEquals(1, Regex("data-configuration=").findAll(same).count())
-        assertTrue(same.contains("Robust = Mean"))
+        assertTrue(same.contains("<summary>Оба критерия выбрали один набор</summary>"))
         for (report in listOf(HtmlReportFixtures.zeroBaseline(), ContractFixtures.report(status = RunStatus.FAILED))) {
             val html = renderer.render(report)
-            val graphs = section(html, "profiles") + section(html, "comparison")
-            assertFalse(graphs.contains("class=\"chart-fill"))
-            assertFalse(graphs.contains("<strong>100</strong>"))
-            assertTrue(graphs.contains(if (report.result.status == RunStatus.FAILED) "Нет данных" else "Неприменимо: нулевой baseline"))
+            assertFalse(html.contains("class=\"chart-fill"))
+            assertTrue(html.contains(if (report.result.status == RunStatus.FAILED) "Нет данных" else "нулевой baseline"))
         }
     }
 
     @Test
-    fun `budget bars keep estimates reserve disabled missing and zero limits distinct`() {
+    fun `resource table distinguishes estimates reserve disabled missing and zero limits`() {
         val source = HtmlReportFixtures.completed()
         val result = source.result as SearchResult.Completed
         val input = requireNotNull(source.input)
@@ -78,21 +75,24 @@ class HtmlRecommendationTest {
             budgetUsage = BudgetUsage(25, 30, 5.0, 1)))
         val report = source.copy(input = input.copy(constraints = Constraints(100, 10.0)),
             result = result.copy(bestRobust = selected))
-        val budgets = section(renderer.render(report), "indexes").substringBefore("<article")
-        for (width in listOf(25, 30, 50)) assertTrue(budgets.contains("style=\"width:$width%\""))
+        val budgets = section(renderer.render(report), "indexes")
+        assertTrue(budgets.contains("30\u00a0байт"))
+        assertTrue(budgets.contains("HypoPG: 25\u00a0байт"))
+        assertTrue(budgets.contains("100\u00a0байт"))
+        assertTrue(budgets.contains("5 условных ед./ч"))
+        assertTrue(budgets.contains("10 условных ед./ч"))
         val disabled = section(renderer.render(report.copy(input = input.copy(constraints = Constraints(100, null)))), "indexes")
-        assertTrue(disabled.contains("Лимит отключён · заполнение неприменимо"))
+        assertTrue(disabled.contains("Бюджет записи отключён"))
         val zero = section(renderer.render(HtmlReportFixtures.zeroBaseline().let { it.copy(
             input = requireNotNull(it.input).copy(constraints = Constraints(0, 0.0))) }), "indexes")
         assertTrue(zero.contains("Нулевой лимит · расход 0"))
-        assertFalse(zero.contains("style=\"width:"))
         val failed = section(renderer.render(ContractFixtures.report(status = RunStatus.FAILED)), "indexes")
-        assertTrue(failed.contains("Нет данных · заполнение неизвестно"))
+        assertTrue(failed.contains("Нет данных"))
         assertFalse(failed.contains("style=\"width:"))
     }
 
     @Test
-    fun `extreme finite ratios do not produce infinite labels or invalid CSS`() {
+    fun `extreme finite ratios retain finite exact labels`() {
         val source = HtmlReportFixtures.completed()
         val result = source.result as SearchResult.Completed
         val report = source.copy(result = result.copy(bestRobust = result.bestRobust.copy(
@@ -100,9 +100,6 @@ class HtmlRecommendationTest {
         val html = renderer.render(report)
         assertFalse(html.contains("Infinity"))
         assertFalse(html.contains("NaN"))
-        Regex("style=\"width:([^%]+)%\"").findAll(html).forEach {
-            assertTrue(it.groupValues[1].toDouble() in 0.0..100.0)
-        }
     }
 
     private fun section(html: String, id: String): String =
