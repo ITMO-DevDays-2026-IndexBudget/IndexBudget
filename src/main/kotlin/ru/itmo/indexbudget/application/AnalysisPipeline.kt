@@ -88,7 +88,7 @@ class AnalysisPipeline(
                     SearchDiagnostics(stopReasons = listOf(earlyStop)))
             } else {
                 context.enterPhase(AnalysisPhase.CANDIDATES)
-                candidateBatch = candidateGenerator.generate(resolved, catalog, context)
+                candidateBatch = candidateGenerator.generate(resolved, catalog, context, evaluatedBaseline)
                 context.checkDeadline()
                 val searchCandidates = prepareCandidateSizes(candidateBatch, session, input, context) { preparedBatch ->
                     candidateBatch = preparedBatch
@@ -164,6 +164,7 @@ class AnalysisPipeline(
             val report = reportBuilder.build(input, candidateBatch, finalResult, context)
             require(report.runId == context.runId && report.inputHash == context.inputHash &&
                 report.analysisMode == context.analysisMode &&
+                report.candidateRanking == input.candidateRanking &&
                 report.result == finalResult && report.input == input) {
                 "Report must describe this invocation and saved result"
             }

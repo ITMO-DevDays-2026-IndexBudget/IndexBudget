@@ -291,7 +291,8 @@ class IndexBudgetCliTest {
         assertTrue(result.progress.first().startsWith("stage=validation "))
         assertTrue(result.progress.contains("stage=baseline explain_attempts=2 completed_sets=1 cache_hits=1"))
         assertEquals("stage=finished status=completed analysis_mode=normal explain_attempts=2 " +
-            "evaluation_attempts=1 completed_sets=1 cache_hits=1 repair_attempts=0 stop_reasons=SEARCH_COMPLETE",
+            "evaluation_attempts=1 completed_sets=1 cache_hits=1 repair_attempts=0 stop_reasons=SEARCH_COMPLETE " +
+            "candidate_ranking=frequency",
             result.progress.last())
         assertFalse(result.progress.any { '%' in it })
     }

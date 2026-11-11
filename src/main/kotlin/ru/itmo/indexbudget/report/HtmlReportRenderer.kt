@@ -249,6 +249,8 @@ class HtmlReportRenderer : ReportRenderer {
     private fun StringBuilder.search(report: AnalysisReport) {
         section("search", "06", "Границы поиска", "Что было исследовано и где сработали ограничения")
         append("<p>Режим анализа: ").append(h(modeName(report.analysisMode))).append(".</p>")
+        append("<p>Рейтинг shortlist: ").append(h(rankingName(report.candidateRanking)))
+            .append(". Рейтинг задаёт порядок сценарных очередей; критерии поиска и бюджеты сохраняются.</p>")
         val search = report.result.diagnostics
         val candidates = report.candidates.diagnostics
         val stats = search.statistics
@@ -328,6 +330,7 @@ class HtmlReportRenderer : ReportRenderer {
         entry("Schema / spec", "${report.schemaVersion} / ${report.specVersion}")
         entry("Статус", report.result.status.name.lowercase(Locale.ROOT))
         entry("Режим анализа", modeName(report.analysisMode))
+        entry("Рейтинг shortlist", rankingName(report.candidateRanking))
         entry("Причины остановки", report.result.diagnostics.stopReasons.joinToString { it.name }.ifEmpty { "Нет данных" })
         entry("Завершённые этапы", report.result.diagnostics.completedPhases.joinToString(" → ") { it.name.lowercase(Locale.ROOT) }.ifEmpty { "Нет завершённых этапов" })
         entry("Приложение", report.environment.applicationVersion)
@@ -382,6 +385,11 @@ class HtmlReportRenderer : ReportRenderer {
     private fun StringBuilder.entry(label: String, value: String) { append("<div><dt>").append(h(label)).append("</dt><dd>").append(h(value)).append("</dd></div>") }
     private fun StringBuilder.pre(value: String) { append("<pre><code>").append(h(value)).append("</code></pre>") }
     private fun StringBuilder.text(value: String) { append(h(value)) }
+
+    private fun rankingName(ranking: CandidateRanking): String = ranking.wireName + " · " + when (ranking) {
+        CandidateRanking.FREQUENCY -> "Нормированные частоты"
+        CandidateRanking.BASELINE_COST -> "Частоты × baseline cost · экспериментальный"
+    }
 
     private fun modeName(mode: AnalysisMode): String = mode.name.lowercase(Locale.ROOT) + " · " + when (mode) {
         AnalysisMode.FAST -> "Быстрый"
@@ -462,6 +470,7 @@ class HtmlReportRenderer : ReportRenderer {
         CandidateReason.INCLUDE_VARIANT_LIMIT -> "Лимит INCLUDE-вариантов"
         CandidateReason.LOCAL_CANDIDATE_LIMIT -> "Локальный лимит"
         CandidateReason.GLOBAL_CANDIDATE_LIMIT -> "Общий лимит"
+        CandidateReason.ZERO_BASELINE_COST_SUPPORT -> "Нулевой вклад baseline cost"
         CandidateReason.STORAGE_BUDGET -> "Превышение бюджета места"
         CandidateReason.WRITE_BUDGET -> "Превышение бюджета записи"
         CandidateReason.MAX_INDEXES -> "Достигнут лимит индексов"

@@ -4,6 +4,7 @@ import org.springframework.stereotype.Component
 import ru.itmo.indexbudget.domain.AnalysisError
 import ru.itmo.indexbudget.domain.AnalysisException
 import ru.itmo.indexbudget.domain.AnalysisMode
+import ru.itmo.indexbudget.domain.CandidateRanking
 import ru.itmo.indexbudget.domain.Constraints
 import ru.itmo.indexbudget.domain.ErrorCode
 import ru.itmo.indexbudget.domain.Objective
@@ -40,6 +41,7 @@ class WorkloadReader {
         path: Path,
         context: RunContext? = null,
         analysisModeOverride: AnalysisMode? = null,
+        candidateRankingOverride: CandidateRanking? = null,
     ): WorkloadInput {
         // Until the JSON mode is known, allow the largest preset while reading/parsing the source.
         // The clock is never restarted: selecting the actual mode below immediately checks its
@@ -55,6 +57,7 @@ class WorkloadReader {
         }
         objectNode(root, Location("workload"), setOf(
             "schema_version", "objective", "queries", "profiles", "constraints", "table_write_rates", "analysis_mode",
+            "candidate_ranking",
         ))
         val requestedMode = when (val value = root.get("analysis_mode")) {
             null -> AnalysisMode.NORMAL
@@ -67,6 +70,14 @@ class WorkloadReader {
         }
         val analysisMode = analysisModeOverride ?: requestedMode
         context?.selectAnalysisMode(analysisMode)
+        val requestedRanking = when (val value = root.get("candidate_ranking")) {
+            null -> CandidateRanking.FREQUENCY
+            else -> {
+                val name = string(value, Location("candidate_ranking"))
+                CandidateRanking.entries.firstOrNull { it.wireName == name }
+                    ?: invalid(Location("candidate_ranking"), "Expected frequency or baseline_cost.")
+            }
+        }
         val objective = when (val value = root.get("objective")) {
             null -> Objective.ROBUST
             else -> when (string(value, Location("objective"))) {
@@ -98,7 +109,7 @@ class WorkloadReader {
             context.recordInputHash(HexFormat.of().formatHex(digest))
         }
         return WorkloadInput(queries, profiles, constraints, objective = objective, tableWriteRates = writeRates,
-            analysisMode = analysisMode)
+            analysisMode = analysisMode, candidateRanking = candidateRankingOverride ?: requestedRanking)
     }
 
     /** Sort JSON objects only: array order, string values and absent fields retain their meaning. */

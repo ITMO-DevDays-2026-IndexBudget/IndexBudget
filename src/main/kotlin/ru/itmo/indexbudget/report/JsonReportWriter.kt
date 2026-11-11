@@ -25,6 +25,7 @@ class JsonReportWriter {
             "environment" to environment(report.environment),
             "status" to result.status.name.lowercase(),
             "analysis_mode" to report.analysisMode.name.lowercase(),
+            "candidate_ranking" to report.candidateRanking.wireName,
             "selected_objective" to result.selectedObjective.name.lowercase(),
             "comparison_scope" to report.comparisonScope.name.lowercase(),
             "incumbents_coincide" to report.incumbentsCoincide,
