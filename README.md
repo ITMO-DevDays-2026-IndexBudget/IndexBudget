@@ -56,6 +56,16 @@ UNSUPPORTED_SCHEMA_VERSION: {"code":"UNSUPPORTED_SCHEMA_VERSION","message":"Expe
 
 Коды выхода MVP: `0` — completed/help/version, `2` — невалидный или неподдержанный вход, `3` — partial с сохранённым результатом, `1` — failed. CLI переводит результат подключённого pipeline в эти коды; в текущей сборке доступны help/version, валидация и явный отказ из-за отсутствующих компонентов анализа. Ошибки полей дают `INVALID_INPUT` или `INVALID_WRITE_PROFILE` с кодом 2; переполнение суммы весов и потеря положительного числа при представлении или нормировании дают `NUMERIC_ERROR` с кодом 1. Ошибка доступа к output-dir даёт `EXPORT_FAILED` с кодом 1.
 
+### Поддержанный SQL
+
+Поднабор WHERE включает AND, сравнения, `IN` с 1–256 литералами, обычный положительный
+`BETWEEN`, `IS NULL` и `IS NOT NULL`. Каждый элемент IN, обе границы BETWEEN и null-test
+участвуют в общем лимите сложности 256 вместе с JOIN. Пример для таблицы demo:
+[workload-v2-predicates.json](examples/workload-v2-predicates.json). SQL и NULL передаются
+планировщику без переписывания; OR, NOT IN/NOT BETWEEN, подзапросы и выражения вместо
+колонки/литерала в новых формах пока отклоняются. Подробности — в
+[спецификации](IndexBudget-spec-v0.2.md#поддержанный-sql-и-каталог).
+
 ## Структура и параллельная работа
 
 Один Gradle-проект с пакетами `ru.itmo.indexbudget`:

@@ -1,14 +1,21 @@
 package ru.itmo.indexbudget.domain
 
 enum class PredicateSource { WHERE, JOIN }
-enum class ComparisonOperator { EQUAL, LESS_THAN, LESS_THAN_OR_EQUAL, GREATER_THAN, GREATER_THAN_OR_EQUAL }
+enum class ComparisonOperator {
+    EQUAL, LESS_THAN, LESS_THAN_OR_EQUAL, GREATER_THAN, GREATER_THAN_OR_EQUAL,
+    IN, BETWEEN, IS_NULL, IS_NOT_NULL;
 
-/** A null [rightColumn] denotes a literal; its exact text remains in the original SQL. */
+    val equalityFeature: Boolean get() = this == EQUAL || this == IN || this == IS_NULL
+}
+
+/** Binary literals and new scalar forms have no [rightColumn]; exact values remain in original SQL. */
 data class ResolvedPredicate(
     val leftColumn: ColumnRef,
     val operator: ComparisonOperator,
     val source: PredicateSource,
     val rightColumn: ColumnRef? = null,
+    /** New scalar forms keep one feature, not an expansion into fictitious AND comparisons. */
+    val literalCount: Int? = null,
 )
 
 data class OrderByColumn(

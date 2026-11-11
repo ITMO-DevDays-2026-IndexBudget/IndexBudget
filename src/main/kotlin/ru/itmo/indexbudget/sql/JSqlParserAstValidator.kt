@@ -20,6 +20,10 @@ import net.sf.jsqlparser.expression.operators.relational.GreaterThanEquals
 import net.sf.jsqlparser.expression.operators.relational.MinorThan
 import net.sf.jsqlparser.expression.operators.relational.MinorThanEquals
 import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList
+import net.sf.jsqlparser.expression.operators.relational.InExpression
+import net.sf.jsqlparser.expression.operators.relational.Between
+import net.sf.jsqlparser.expression.operators.relational.IsNullExpression
+import net.sf.jsqlparser.expression.operators.relational.SupportsOldOracleJoinSyntax
 import net.sf.jsqlparser.parser.Node
 import net.sf.jsqlparser.schema.Column
 import net.sf.jsqlparser.schema.Table
@@ -85,7 +89,7 @@ internal class JSqlParserAstValidator(private val queryId: String, private val c
         if (comparisonCount > MAX_COMPARISONS) {
             fail(
                 ErrorCode.INPUT_LIMIT_EXCEEDED,
-                "WHERE and JOIN conditions must contain at most 256 comparisons.",
+                "WHERE and JOIN exceed 256 complexity units: comparison/null-test = 1, IN = item count, BETWEEN = 2.",
             )
         }
     }
@@ -167,6 +171,34 @@ internal class JSqlParserAstValidator(private val queryId: String, private val c
             }
             is AndExpression -> validateCondition(expression.leftExpression, joinCondition) +
                 validateCondition(expression.rightExpression, joinCondition)
+            is InExpression -> {
+                requireScalarWhere(joinCondition, expression.leftExpression, expression)
+                if (expression.isNot || expression.isGlobal) {
+                    fail(ErrorCode.UNSUPPORTED_SQL, "Only positive IN with a literal list is supported.")
+                }
+                val values = expression.rightExpression as? ParenthesedExpressionList<*>
+                    ?: fail(ErrorCode.UNSUPPORTED_SQL, "IN requires a parenthesized literal list, not a subquery.")
+                if (values.isEmpty()) fail(ErrorCode.UNSUPPORTED_SQL, "IN requires at least one literal.")
+                if (values.size > MAX_COMPARISONS) fail(ErrorCode.INPUT_LIMIT_EXCEEDED, "IN supports at most 256 literals.")
+                for (value in values) validateScalarLiteral(value)
+                values.size
+            }
+            is Between -> {
+                requireScalarWhere(joinCondition, expression.leftExpression, expression)
+                if (expression.isNot || expression.isUsingSymmetric || expression.isUsingAsymmetric) {
+                    fail(ErrorCode.UNSUPPORTED_SQL, "Only plain positive BETWEEN is supported.")
+                }
+                validateScalarLiteral(expression.betweenExpressionStart)
+                validateScalarLiteral(expression.betweenExpressionEnd)
+                2
+            }
+            is IsNullExpression -> {
+                requireScalarWhere(joinCondition, expression.leftExpression, expression)
+                if (expression.isUseIsNull || expression.isUseNotNull) {
+                    fail(ErrorCode.UNSUPPORTED_SQL, "Use IS NULL or IS NOT NULL, not dialect null-test shortcuts.")
+                }
+                1
+            }
             is EqualsTo, is MinorThan, is MinorThanEquals, is GreaterThan, is GreaterThanEquals -> {
                 val comparison = expression
                 if (joinCondition && comparison !is EqualsTo) {
@@ -177,6 +209,23 @@ internal class JSqlParserAstValidator(private val queryId: String, private val c
             }
             else -> fail(ErrorCode.UNSUPPORTED_SQL, "Only AND-connected supported comparisons are allowed.")
         }
+    }
+
+    private fun requireScalarWhere(join: Boolean, left: Expression, modifiers: SupportsOldOracleJoinSyntax) {
+        if (join || left !is Column) {
+            fail(ErrorCode.UNSUPPORTED_SQL, "IN, BETWEEN and null tests require a column in WHERE; JOIN remains column equality.")
+        }
+        if (modifiers.oldOracleJoinSyntax != SupportsOldOracleJoinSyntax.NO_ORACLE_JOIN ||
+            modifiers.oraclePriorPosition != SupportsOldOracleJoinSyntax.NO_ORACLE_PRIOR ||
+            left.oldOracleJoinSyntax != SupportsOldOracleJoinSyntax.NO_ORACLE_JOIN) {
+            fail(ErrorCode.UNSUPPORTED_SQL, "Oracle predicate modifiers are not supported.")
+        }
+        validateColumn(left)
+    }
+
+    private fun validateScalarLiteral(value: Expression) {
+        context.checkDeadline()
+        if (!isSupportedLiteral(value)) fail(ErrorCode.UNSUPPORTED_SQL, "Predicate values must be supported scalar literals.")
     }
 
     private fun validateComparison(
