@@ -10,6 +10,9 @@ import ru.itmo.indexbudget.fixtures.withSqlSemantics
 import ru.itmo.indexbudget.fixtures.ContractFixtures
 import ru.itmo.indexbudget.application.WorkloadReader
 import java.nio.file.Path
+import ru.itmo.indexbudget.report.DefaultReportBuilder
+import ru.itmo.indexbudget.report.JsonReportWriter
+import ru.itmo.indexbudget.report.HtmlReportRenderer
 
 class ScalarPredicatesTest {
     private val analyzer = JSqlParserSqlAnalyzer()
@@ -19,6 +22,40 @@ class ScalarPredicatesTest {
         CatalogColumn("value", "int4", defaultOperatorClass = "pg_catalog.int4_ops"),
         CatalogColumn("Status", "text", defaultOperatorClass = "pg_catalog.text_ops"),
     ))), searchPath = listOf("pg_catalog", "public")).withSqlSemantics()
+
+    @Test
+    fun `json null tests keep full SQL and exclude only unindexable variants`() {
+        val snapshot = catalog.copy(tables = catalog.tables.map { it.copy(columns = it.columns + CatalogColumn("payload", "json")) })
+        for ((nullTest, rejected) in listOf("IS NULL" to 3, "IS NOT NULL" to 2)) {
+            val sql = "SELECT id FROM records WHERE payload $nullTest AND id = 1"
+            val workload = resolve(sql, snapshot)
+            val result = ProfileAwareCandidateGenerator().generate(workload, snapshot, RunContext())
+            assertEquals(sql, workload.queries.single().sql)
+            assertEquals(listOf("id"), result.candidates.single().definition.keys.map { it.column.name })
+            assertEquals(2, result.diagnostics.localScopes.single().retainedColumns)
+            assertEquals(rejected, result.diagnostics.localScopes.single().unindexableVariants)
+            assertEquals(1, result.diagnostics.localScopes.single().deduplicatedDefinitions)
+            val decision = result.diagnostics.decisions.single()
+            assertEquals(CandidateReason.NO_BTREE_OPERATOR_CLASS, decision.reason)
+            assertEquals("q", decision.queryId)
+            assertEquals(table, decision.table)
+            assertEquals("payload", decision.details["column"])
+            assertEquals(rejected.toString(), decision.details["affected_variants"])
+            assertNull(decision.candidateId)
+            assertEquals(WarningCode.CANDIDATE_REJECTED, result.diagnostics.warnings.single().code)
+            assertNull(result.candidates.single().estimatedBytes)
+            val baseline = EvaluationResult(emptyList(), mapOf("q" to 1.0), mapOf("q" to ExplainPlan("{}")))
+            val metrics = MetricsCalculatorImpl().calculate(workload.input, baseline, baseline, BudgetUsage(0, 0, null, 0))
+            val empty = EvaluatedConfiguration(baseline, metrics)
+            val search = SearchResult.Completed(workload.input.objective, baseline, empty, empty)
+            val report = DefaultReportBuilder().build(workload.input, result, search, RunContext())
+            assertTrue(JsonReportWriter().render(report).contains("NO_BTREE_OPERATOR_CLASS"))
+            assertTrue(JsonReportWriter().render(report).contains("unindexable_variants"))
+            assertTrue(HtmlReportRenderer().render(report).contains("Нет подходящего B-tree opclass"))
+            val onlyJson = resolve("SELECT id FROM records WHERE payload $nullTest", snapshot)
+            assertTrue(ProfileAwareCandidateGenerator().generate(onlyJson, snapshot, RunContext()).candidates.isEmpty())
+        }
+    }
 
     @Test
     fun `documented example remains valid input and feeds the real shortlist generator`() {

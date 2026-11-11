@@ -5,10 +5,13 @@ import ru.itmo.indexbudget.domain.*
 /** A single scope after canonical deduplication and before the local limit in #12. */
 data class CanonicalCandidateScope(
     val candidates: List<IndexCandidate>,
-    /** Includes structures subsequently excluded as exact existing duplicates. */
+    /** Indexable canonical structures, including ones subsequently excluded as exact existing duplicates. */
     val deduplicatedDefinitions: Int,
-    /** Includes the incoming column-limit decisions and exact duplicate decisions. */
+    /** Includes column limits, unindexable-column exclusions and exact existing duplicates. */
     val decisions: List<CandidateDecision>,
+    val warnings: List<AnalysisWarning> = emptyList(),
+    /** Actual enumerated variants skipped before canonicalization, not a count of canonical IDs. */
+    val unindexableVariants: Int = 0,
 )
 
 /** One instance per run; no estimates, SQL execution or shortlist policy. */
@@ -34,30 +37,47 @@ class BtreeCandidateCanonicalizer(
     private val renderer = PostgresDdlRenderer()
 
     fun canonicalize(definition: IndexDefinition): IndexDefinition {
+        val resolved = resolveDefaults(definition)
+        if (resolved.keys.any { it.operatorClass == null }) catalogError("Default B-tree operator class is unavailable")
+        return CanonicalIndex.normalize(resolved).also { context.checkDeadline() }
+    }
+
+    private fun resolveDefaults(definition: IndexDefinition): IndexDefinition {
         context.checkDeadline()
+        require(definition.method == "btree" && !definition.unique && definition.keys.size in 1..2 &&
+            definition.keys.map { it.column }.distinct().size == definition.keys.size) { "Expected a supported B-tree definition" }
         val table = tables[definition.table] ?: catalogError("Candidate table is absent from catalog")
         if (table.kind != TableKind.ORDINARY) catalogError("Candidate requires an ordinary table")
         val resolved = definition.copy(keys = definition.keys.map { key ->
             context.checkDeadline()
+            require(key.column.table == table.ref) { "Index key must belong to its table" }
             val column = columns.getValue(table.ref)[key.column.name]
                 ?: catalogError("Candidate column is absent from catalog")
             key.copy(
                 collation = key.collation ?: column.collation,
-                operatorClass = key.operatorClass ?: column.defaultOperatorClass
-                    ?: catalogError("Default B-tree operator class is unavailable"),
+                operatorClass = key.operatorClass ?: column.defaultOperatorClass,
             )
         })
-        return CanonicalIndex.normalize(resolved).also { context.checkDeadline() }
+        return resolved.also { context.checkDeadline() }
     }
 
     fun canonicalize(scope: CandidateScope): CanonicalCandidateScope {
         context.checkDeadline()
         val grouped = linkedMapOf<IndexDefinition, IndexCandidate>()
+        val unindexableColumns = linkedMapOf<ColumnRef, Int>()
+        var unindexableVariants = 0
         for (variant in scope.variants) {
             context.checkDeadline()
             require(variant.definition.table == scope.table) { "Variant must belong to its scope" }
             require(scope.queryId in variant.sourceQueryIds) { "Variant must retain its source query" }
-            val definition = canonicalize(variant.definition)
+            val resolved = resolveDefaults(variant.definition)
+            val missing = resolved.keys.filter { it.operatorClass == null }
+            if (missing.isNotEmpty()) {
+                unindexableVariants++
+                for (key in missing) unindexableColumns[key.column] = (unindexableColumns[key.column] ?: 0) + 1
+                continue
+            }
+            val definition = CanonicalIndex.normalize(resolved)
             val candidate = IndexCandidate(
                 id = CanonicalIndex.id(definition),
                 definition = definition,
@@ -69,6 +89,19 @@ class BtreeCandidateCanonicalizer(
         }
         val existing = existingByTable.getOrPut(scope.table) { existingDefinitions(scope.table) }
         val decisions = scope.decisions.toMutableList()
+        for ((column, count) in unindexableColumns.toSortedMap(compareBy { it.name })) {
+            context.checkDeadline()
+            decisions += CandidateDecision(CandidateReason.NO_BTREE_OPERATOR_CLASS,
+                queryId = scope.queryId, table = scope.table, phase = AnalysisPhase.CANDIDATES,
+                details = mapOf("column" to column.name, "affected_variants" to count.toString()))
+        }
+        val warnings = if (unindexableVariants == 0) emptyList() else listOf(AnalysisWarning(
+            WarningCode.CANDIDATE_REJECTED,
+            "Варианты с колонками без подходящего B-tree opclass исключены; анализ остальных продолжается.",
+            queryId = scope.queryId, details = mapOf("schema" to scope.table.schema, "table" to scope.table.name,
+                "reason" to CandidateReason.NO_BTREE_OPERATOR_CLASS.name,
+                "unindexable_variants" to unindexableVariants.toString()),
+        ))
         val retained = grouped.values.sortedBy { it.id }.filter { candidate ->
             context.checkDeadline()
             val duplicates = existing[candidate.definition]
@@ -86,7 +119,7 @@ class BtreeCandidateCanonicalizer(
             duplicates == null
         }
         context.checkDeadline()
-        return CanonicalCandidateScope(retained, grouped.size, decisions)
+        return CanonicalCandidateScope(retained, grouped.size, decisions, warnings, unindexableVariants)
     }
 
     /** Merge only local survivors, after #12 has applied its limit of 32 per scope. */

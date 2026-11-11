@@ -141,6 +141,16 @@ underflow положительной частоты и общий RunContext.
 `candidatesAfterGlobalDeduplication` — общий уникальный пул, `shortlistedCandidates` — итог.
 `ungeneratedDefinitions` остаётся `null`: неперечисленное пространство не пересчитывается.
 
+Отсутствие default B-tree opclass у корректно разрешённой колонки (например, `json` в null-test)
+не является ошибкой каталога. На границе канонизации исключается весь вариант, содержащий
+такой ключ без явно заданного opclass; остальные варианты, исходный SQL и baseline сохраняются.
+`unindexableVariants` / JSON `unindexable_variants` считает фактически перечисленные исключённые
+варианты до канонизации; `deduplicatedDefinitions` считает успешно канонизированные структуры.
+Decision `NO_BTREE_OPERATOR_CLASS` агрегируется по query/table/column с `affected_variants`
+(счётчики по нескольким неиндексируемым колонкам могут пересекаться), warning — по области.
+У исключённого варианта нет выдуманных canonical ID, DDL, размера или cost. Отсутствующая
+таблица/колонка и другие настоящие ошибки каталога по-прежнему завершают анализ ошибкой.
+
 Локальный лимит даёт одну агрегированную decision/warning на область с query/table и
 `candidates_before`/`candidates_after`; не сохраняется копия всех отсечённых определений.
 Общий лимит даёт warning и decisions с ID каждого вытесненного кандидата. Диагностика

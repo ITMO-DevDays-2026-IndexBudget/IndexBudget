@@ -301,6 +301,24 @@ class SqlResolutionIntegrationTest {
     }
 
     @Test
+    fun `json null tests keep integer candidates with a real catalog`() {
+        sql("ALTER TABLE records ADD COLUMN payload json")
+        sql("INSERT INTO records(id, payload) VALUES (1, NULL), (2, '{}'::json)")
+        for (nullTest in listOf("IS NULL", "IS NOT NULL")) {
+            val text = "SELECT id FROM records WHERE payload $nullTest AND id = 1"
+            val workload = resolve(text)
+            val context = RunContext()
+            val snapshot = JdbcCatalogReader(connection).readCatalog(setOf(TableName("records")), context)
+            assertNull(snapshot.tables.single().columns.single { it.name == "payload" }.defaultOperatorClass)
+            val batch = ru.itmo.indexbudget.candidates.ProfileAwareCandidateGenerator().generate(workload, snapshot, context)
+            assertEquals(listOf("id"), batch.candidates.single().definition.keys.map { it.column.name })
+            assertEquals(CandidateReason.NO_BTREE_OPERATOR_CLASS, batch.diagnostics.decisions.single().reason)
+            assertEquals(text, workload.queries.single().sql)
+            sql("EXPLAIN (FORMAT JSON) $text")
+        }
+    }
+
+    @Test
     fun `null predicates preserve PostgreSQL three valued semantics`() {
         sql("INSERT INTO records(id, value) VALUES (1, NULL), (2, 2), (3, 3)")
         for ((condition, expected) in listOf(

@@ -90,6 +90,39 @@ class JdbcAnalysisSessionIntegrationTest {
     }
 
     @Test
+    fun `json null tests do not fail real pipeline or suppress integer search`(@TempDir directory: Path) {
+        sql(admin, "ALTER TABLE $schema.records ADD COLUMN nullable_json json")
+        sql(admin, "UPDATE $schema.records SET nullable_json = '{}'::json WHERE id % 2 = 0")
+        val text = """
+            {"schema_version":2,"queries":[
+              {"id":"null","sql":"SELECT id FROM records WHERE nullable_json IS NULL AND a = 1"},
+              {"id":"not_null","sql":"SELECT id FROM records WHERE nullable_json IS NOT NULL AND a = 2"}],
+             "profiles":[{"id":"observed","weight":1,"calls_per_hour":{"null":1,"not_null":1}}],
+             "constraints":{"storage_budget_bytes":8388608,"write_budget_units_per_hour":null,"max_indexes":3}}
+        """.trimIndent()
+        val path = directory.resolve("workload.json")
+        Files.writeString(path, text)
+        val context = RunContext()
+        val input = WorkloadReader().read(path, context)
+        val pipeline = AnalysisPipeline(JSqlParserSqlAnalyzer(), object : AnalysisSessionFactory {
+            override fun open(context: RunContext): AnalysisSession = session
+        }, ProfileAwareCandidateGenerator(), MetricsCalculatorImpl(), ObjectiveComparatorImpl(),
+            LimitedRepairOptimizer(), DefaultReportBuilder(), AtomicReportExporter(HtmlReportRenderer()))
+        val output = directory.resolve("result")
+        val result = pipeline.run(input, output, context)
+        assertEquals(RunStatus.COMPLETED, result.status)
+        assertEquals(setOf("null", "not_null"), result.baseline?.costByQueryId?.keys)
+        assertTrue(result.selected?.evaluation?.candidateIds.orEmpty().isNotEmpty(), "Integer index must still reach search")
+        assertEquals(2, result.diagnostics.candidateDecisions.count { it.reason == CandidateReason.NO_BTREE_OPERATOR_CLASS })
+        val json = Files.readString(output.resolve("report.json"))
+        assertTrue(json.contains("NO_BTREE_OPERATOR_CLASS"))
+        assertTrue(json.contains("nullable_json IS NULL AND a = 1"))
+        assertTrue(json.contains("nullable_json IS NOT NULL AND a = 2"))
+        assertTrue(Files.readString(output.resolve("report.html")).contains("Нет подходящего B-tree opclass"))
+        assertFalse(Files.readString(output.resolve("indexes.sql")).contains("nullable_json"))
+    }
+
+    @Test
     fun `new scalar forms complete real analysis and export consistent artifacts`(@TempDir directory: Path) {
         val source = """
             {"schema_version":2,"queries":[

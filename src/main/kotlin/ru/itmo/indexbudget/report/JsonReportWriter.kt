@@ -144,6 +144,7 @@ class JsonReportWriter {
             "retained_columns" to scope.retainedColumns,
             "enumerated_definitions" to scope.enumeratedDefinitions,
             "deduplicated_definitions" to scope.deduplicatedDefinitions,
+            "unindexable_variants" to scope.unindexableVariants,
             "retained_definitions" to scope.retainedDefinitions,
             "excluded_columns" to scope.excludedColumns.map(::column),
         ) },

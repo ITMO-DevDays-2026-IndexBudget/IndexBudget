@@ -24,6 +24,7 @@ data class IndexCandidate(
 )
 
 enum class CandidateReason {
+    NO_BTREE_OPERATOR_CLASS,
     EXACT_EXISTING_DUPLICATE,
     COLUMN_SHORTLIST_TRUNCATED,
     LOCAL_CANDIDATE_LIMIT,
@@ -58,6 +59,8 @@ data class LocalGenerationStatistics(
     val excludedColumns: List<ColumnRef> = emptyList(),
     /** Before the local cap; null only for producers that do not observe this stage. */
     val candidatesAfterExistingDeduplication: Int? = null,
+    /** Enumerated variants rejected before canonical IDs, not distinct canonical definitions. */
+    val unindexableVariants: Int = 0,
 )
 
 data class CandidateDiagnostics(

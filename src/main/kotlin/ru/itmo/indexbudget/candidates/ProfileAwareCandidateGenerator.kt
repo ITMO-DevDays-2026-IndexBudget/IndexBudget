@@ -32,9 +32,11 @@ class ProfileAwareCandidateGenerator(
                 retainedDefinitions = local.size,
                 excludedColumns = scope.excludedColumns,
                 candidatesAfterExistingDeduplication = canonical.candidates.size,
+                unindexableVariants = canonical.unindexableVariants,
             )
             decisions += canonical.decisions
             warnings += scope.warnings
+            warnings += canonical.warnings
             if (canonical.candidates.size > local.size) {
                 val details = mapOf(
                     "schema" to scope.table.schema, "table" to scope.table.name,
