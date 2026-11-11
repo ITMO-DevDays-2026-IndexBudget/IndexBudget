@@ -125,11 +125,23 @@ data class AnalysisReport(
     val candidates: CandidateBatch = CandidateBatch(emptyList()),
     /** Готовый результат [PriceOfRobustness.calculate] для [result]; null при отсутствии сравнения. */
     val priceOfRobustness: Double? = null,
-    val schemaVersion: Int = 2,
+    val schemaVersion: Int = 3,
     val specVersion: String = "0.2",
     val comparisonScope: ComparisonScope = ComparisonScope.EVALUATED_SETS,
     val baselineMetrics: SetMetrics? = null,
     val normalizedProfileWeights: Map<String, Double> = emptyMap(),
     val queryComparisons: List<QueryCostComparison> = emptyList(),
     val incumbentsCoincide: Boolean? = null,
-)
+    val manualComparison: ManualComparison? = null,
+
+    /** Effective mode after CLI override; available even when the input could not be retained. */
+    val analysisMode: AnalysisMode = AnalysisMode.NORMAL,
+    /** Effective shortlist strategy, including baseline-only and interrupted runs. */
+    val candidateRanking: CandidateRanking = input?.candidateRanking ?: CandidateRanking.FREQUENCY,
+) {
+    // Derived once per immutable report, including copies used by render fixtures.
+    val summary: RecommendationSummary = ReportSummary.recommendation(this)
+    val profileComparisons: List<CostComparisonSeries> = ReportSummary.profiles(this)
+    val queryEffects: List<CostComparisonSeries> = ReportSummary.queries(this)
+    val workloadProvenance: WorkloadProvenance? = input?.provenance
+}

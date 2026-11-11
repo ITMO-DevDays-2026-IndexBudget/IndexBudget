@@ -4,8 +4,11 @@ import java.lang.reflect.Proxy
 import java.sql.Connection
 import java.sql.SQLException
 import java.time.Duration
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.Timeout
 import org.junit.jupiter.api.extension.ExtendWith
 import org.springframework.boot.Banner
 import org.springframework.boot.WebApplicationType
@@ -117,16 +120,94 @@ class JdbcAnalysisSessionFactoryTest {
         assertNull(error.cause)
     }
 
-    private class ConnectionStub(private val failClose: Boolean = false) {
-        var closed = false
+    @Test
+    @Timeout(5)
+    fun `client connection timeout returns even if driver ignores interruption and closes late connection`() {
+        val releaseDriver = CountDownLatch(1)
+        val connection = ConnectionStub()
+        val factory = JdbcAnalysisSessionFactory({ "jdbc:postgresql://localhost/db" }, {
+            awaitIgnoringInterrupts(releaseDriver)
+            connection.proxy
+        })
+        val context = RunContext(limits = RunLimits(
+            connectTimeout = Duration.ofMillis(150), commandTimeout = Duration.ofSeconds(5),
+        ))
+        try {
+            val failure = assertThrows(AnalysisException::class.java) { factory.open(context) }
+            assertEquals(ErrorCode.DB_CONNECTION_ERROR, failure.error.code)
+            assertFalse(context.remainingTime().isZero)
+            assertNull(failure.cause)
+        } finally {
+            releaseDriver.countDown()
+        }
+        assertTrue(connection.released.await(2, TimeUnit.SECONDS), "Late connection must be physically released")
+    }
+
+    @Test
+    @Timeout(5)
+    fun `cancellation interrupts connect wait and releases connection returned later`() {
+        val enteredDriver = CountDownLatch(1)
+        val releaseDriver = CountDownLatch(1)
+        val connection = ConnectionStub(failAbort = true)
+        val context = RunContext()
+        val factory = JdbcAnalysisSessionFactory({ "jdbc:postgresql://localhost/db" }, {
+            enteredDriver.countDown()
+            awaitIgnoringInterrupts(releaseDriver)
+            connection.proxy
+        })
+        val canceller = Thread.ofVirtual().start {
+            if (enteredDriver.await(2, TimeUnit.SECONDS)) context.cancel()
+        }
+        try {
+            val failure = assertThrows(AnalysisException::class.java) { factory.open(context) }
+            assertEquals(ErrorCode.CANCELLED, failure.error.code)
+            assertNull(failure.cause)
+        } finally {
+            releaseDriver.countDown()
+            canceller.join(2000)
+        }
+        assertTrue(connection.released.await(2, TimeUnit.SECONDS), "Close must release late connection when abort fails")
+    }
+
+    @Test
+    fun `non SQL driver failure is sanitized as connection failure`() {
+        val factory = JdbcAnalysisSessionFactory({ "jdbc:postgresql://localhost/db" }, {
+            throw IllegalStateException("jdbc:postgresql://secret-host/db?password=secret")
+        })
+        val failure = assertThrows(AnalysisException::class.java) { factory.open(RunContext()) }
+        assertEquals(ErrorCode.DB_CONNECTION_ERROR, failure.error.code)
+        assertNull(failure.cause)
+        assertFalse(failure.stackTraceToString().contains("secret-host"))
+    }
+
+    private fun awaitIgnoringInterrupts(latch: CountDownLatch) {
+        while (true) {
+            try {
+                latch.await()
+                return
+            } catch (_: InterruptedException) {
+                // Deliberately model a JDBC implementation that returns after caller cancellation.
+            }
+        }
+    }
+
+    private class ConnectionStub(private val failClose: Boolean = false, private val failAbort: Boolean = false) {
+        @Volatile var closed = false
+        val released = CountDownLatch(1)
         val proxy = Proxy.newProxyInstance(Connection::class.java.classLoader, arrayOf(Connection::class.java)) { _, method, _ ->
             when (method.name) {
                 "close" -> {
                     if (failClose) throw SQLException("private-host private-password")
                     closed = true
+                    released.countDown()
                     null
                 }
-                "abort" -> { closed = true; null }
+                "abort" -> {
+                    if (failAbort) throw SQLException("private-host private-password")
+                    closed = true
+                    released.countDown()
+                    null
+                }
                 "isClosed" -> closed
                 "getAutoCommit" -> true
                 else -> error("Unexpected JDBC method: ${method.name}")

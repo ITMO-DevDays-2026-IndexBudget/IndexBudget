@@ -1,31 +1,15 @@
 package ru.itmo.indexbudget.domain
 
-import java.math.BigDecimal
-
 /**
  * Single implementation of profile metrics and budgets; callers must not duplicate these formulas.
  */
 class MetricsCalculatorImpl : MetricsCalculator {
 
     override fun assessBudget(candidates: List<IndexCandidate>, workload: WorkloadInput): BudgetAssessment {
-        require(candidates.map { it.id }.distinct().size == candidates.size) { "Candidate IDs must be unique" }
-        val rates = workload.tableWriteRates
-        if (rates == null && workload.constraints.writeBudgetUnitsPerHour != null) {
-            throw invalidWriteProfile("An enabled write budget requires a complete write profile")
-        }
-        if (rates != null) {
-            if (rates.isEmpty()) throw invalidWriteProfile("A supplied write profile must not be empty")
-            for (rate in rates.values) {
-                if (listOf(rate.insertsPerHour, rate.updatesPerHour, rate.deletesPerHour)
-                        .any { !it.isFinite() || it < 0.0 }) {
-                    throw invalidWriteProfile("Write rates must be finite and nonnegative")
-                }
-            }
-        }
+        val knownBudget = assessKnownBudget(candidates, workload)
 
         var estimatedBytes = 0L
         var budgetedBytes = 0L
-        var exactWriteUnits: BigDecimal? = if (rates == null) null else BigDecimal.ZERO
         for (candidate in candidates.sortedBy { it.id }) {
             require(candidate.definition.keys.size in 1..2) { "Candidates must have one or two key columns" }
             val bytes = candidate.estimatedBytes ?: throw AnalysisException(
@@ -38,35 +22,14 @@ class MetricsCalculatorImpl : MetricsCalculator {
             val budgeted = addBytes(bytes, reserve)
             estimatedBytes = addBytes(estimatedBytes, bytes)
             budgetedBytes = addBytes(budgetedBytes, budgeted)
-            if (rates != null) {
-                val table = candidate.definition.table
-                // Same physical, case-sensitive schema.name keys as ResolvedWorkloadValidator (#14).
-                val rate = rates["${table.schema}.${table.name}"]
-                    ?: throw invalidWriteProfile("Write profile must cover every candidate table")
-                // The constructor preserves the exact input Double, unlike a decimal-string conversion.
-                // Keep both accumulation stages exact, including multiplication and the budget comparison.
-                val rowChanges = BigDecimal(rate.insertsPerHour) + BigDecimal(rate.updatesPerHour) +
-                    BigDecimal(rate.deletesPerHour)
-                val units = rowChanges * BigDecimal(candidate.definition.keys.size)
-                val total = checkNotNull(exactWriteUnits) + units
-                // All terms are nonnegative: bounding the total also bounds every intermediate value.
-                if (total > BigDecimal(Double.MAX_VALUE)) {
-                    throw numericError("Write units exceed the supported numeric range")
-                }
-                exactWriteUnits = total
-            }
         }
         val constraints = workload.constraints
         val violations = buildSet {
             if (budgetedBytes > constraints.storageBudgetBytes) add(BudgetViolation.STORAGE_BUDGET)
-            if (constraints.writeBudgetUnitsPerHour != null &&
-                checkNotNull(exactWriteUnits) > BigDecimal(constraints.writeBudgetUnitsPerHour)) {
-                add(BudgetViolation.WRITE_BUDGET)
-            }
-            if (candidates.size > constraints.maxIndexes) add(BudgetViolation.MAX_INDEXES)
+            addAll(knownBudget.violations)
         }
         return BudgetAssessment(
-            BudgetUsage(estimatedBytes, budgetedBytes, exactWriteUnits?.toDouble(), candidates.size), violations,
+            BudgetUsage(estimatedBytes, budgetedBytes, knownBudget.writeUnitsPerHour, candidates.size), violations,
         )
     }
 
@@ -74,10 +37,6 @@ class MetricsCalculatorImpl : MetricsCalculator {
         if (left > Long.MAX_VALUE - right) throw numericError("Index size exceeds the supported numeric range")
         return left + right
     }
-
-    private fun invalidWriteProfile(message: String) = AnalysisException(
-        AnalysisError(ErrorCode.INVALID_WRITE_PROFILE, message, details = mapOf("field" to "table_write_rates")),
-    )
 
     override fun calculate(
         workload: WorkloadInput,
@@ -94,23 +53,18 @@ class MetricsCalculatorImpl : MetricsCalculator {
         val profiles = workload.profiles.sortedBy { it.id }.map { profile ->
             val baselineCost = profileCost(profile, baseline.costByQueryId, queryIds)
             val cost = profileCost(profile, evaluation.costByQueryId, queryIds)
-            val gain = baselineCost - cost
-            val ratio = if (baselineCost > 0.0) cost / baselineCost else null
-            val gainPercent = if (baselineCost > 0.0) 100.0 * gain / baselineCost else null
-            if (ratio != null && !ratio.isFinite()) {
-                throw numericError("Profile ratio is not finite", profile.id)
-            }
-            if (gainPercent != null && !gainPercent.isFinite()) {
-                throw numericError("Profile gain percent is not finite", profile.id)
+            val effect = CostEffect.calculate(baselineCost, cost)
+            if (effect.relativeStatus == RelativeValueStatus.OUT_OF_RANGE) {
+                throw numericError("Profile ratio or gain percent is outside the supported numeric range", profile.id)
             }
             ProfileMetrics(
                 profileId = profile.id,
                 normalizedWeight = normalizedWeights.getValue(profile.id),
                 baselineCost = baselineCost,
                 cost = cost,
-                gain = gain,
-                ratio = ratio,
-                gainPercent = gainPercent,
+                gain = checkNotNull(effect.gain),
+                ratio = effect.ratio,
+                gainPercent = effect.gainPercent,
             )
         }
 
@@ -127,6 +81,7 @@ class MetricsCalculatorImpl : MetricsCalculator {
             baselineMeanCost > 0.0 -> {
                 val ratio = meanCost / baselineMeanCost
                 if (!ratio.isFinite()) throw numericError("Mean ratio is not finite")
+                if (meanCost > 0.0 && ratio == 0.0) throw numericError("Positive mean ratio underflows to zero")
                 ratio
             }
             hasPositiveBaseline -> throw numericError("B_mean is zero while a positive baseline exists")

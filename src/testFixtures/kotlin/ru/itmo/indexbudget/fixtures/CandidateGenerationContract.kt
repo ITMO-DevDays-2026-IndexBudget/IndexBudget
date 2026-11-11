@@ -57,11 +57,13 @@ object CandidateGenerationContract {
     }
 
     private fun assertTruncationDiagnostics(scope: CandidateScope, label: String) {
+        val warnings = scope.warnings.filter { it.code == WarningCode.COLUMN_SHORTLIST_TRUNCATED }
+        check(scope.warnings.all { it.code in setOf(WarningCode.COLUMN_SHORTLIST_TRUNCATED, WarningCode.OR_BRANCH_AWARE_GENERATION) })
         if (scope.excludedColumns.isEmpty()) {
-            check(scope.decisions.isEmpty() && scope.warnings.isEmpty()) { "$label: false truncation" }
+            check(scope.decisions.isEmpty() && warnings.isEmpty()) { "$label: false truncation" }
             return
         }
-        check(scope.decisions.size == 1 && scope.warnings.size == 1) {
+        check(scope.decisions.size == 1 && warnings.size == 1) {
             "$label: expected one truncation decision and warning; got ${scope.decisions} and ${scope.warnings}"
         }
         val decision = scope.decisions.single()
@@ -77,7 +79,7 @@ object CandidateGenerationContract {
         check(decision.details["retained_columns"] == scope.retainedColumns.size.toString()) {
             "$label: expected retained_columns=${scope.retainedColumns.size}; got ${decision.details}"
         }
-        check(scope.warnings.single().code == WarningCode.COLUMN_SHORTLIST_TRUNCATED) {
+        check(warnings.single().code == WarningCode.COLUMN_SHORTLIST_TRUNCATED) {
             "$label: expected COLUMN_SHORTLIST_TRUNCATED warning; got ${scope.warnings}"
         }
     }

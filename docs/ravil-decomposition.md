@@ -1,5 +1,11 @@
 # Декомпозиция: метрики, бюджеты и компаратор (Равиль)
 
+Следующий план [#64](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/issues/64):
+#66 — частоты окон, затем #68 — сводка отчёта; #78 — дополнительная очередь.
+В `feat/window-frequencies-66` реализован [расчёт частот](statistics-frequencies.md)
+над настоящими DTO коллектора #65, с отдельным историческим временем и manifest
+неполноты. Импорт SQL/параметров и сборка workload остаются в #67.
+
 > Рабочая заметка по [трекеру #16](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/issues/16), не альтернативная спецификация.
 > Статус на 10.11.2026: T5 принята в [PR #34](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/pull/34); общий helper T1 — в [PR #32](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/pull/32); T2 принята в [PR #37](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/pull/37); T3 реализована в изменениях #41.
 > Формулы и фикстуры нужны к 10.11; PoC-стыки и минимальная сверка на настоящих costs — к 11.11. Полная проверка относится к MVP #21.

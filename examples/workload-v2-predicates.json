@@ -1,0 +1,14 @@
+{
+  "schema_version": 2,
+  "objective": "robust",
+  "queries": [
+    {"id": "groups", "sql": "SELECT id, value FROM public.records WHERE group_id IN (1, 2, NULL)"},
+    {"id": "range", "sql": "SELECT id, value FROM public.records WHERE value BETWEEN 10 AND CAST(100 AS integer)"},
+    {"id": "missing", "sql": "SELECT id FROM public.records WHERE value IS NULL"},
+    {"id": "present", "sql": "SELECT id FROM public.records WHERE value IS NOT NULL"}
+  ],
+  "profiles": [
+    {"id": "day", "weight": 1, "calls_per_hour": {"groups": 100, "range": 20, "missing": 1, "present": 5}}
+  ],
+  "constraints": {"storage_budget_bytes": 67108864, "write_budget_units_per_hour": null, "max_indexes": 5}
+}

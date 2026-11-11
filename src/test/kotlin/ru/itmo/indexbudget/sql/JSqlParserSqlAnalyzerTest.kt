@@ -267,7 +267,6 @@ class JSqlParserSqlAnalyzerTest {
             "SELECT id FROM records UNION SELECT id FROM archived_records",
             "WITH recent AS (SELECT id FROM records) SELECT id FROM recent",
             "SELECT lower(id) FROM records",
-            "SELECT id FROM records WHERE value = 1 OR group_id = 2",
             "SELECT id FROM records WHERE EXISTS (SELECT 1 FROM groups)",
             "SELECT id FROM (SELECT id FROM records) nested",
             "SELECT g.id FROM (SELECT id FROM records) r INNER JOIN groups g ON r.id = g.id",

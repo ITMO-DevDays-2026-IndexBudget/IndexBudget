@@ -2,12 +2,16 @@ package ru.itmo.indexbudget.sql
 
 import net.sf.jsqlparser.expression.Expression
 import net.sf.jsqlparser.expression.operators.conditional.AndExpression
+import net.sf.jsqlparser.expression.operators.conditional.OrExpression
 import net.sf.jsqlparser.expression.operators.relational.EqualsTo
 import net.sf.jsqlparser.expression.operators.relational.GreaterThan
 import net.sf.jsqlparser.expression.operators.relational.GreaterThanEquals
 import net.sf.jsqlparser.expression.operators.relational.MinorThan
 import net.sf.jsqlparser.expression.operators.relational.MinorThanEquals
 import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList
+import net.sf.jsqlparser.expression.operators.relational.InExpression
+import net.sf.jsqlparser.expression.operators.relational.Between
+import net.sf.jsqlparser.expression.operators.relational.IsNullExpression
 import net.sf.jsqlparser.schema.Column
 import net.sf.jsqlparser.schema.Table
 import net.sf.jsqlparser.statement.select.AllColumns
@@ -49,12 +53,13 @@ internal class JSqlParserNameResolver(private val catalog: CatalogSnapshot, priv
         fun resolve(): ResolvedQuery {
             bindTables()
             resolveProjection()
-            val predicates = buildList {
-                select.where?.let { resolveCondition(it, PredicateSource.WHERE, bindings, this) }
+            val predicates = mutableListOf<ResolvedPredicate>()
+            val conditions = buildList {
+                select.where?.let { add(resolveCondition(it, PredicateSource.WHERE, bindings, predicates)) }
                 select.joins.orEmpty().forEachIndexed { index, join ->
                     // An ON clause cannot see tables introduced by a later JOIN.
                     join.onExpressions.orEmpty().forEach {
-                        resolveCondition(it, PredicateSource.JOIN, bindings.take(index + 2), this)
+                        add(resolveCondition(it, PredicateSource.JOIN, bindings.take(index + 2), predicates))
                     }
                 }
             }
@@ -73,7 +78,8 @@ internal class JSqlParserNameResolver(private val catalog: CatalogSnapshot, priv
             }
             context.checkDeadline()
             return ResolvedQuery(query.id, query.sql, bindings.mapTo(linkedSetOf()) { it.table.ref },
-                referenced, predicates, order, projected, selectsAll)
+                referenced, predicates, order, projected, selectsAll,
+                conditions.reduceOrNull { left, right -> ResolvedCondition.And(left, right) })
         }
 
         private fun bindTables() {
@@ -133,14 +139,39 @@ internal class JSqlParserNameResolver(private val catalog: CatalogSnapshot, priv
             source: PredicateSource,
             visible: List<Binding>,
             result: MutableList<ResolvedPredicate>,
-        ) {
+        ): ResolvedCondition {
             context.checkDeadline()
             when (expression) {
                 is AndExpression -> {
-                    resolveCondition(expression.leftExpression, source, visible, result)
-                    resolveCondition(expression.rightExpression, source, visible, result)
+                    return ResolvedCondition.And(resolveCondition(expression.leftExpression, source, visible, result),
+                        resolveCondition(expression.rightExpression, source, visible, result))
                 }
-                is ParenthesedExpressionList<*> -> resolveCondition(expression.single(), source, visible, result)
+                is OrExpression -> {
+                    return ResolvedCondition.Or(resolveCondition(expression.leftExpression, source, visible, result),
+                        resolveCondition(expression.rightExpression, source, visible, result))
+                }
+                is ParenthesedExpressionList<*> -> return resolveCondition(expression.single(), source, visible, result)
+                is InExpression -> {
+                    val column = requireNotNull(resolveOperand(expression.leftExpression, visible))
+                    val values = (expression.rightExpression as ParenthesedExpressionList<*>).map {
+                        context.checkDeadline()
+                        literalTypes.infer(it)
+                    }
+                    operators.requireBuiltinIn(literalTypes.columnType(column.column), values)
+                    result += ResolvedPredicate(column.ref, ComparisonOperator.IN, source, literalCount = values.size)
+                }
+                is Between -> {
+                    val column = requireNotNull(resolveOperand(expression.leftExpression, visible))
+                    val type = literalTypes.columnType(column.column)
+                    operators.requireBuiltin(">=", type, literalTypes.infer(expression.betweenExpressionStart))
+                    operators.requireBuiltin("<=", type, literalTypes.infer(expression.betweenExpressionEnd))
+                    result += ResolvedPredicate(column.ref, ComparisonOperator.BETWEEN, source, literalCount = 2)
+                }
+                is IsNullExpression -> {
+                    val column = requireNotNull(resolveOperand(expression.leftExpression, visible))
+                    val operator = if (expression.isNot) ComparisonOperator.IS_NOT_NULL else ComparisonOperator.IS_NULL
+                    result += ResolvedPredicate(column.ref, operator, source, literalCount = 0)
+                }
                 is EqualsTo, is MinorThan, is MinorThanEquals, is GreaterThan, is GreaterThanEquals -> {
                     val left = expression.leftExpression
                     val right = expression.rightExpression
@@ -167,6 +198,7 @@ internal class JSqlParserNameResolver(private val catalog: CatalogSnapshot, priv
                 }
                 else -> fail(ErrorCode.UNSUPPORTED_SQL, "Unsupported condition expression.")
             }
+            return ResolvedCondition.Predicate(result.lastIndex)
         }
 
         private fun resolveOperand(expression: Expression, visible: List<Binding>): BoundColumn? {
@@ -231,6 +263,7 @@ internal class JSqlParserNameResolver(private val catalog: CatalogSnapshot, priv
         ComparisonOperator.LESS_THAN_OR_EQUAL -> ComparisonOperator.GREATER_THAN_OR_EQUAL
         ComparisonOperator.GREATER_THAN -> ComparisonOperator.LESS_THAN
         ComparisonOperator.GREATER_THAN_OR_EQUAL -> ComparisonOperator.LESS_THAN_OR_EQUAL
+        else -> error("Only binary comparisons can be reversed")
     }
 
     private data class Binding(val position: Int, val table: CatalogTable, val alias: String?) {

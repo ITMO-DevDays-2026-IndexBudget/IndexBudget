@@ -7,6 +7,7 @@ data class CandidateVariant(
     val definition: IndexDefinition,
     val sourceQueryIds: Set<String>,
     val generationReasons: Set<GenerationReason>,
+    val sourceBranches: Set<CandidateSourceBranch> = emptySet(),
 )
 
 /**

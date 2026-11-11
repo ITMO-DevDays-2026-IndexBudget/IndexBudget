@@ -33,6 +33,10 @@ class IndexBudgetCliTest {
         val result = invoke("--help")
         assertEquals(0, result.code)
         assertTrue(result.stdout.contains("indexbudget analyze"))
+        assertTrue(result.stdout.contains("indexbudget stats --help"))
+        assertTrue(result.stdout.contains("a reserve of up to 48"))
+        assertTrue(result.stdout.contains("at most 32 size calls"))
+        assertTrue(result.stdout.contains("shared search/command deadline"))
         assertEquals("", result.diagnosticStderr)
     }
 
@@ -289,7 +293,11 @@ class IndexBudgetCliTest {
         assertEquals(0, result.code)
         assertEquals("", result.diagnosticStderr)
         assertTrue(result.progress.first().startsWith("stage=validation "))
-        assertEquals("stage=baseline explain_attempts=2 completed_sets=1 cache_hits=1", result.progress.last())
+        assertTrue(result.progress.contains("stage=baseline explain_attempts=2 completed_sets=1 cache_hits=1"))
+        assertEquals("stage=finished status=completed analysis_mode=normal explain_attempts=2 " +
+            "evaluation_attempts=1 completed_sets=1 cache_hits=1 repair_attempts=0 stop_reasons=SEARCH_COMPLETE " +
+            "candidate_ranking=frequency",
+            result.progress.last())
         assertFalse(result.progress.any { '%' in it })
     }
 

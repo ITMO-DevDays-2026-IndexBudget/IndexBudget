@@ -1,0 +1,675 @@
+{
+  "schema_version" : 1,
+  "experiment" : "candidate_ranking_synthetic_control",
+  "limitations" : [ "Synthetic resolved workload, catalog, sizes and complete cost vectors; no PostgreSQL connection or EXPLAIN.", "Candidate generation, search, budgets and profile metrics use production implementations; fixture sizing follows the pipeline seam.", "Cost vectors are specified for the entire set by its table support; single-index gains are never added.", "A frozen clock removes machine timing variation. Durations are not measurements of performance.", "The cases demonstrate both improvement and regression; they cannot justify a new production default." ],
+  "input" : {
+    "schema_version" : 2,
+    "objective" : "robust",
+    "queries" : [ {
+      "id" : "cheap",
+      "sql" : "SELECT * FROM public.cheap WHERE c1 = 1 AND c2 = 1 AND c3 = 1 AND c4 = 1 AND c5 = 1 AND c6 = 1 AND c7 = 1 AND c8 = 1 AND c9 = 1 AND c10 = 1 AND c11 = 1 AND c12 = 1 AND c13 = 1 AND c14 = 1 AND c15 = 1 AND c16 = 1"
+    }, {
+      "id" : "rare",
+      "sql" : "SELECT * FROM public.rare WHERE c1 = 1 AND c2 = 1 AND c3 = 1 AND c4 = 1 AND c5 = 1 AND c6 = 1 AND c7 = 1 AND c8 = 1 AND c9 = 1 AND c10 = 1 AND c11 = 1 AND c12 = 1 AND c13 = 1 AND c14 = 1 AND c15 = 1 AND c16 = 1"
+    } ],
+    "profiles" : [ {
+      "id" : "observed",
+      "weight" : 1.0,
+      "calls_per_hour" : {
+        "cheap" : 1000.0,
+        "rare" : 1.0
+      }
+    } ],
+    "constraints" : {
+      "storage_budget_bytes" : 1000000,
+      "write_budget_units_per_hour" : 100.0,
+      "max_indexes" : 2
+    },
+    "table_write_rates" : {
+      "public.cheap" : {
+        "inserts_per_hour" : 1.0,
+        "updates_per_hour" : 2.0,
+        "deletes_per_hour" : 0.0
+      },
+      "public.rare" : {
+        "inserts_per_hour" : 1.0,
+        "updates_per_hour" : 2.0,
+        "deletes_per_hour" : 0.0
+      }
+    },
+    "analysis_mode" : "normal",
+    "candidate_ranking" : "frequency"
+  },
+  "fixture_size_bytes_per_candidate" : 100,
+  "scenarios" : {
+    "rare_improves" : {
+      "complete_cost_vectors_by_configuration_support" : {
+        "empty" : {
+          "cheap" : 1.0,
+          "rare" : 10000.0
+        },
+        "cheap_only" : {
+          "cheap" : 0.1,
+          "rare" : 10000.0
+        },
+        "rare_only" : {
+          "cheap" : 1.0,
+          "rare" : 500.0
+        },
+        "both" : {
+          "cheap" : 0.05,
+          "rare" : 600.0
+        }
+      },
+      "runs" : {
+        "frequency" : {
+          "candidate_ranking" : "frequency",
+          "local_survivors" : [ {
+            "query_id" : "cheap",
+            "retained_columns" : 16,
+            "enumerated_definitions" : 256,
+            "retained_definitions" : 32
+          }, {
+            "query_id" : "rare",
+            "retained_columns" : 16,
+            "enumerated_definitions" : 256,
+            "retained_definitions" : 32
+          } ],
+          "shortlist" : [ {
+            "id" : "3e7bf565d71270a212e8a0f92b4de4b7ed657e6b15967f36fd695833b1dcb7e6",
+            "table" : "cheap",
+            "columns" : [ "c11" ],
+            "source_query_ids" : [ "cheap" ]
+          }, {
+            "id" : "01f55b19022c2b7cd4789b250f4040ae898023a694e5a2b96cfcf181ce78473d",
+            "table" : "cheap",
+            "columns" : [ "c16", "c2" ],
+            "source_query_ids" : [ "cheap" ]
+          }, {
+            "id" : "3f43c268fa3df8fa7fc3a6754f580f47c3c5f758e9b4f033d7b8b8c004c1dafc",
+            "table" : "cheap",
+            "columns" : [ "c15" ],
+            "source_query_ids" : [ "cheap" ]
+          }, {
+            "id" : "0205c749ac638d572a8f750afa8859623f684cbac32a08e17cf9df44c0b0e2af",
+            "table" : "cheap",
+            "columns" : [ "c10", "c1" ],
+            "source_query_ids" : [ "cheap" ]
+          }, {
+            "id" : "4671a33f5c1305f95f4bd7fb165aaea19b9d8b3ee19d68d0ddd17a7f7791aa6c",
+            "table" : "cheap",
+            "columns" : [ "c9" ],
+            "source_query_ids" : [ "cheap" ]
+          }, {
+            "id" : "04ce1007d1b2cd36c715f35bdb10f08660efcddf1e340ac4a498e44ba35a767d",
+            "table" : "cheap",
+            "columns" : [ "c10", "c11" ],
+            "source_query_ids" : [ "cheap" ]
+          }, {
+            "id" : "65f3f0b3c777c13bd52dc34cd0bcfefc02dea270083a5cbb914e658eb4305df9",
+            "table" : "cheap",
+            "columns" : [ "c5" ],
+            "source_query_ids" : [ "cheap" ]
+          }, {
+            "id" : "051d64d62bd75ff1c1970dc0ed1a2687122a28c92ab96676a3e2c9d71edc4e46",
+            "table" : "cheap",
+            "columns" : [ "c12", "c15" ],
+            "source_query_ids" : [ "cheap" ]
+          }, {
+            "id" : "6e7aacf3711e0763e4bf0b705e69a51e023ed55a1b3672581341a07c4d6e452a",
+            "table" : "cheap",
+            "columns" : [ "c12" ],
+            "source_query_ids" : [ "cheap" ]
+          }, {
+            "id" : "05c34c26d89e9d97130aef04cab0c07f82e7be389dc687f57c8d65d295b560a6",
+            "table" : "cheap",
+            "columns" : [ "c7", "c8" ],
+            "source_query_ids" : [ "cheap" ]
+          }, {
+            "id" : "a8d6a20bd3170d3f6f2a6073167e72d22ea7ee5ae42351484de046b455097f2c",
+            "table" : "cheap",
+            "columns" : [ "c1" ],
+            "source_query_ids" : [ "cheap" ]
+          }, {
+            "id" : "06309a41e76c1ee4bd3eb02643ce75eb72c370d1f5c0a1e0fc19ee71d3116bc0",
+            "table" : "cheap",
+            "columns" : [ "c7", "c15" ],
+            "source_query_ids" : [ "cheap" ]
+          }, {
+            "id" : "c24d5446178b7c1376a1a8758bccdf76551e659f3cce064f4f6216464a3277b1",
+            "table" : "cheap",
+            "columns" : [ "c3" ],
+            "source_query_ids" : [ "cheap" ]
+          }, {
+            "id" : "064c411dd0a2a7b1d6c77250f6a63c29206062bd0fd727325bfa8ccd6ae238dc",
+            "table" : "cheap",
+            "columns" : [ "c13", "c1" ],
+            "source_query_ids" : [ "cheap" ]
+          }, {
+            "id" : "d93817919a7feda345d55f3474c5502448bee3fd8484f096e74a4463e556acfb",
+            "table" : "cheap",
+            "columns" : [ "c8" ],
+            "source_query_ids" : [ "cheap" ]
+          }, {
+            "id" : "069597b055339677c605d0f5c4537d78a2d8afa65624c78174dd218b53ce6f9d",
+            "table" : "cheap",
+            "columns" : [ "c9", "c13" ],
+            "source_query_ids" : [ "cheap" ]
+          } ],
+          "size_attempts" : 16,
+          "final_pool_size" : 16,
+          "status" : "partial",
+          "stop_reasons" : [ "NO_IMPROVEMENT", "REPAIR_LIMIT" ],
+          "selected_ids" : [ "3e7bf565d71270a212e8a0f92b4de4b7ed657e6b15967f36fd695833b1dcb7e6" ],
+          "selected_cost_by_query_id" : {
+            "cheap" : 0.1,
+            "rare" : 10000.0
+          },
+          "baseline_cost_by_query_id" : {
+            "cheap" : 1.0,
+            "rare" : 10000.0
+          },
+          "profile_metrics" : [ {
+            "profile_id" : "observed",
+            "normalized_weight" : 1.0,
+            "baseline_cost" : 11000.0,
+            "cost" : 10100.0,
+            "gain" : 900.0,
+            "ratio" : 0.9181818181818182,
+            "gain_percent" : 8.181818181818182
+          } ],
+          "mean_cost" : 10100.0,
+          "baseline_mean_cost" : 11000.0,
+          "mean_ratio" : 0.9181818181818182,
+          "worst_ratio" : 0.9181818181818182,
+          "selected_estimated_bytes" : 100,
+          "selected_budgeted_bytes" : 120,
+          "selected_write_units_per_hour" : 3.0,
+          "duration_millis" : 0,
+          "duration_source" : "Frozen test clock; not a performance measurement",
+          "statistics" : {
+            "actual_explain_attempts" : 0,
+            "synthetic_evaluation_attempts" : 60,
+            "completed_synthetic_evaluations" : 60,
+            "synthetic_query_cost_lookups" : 120,
+            "cache_hits" : 15,
+            "repair_attempts" : 28
+          },
+          "limits" : {
+            "command_timeout_millis" : 90000,
+            "search_timeout_millis" : 60000,
+            "explain_timeout_millis" : 2000,
+            "connect_timeout_millis" : 5000,
+            "max_explain_attempts" : 2000,
+            "max_repair_attempts" : 28
+          }
+        },
+        "baseline_cost" : {
+          "candidate_ranking" : "baseline_cost",
+          "local_survivors" : [ {
+            "query_id" : "cheap",
+            "retained_columns" : 16,
+            "enumerated_definitions" : 256,
+            "retained_definitions" : 32
+          }, {
+            "query_id" : "rare",
+            "retained_columns" : 16,
+            "enumerated_definitions" : 256,
+            "retained_definitions" : 32
+          } ],
+          "shortlist" : [ {
+            "id" : "15dbb32d6ea7a7ff5ee0a7ab613b59e9219ecc9b0035ea88855e8a508d5999f0",
+            "table" : "rare",
+            "columns" : [ "c12" ],
+            "source_query_ids" : [ "rare" ]
+          }, {
+            "id" : "00262e48c742f8c742c4f357f33bf435af6476cd55e27c52fd95791d4e4ad40b",
+            "table" : "rare",
+            "columns" : [ "c13", "c11" ],
+            "source_query_ids" : [ "rare" ]
+          }, {
+            "id" : "17fd18f90452478e1b3420f388e80b5884e360384fcee0f9fc5ec47ba93739bb",
+            "table" : "rare",
+            "columns" : [ "c13" ],
+            "source_query_ids" : [ "rare" ]
+          }, {
+            "id" : "002f4bf74999b34a856649383e8d84b841fdefc33d5421c2b012b2f608fecc37",
+            "table" : "rare",
+            "columns" : [ "c16", "c9" ],
+            "source_query_ids" : [ "rare" ]
+          }, {
+            "id" : "24d785a43cc06eb5826c2a79f38d0f3047cc25b93d8ffbc1060b00ef41de7fd3",
+            "table" : "rare",
+            "columns" : [ "c3" ],
+            "source_query_ids" : [ "rare" ]
+          }, {
+            "id" : "00c0b4ff1f561ff3f0645d8a37c93290bfd730a4f0b194d634643458ce3447d5",
+            "table" : "rare",
+            "columns" : [ "c8", "c6" ],
+            "source_query_ids" : [ "rare" ]
+          }, {
+            "id" : "2f3c461d4f267f855f1c25695885fc3bbaafffa9de7f445a58cdcdf2077092a6",
+            "table" : "rare",
+            "columns" : [ "c7" ],
+            "source_query_ids" : [ "rare" ]
+          }, {
+            "id" : "025c655e5ec3212ae833f6dccb434e8c236b91cbbf7e202ce286d1a3c71ef27e",
+            "table" : "rare",
+            "columns" : [ "c11", "c5" ],
+            "source_query_ids" : [ "rare" ]
+          }, {
+            "id" : "345046816353b9e211bd85b888b29bd1a17e7675761bf49fae25de0bc47ec795",
+            "table" : "rare",
+            "columns" : [ "c9" ],
+            "source_query_ids" : [ "rare" ]
+          }, {
+            "id" : "02c13a06f7470a7b1401b9e8135baccd331bb09c66170a6d5be8701f728d3486",
+            "table" : "rare",
+            "columns" : [ "c7", "c13" ],
+            "source_query_ids" : [ "rare" ]
+          }, {
+            "id" : "3ae7e57116b6b747b938fcc445314cd0fa26170074b390826f0e308540439d27",
+            "table" : "rare",
+            "columns" : [ "c6" ],
+            "source_query_ids" : [ "rare" ]
+          }, {
+            "id" : "02dd09ac8fc84001f1598a38904d7a6d18ad5fc39fd276d2973b22df082b3b4b",
+            "table" : "rare",
+            "columns" : [ "c6", "c15" ],
+            "source_query_ids" : [ "rare" ]
+          }, {
+            "id" : "591e43f295d9105ab1b285ca63ea60c17a2a7a46e7bb6f51ee8bbf875f83a70a",
+            "table" : "rare",
+            "columns" : [ "c1" ],
+            "source_query_ids" : [ "rare" ]
+          }, {
+            "id" : "03487fc96b5c93c30ea2573a637ae97030904ac8c9c9926489d6786b07039b2e",
+            "table" : "rare",
+            "columns" : [ "c1", "c7" ],
+            "source_query_ids" : [ "rare" ]
+          }, {
+            "id" : "5a376f505532049f6e052f9c1c3001d488fcf5889d61a50a358af58754f60b86",
+            "table" : "rare",
+            "columns" : [ "c14" ],
+            "source_query_ids" : [ "rare" ]
+          }, {
+            "id" : "03678c0043d03de8cd00272be3e4a8a8ad87ec2aa64fbc3f9bdfb8b3c1641503",
+            "table" : "rare",
+            "columns" : [ "c15", "c10" ],
+            "source_query_ids" : [ "rare" ]
+          } ],
+          "size_attempts" : 16,
+          "final_pool_size" : 16,
+          "status" : "partial",
+          "stop_reasons" : [ "NO_IMPROVEMENT", "REPAIR_LIMIT" ],
+          "selected_ids" : [ "15dbb32d6ea7a7ff5ee0a7ab613b59e9219ecc9b0035ea88855e8a508d5999f0" ],
+          "selected_cost_by_query_id" : {
+            "cheap" : 1.0,
+            "rare" : 500.0
+          },
+          "baseline_cost_by_query_id" : {
+            "cheap" : 1.0,
+            "rare" : 10000.0
+          },
+          "profile_metrics" : [ {
+            "profile_id" : "observed",
+            "normalized_weight" : 1.0,
+            "baseline_cost" : 11000.0,
+            "cost" : 1500.0,
+            "gain" : 9500.0,
+            "ratio" : 0.13636363636363635,
+            "gain_percent" : 86.36363636363636
+          } ],
+          "mean_cost" : 1500.0,
+          "baseline_mean_cost" : 11000.0,
+          "mean_ratio" : 0.13636363636363635,
+          "worst_ratio" : 0.13636363636363635,
+          "selected_estimated_bytes" : 100,
+          "selected_budgeted_bytes" : 120,
+          "selected_write_units_per_hour" : 3.0,
+          "duration_millis" : 0,
+          "duration_source" : "Frozen test clock; not a performance measurement",
+          "statistics" : {
+            "actual_explain_attempts" : 0,
+            "synthetic_evaluation_attempts" : 60,
+            "completed_synthetic_evaluations" : 60,
+            "synthetic_query_cost_lookups" : 120,
+            "cache_hits" : 15,
+            "repair_attempts" : 28
+          },
+          "limits" : {
+            "command_timeout_millis" : 90000,
+            "search_timeout_millis" : 60000,
+            "explain_timeout_millis" : 2000,
+            "connect_timeout_millis" : 5000,
+            "max_explain_attempts" : 2000,
+            "max_repair_attempts" : 28
+          }
+        }
+      },
+      "comparison" : {
+        "same_sql_profiles_budgets_limits_baseline" : true,
+        "same_final_pool_size" : 16,
+        "removed_from_shortlist" : [ "01f55b19022c2b7cd4789b250f4040ae898023a694e5a2b96cfcf181ce78473d", "0205c749ac638d572a8f750afa8859623f684cbac32a08e17cf9df44c0b0e2af", "04ce1007d1b2cd36c715f35bdb10f08660efcddf1e340ac4a498e44ba35a767d", "051d64d62bd75ff1c1970dc0ed1a2687122a28c92ab96676a3e2c9d71edc4e46", "05c34c26d89e9d97130aef04cab0c07f82e7be389dc687f57c8d65d295b560a6", "06309a41e76c1ee4bd3eb02643ce75eb72c370d1f5c0a1e0fc19ee71d3116bc0", "064c411dd0a2a7b1d6c77250f6a63c29206062bd0fd727325bfa8ccd6ae238dc", "069597b055339677c605d0f5c4537d78a2d8afa65624c78174dd218b53ce6f9d", "3e7bf565d71270a212e8a0f92b4de4b7ed657e6b15967f36fd695833b1dcb7e6", "3f43c268fa3df8fa7fc3a6754f580f47c3c5f758e9b4f033d7b8b8c004c1dafc", "4671a33f5c1305f95f4bd7fb165aaea19b9d8b3ee19d68d0ddd17a7f7791aa6c", "65f3f0b3c777c13bd52dc34cd0bcfefc02dea270083a5cbb914e658eb4305df9", "6e7aacf3711e0763e4bf0b705e69a51e023ed55a1b3672581341a07c4d6e452a", "a8d6a20bd3170d3f6f2a6073167e72d22ea7ee5ae42351484de046b455097f2c", "c24d5446178b7c1376a1a8758bccdf76551e659f3cce064f4f6216464a3277b1", "d93817919a7feda345d55f3474c5502448bee3fd8484f096e74a4463e556acfb" ],
+        "added_to_shortlist" : [ "00262e48c742f8c742c4f357f33bf435af6476cd55e27c52fd95791d4e4ad40b", "002f4bf74999b34a856649383e8d84b841fdefc33d5421c2b012b2f608fecc37", "00c0b4ff1f561ff3f0645d8a37c93290bfd730a4f0b194d634643458ce3447d5", "025c655e5ec3212ae833f6dccb434e8c236b91cbbf7e202ce286d1a3c71ef27e", "02c13a06f7470a7b1401b9e8135baccd331bb09c66170a6d5be8701f728d3486", "02dd09ac8fc84001f1598a38904d7a6d18ad5fc39fd276d2973b22df082b3b4b", "03487fc96b5c93c30ea2573a637ae97030904ac8c9c9926489d6786b07039b2e", "03678c0043d03de8cd00272be3e4a8a8ad87ec2aa64fbc3f9bdfb8b3c1641503", "15dbb32d6ea7a7ff5ee0a7ab613b59e9219ecc9b0035ea88855e8a508d5999f0", "17fd18f90452478e1b3420f388e80b5884e360384fcee0f9fc5ec47ba93739bb", "24d785a43cc06eb5826c2a79f38d0f3047cc25b93d8ffbc1060b00ef41de7fd3", "2f3c461d4f267f855f1c25695885fc3bbaafffa9de7f445a58cdcdf2077092a6", "345046816353b9e211bd85b888b29bd1a17e7675761bf49fae25de0bc47ec795", "3ae7e57116b6b747b938fcc445314cd0fa26170074b390826f0e308540439d27", "591e43f295d9105ab1b285ca63ea60c17a2a7a46e7bb6f51ee8bbf875f83a70a", "5a376f505532049f6e052f9c1c3001d488fcf5889d61a50a358af58754f60b86" ],
+        "shortlist_intersection" : [ ],
+        "winner_on_this_fixture" : "baseline_cost"
+      }
+    },
+    "rare_unchanged" : {
+      "complete_cost_vectors_by_configuration_support" : {
+        "empty" : {
+          "cheap" : 1.0,
+          "rare" : 10000.0
+        },
+        "cheap_only" : {
+          "cheap" : 0.01,
+          "rare" : 10000.0
+        },
+        "rare_only" : {
+          "cheap" : 1.0,
+          "rare" : 10000.0
+        },
+        "both" : {
+          "cheap" : 0.02,
+          "rare" : 10000.0
+        }
+      },
+      "runs" : {
+        "frequency" : {
+          "candidate_ranking" : "frequency",
+          "local_survivors" : [ {
+            "query_id" : "cheap",
+            "retained_columns" : 16,
+            "enumerated_definitions" : 256,
+            "retained_definitions" : 32
+          }, {
+            "query_id" : "rare",
+            "retained_columns" : 16,
+            "enumerated_definitions" : 256,
+            "retained_definitions" : 32
+          } ],
+          "shortlist" : [ {
+            "id" : "3e7bf565d71270a212e8a0f92b4de4b7ed657e6b15967f36fd695833b1dcb7e6",
+            "table" : "cheap",
+            "columns" : [ "c11" ],
+            "source_query_ids" : [ "cheap" ]
+          }, {
+            "id" : "01f55b19022c2b7cd4789b250f4040ae898023a694e5a2b96cfcf181ce78473d",
+            "table" : "cheap",
+            "columns" : [ "c16", "c2" ],
+            "source_query_ids" : [ "cheap" ]
+          }, {
+            "id" : "3f43c268fa3df8fa7fc3a6754f580f47c3c5f758e9b4f033d7b8b8c004c1dafc",
+            "table" : "cheap",
+            "columns" : [ "c15" ],
+            "source_query_ids" : [ "cheap" ]
+          }, {
+            "id" : "0205c749ac638d572a8f750afa8859623f684cbac32a08e17cf9df44c0b0e2af",
+            "table" : "cheap",
+            "columns" : [ "c10", "c1" ],
+            "source_query_ids" : [ "cheap" ]
+          }, {
+            "id" : "4671a33f5c1305f95f4bd7fb165aaea19b9d8b3ee19d68d0ddd17a7f7791aa6c",
+            "table" : "cheap",
+            "columns" : [ "c9" ],
+            "source_query_ids" : [ "cheap" ]
+          }, {
+            "id" : "04ce1007d1b2cd36c715f35bdb10f08660efcddf1e340ac4a498e44ba35a767d",
+            "table" : "cheap",
+            "columns" : [ "c10", "c11" ],
+            "source_query_ids" : [ "cheap" ]
+          }, {
+            "id" : "65f3f0b3c777c13bd52dc34cd0bcfefc02dea270083a5cbb914e658eb4305df9",
+            "table" : "cheap",
+            "columns" : [ "c5" ],
+            "source_query_ids" : [ "cheap" ]
+          }, {
+            "id" : "051d64d62bd75ff1c1970dc0ed1a2687122a28c92ab96676a3e2c9d71edc4e46",
+            "table" : "cheap",
+            "columns" : [ "c12", "c15" ],
+            "source_query_ids" : [ "cheap" ]
+          }, {
+            "id" : "6e7aacf3711e0763e4bf0b705e69a51e023ed55a1b3672581341a07c4d6e452a",
+            "table" : "cheap",
+            "columns" : [ "c12" ],
+            "source_query_ids" : [ "cheap" ]
+          }, {
+            "id" : "05c34c26d89e9d97130aef04cab0c07f82e7be389dc687f57c8d65d295b560a6",
+            "table" : "cheap",
+            "columns" : [ "c7", "c8" ],
+            "source_query_ids" : [ "cheap" ]
+          }, {
+            "id" : "a8d6a20bd3170d3f6f2a6073167e72d22ea7ee5ae42351484de046b455097f2c",
+            "table" : "cheap",
+            "columns" : [ "c1" ],
+            "source_query_ids" : [ "cheap" ]
+          }, {
+            "id" : "06309a41e76c1ee4bd3eb02643ce75eb72c370d1f5c0a1e0fc19ee71d3116bc0",
+            "table" : "cheap",
+            "columns" : [ "c7", "c15" ],
+            "source_query_ids" : [ "cheap" ]
+          }, {
+            "id" : "c24d5446178b7c1376a1a8758bccdf76551e659f3cce064f4f6216464a3277b1",
+            "table" : "cheap",
+            "columns" : [ "c3" ],
+            "source_query_ids" : [ "cheap" ]
+          }, {
+            "id" : "064c411dd0a2a7b1d6c77250f6a63c29206062bd0fd727325bfa8ccd6ae238dc",
+            "table" : "cheap",
+            "columns" : [ "c13", "c1" ],
+            "source_query_ids" : [ "cheap" ]
+          }, {
+            "id" : "d93817919a7feda345d55f3474c5502448bee3fd8484f096e74a4463e556acfb",
+            "table" : "cheap",
+            "columns" : [ "c8" ],
+            "source_query_ids" : [ "cheap" ]
+          }, {
+            "id" : "069597b055339677c605d0f5c4537d78a2d8afa65624c78174dd218b53ce6f9d",
+            "table" : "cheap",
+            "columns" : [ "c9", "c13" ],
+            "source_query_ids" : [ "cheap" ]
+          } ],
+          "size_attempts" : 16,
+          "final_pool_size" : 16,
+          "status" : "partial",
+          "stop_reasons" : [ "NO_IMPROVEMENT", "REPAIR_LIMIT" ],
+          "selected_ids" : [ "3e7bf565d71270a212e8a0f92b4de4b7ed657e6b15967f36fd695833b1dcb7e6" ],
+          "selected_cost_by_query_id" : {
+            "cheap" : 0.01,
+            "rare" : 10000.0
+          },
+          "baseline_cost_by_query_id" : {
+            "cheap" : 1.0,
+            "rare" : 10000.0
+          },
+          "profile_metrics" : [ {
+            "profile_id" : "observed",
+            "normalized_weight" : 1.0,
+            "baseline_cost" : 11000.0,
+            "cost" : 10010.0,
+            "gain" : 990.0,
+            "ratio" : 0.91,
+            "gain_percent" : 9.0
+          } ],
+          "mean_cost" : 10010.0,
+          "baseline_mean_cost" : 11000.0,
+          "mean_ratio" : 0.91,
+          "worst_ratio" : 0.91,
+          "selected_estimated_bytes" : 100,
+          "selected_budgeted_bytes" : 120,
+          "selected_write_units_per_hour" : 3.0,
+          "duration_millis" : 0,
+          "duration_source" : "Frozen test clock; not a performance measurement",
+          "statistics" : {
+            "actual_explain_attempts" : 0,
+            "synthetic_evaluation_attempts" : 60,
+            "completed_synthetic_evaluations" : 60,
+            "synthetic_query_cost_lookups" : 120,
+            "cache_hits" : 15,
+            "repair_attempts" : 28
+          },
+          "limits" : {
+            "command_timeout_millis" : 90000,
+            "search_timeout_millis" : 60000,
+            "explain_timeout_millis" : 2000,
+            "connect_timeout_millis" : 5000,
+            "max_explain_attempts" : 2000,
+            "max_repair_attempts" : 28
+          }
+        },
+        "baseline_cost" : {
+          "candidate_ranking" : "baseline_cost",
+          "local_survivors" : [ {
+            "query_id" : "cheap",
+            "retained_columns" : 16,
+            "enumerated_definitions" : 256,
+            "retained_definitions" : 32
+          }, {
+            "query_id" : "rare",
+            "retained_columns" : 16,
+            "enumerated_definitions" : 256,
+            "retained_definitions" : 32
+          } ],
+          "shortlist" : [ {
+            "id" : "15dbb32d6ea7a7ff5ee0a7ab613b59e9219ecc9b0035ea88855e8a508d5999f0",
+            "table" : "rare",
+            "columns" : [ "c12" ],
+            "source_query_ids" : [ "rare" ]
+          }, {
+            "id" : "00262e48c742f8c742c4f357f33bf435af6476cd55e27c52fd95791d4e4ad40b",
+            "table" : "rare",
+            "columns" : [ "c13", "c11" ],
+            "source_query_ids" : [ "rare" ]
+          }, {
+            "id" : "17fd18f90452478e1b3420f388e80b5884e360384fcee0f9fc5ec47ba93739bb",
+            "table" : "rare",
+            "columns" : [ "c13" ],
+            "source_query_ids" : [ "rare" ]
+          }, {
+            "id" : "002f4bf74999b34a856649383e8d84b841fdefc33d5421c2b012b2f608fecc37",
+            "table" : "rare",
+            "columns" : [ "c16", "c9" ],
+            "source_query_ids" : [ "rare" ]
+          }, {
+            "id" : "24d785a43cc06eb5826c2a79f38d0f3047cc25b93d8ffbc1060b00ef41de7fd3",
+            "table" : "rare",
+            "columns" : [ "c3" ],
+            "source_query_ids" : [ "rare" ]
+          }, {
+            "id" : "00c0b4ff1f561ff3f0645d8a37c93290bfd730a4f0b194d634643458ce3447d5",
+            "table" : "rare",
+            "columns" : [ "c8", "c6" ],
+            "source_query_ids" : [ "rare" ]
+          }, {
+            "id" : "2f3c461d4f267f855f1c25695885fc3bbaafffa9de7f445a58cdcdf2077092a6",
+            "table" : "rare",
+            "columns" : [ "c7" ],
+            "source_query_ids" : [ "rare" ]
+          }, {
+            "id" : "025c655e5ec3212ae833f6dccb434e8c236b91cbbf7e202ce286d1a3c71ef27e",
+            "table" : "rare",
+            "columns" : [ "c11", "c5" ],
+            "source_query_ids" : [ "rare" ]
+          }, {
+            "id" : "345046816353b9e211bd85b888b29bd1a17e7675761bf49fae25de0bc47ec795",
+            "table" : "rare",
+            "columns" : [ "c9" ],
+            "source_query_ids" : [ "rare" ]
+          }, {
+            "id" : "02c13a06f7470a7b1401b9e8135baccd331bb09c66170a6d5be8701f728d3486",
+            "table" : "rare",
+            "columns" : [ "c7", "c13" ],
+            "source_query_ids" : [ "rare" ]
+          }, {
+            "id" : "3ae7e57116b6b747b938fcc445314cd0fa26170074b390826f0e308540439d27",
+            "table" : "rare",
+            "columns" : [ "c6" ],
+            "source_query_ids" : [ "rare" ]
+          }, {
+            "id" : "02dd09ac8fc84001f1598a38904d7a6d18ad5fc39fd276d2973b22df082b3b4b",
+            "table" : "rare",
+            "columns" : [ "c6", "c15" ],
+            "source_query_ids" : [ "rare" ]
+          }, {
+            "id" : "591e43f295d9105ab1b285ca63ea60c17a2a7a46e7bb6f51ee8bbf875f83a70a",
+            "table" : "rare",
+            "columns" : [ "c1" ],
+            "source_query_ids" : [ "rare" ]
+          }, {
+            "id" : "03487fc96b5c93c30ea2573a637ae97030904ac8c9c9926489d6786b07039b2e",
+            "table" : "rare",
+            "columns" : [ "c1", "c7" ],
+            "source_query_ids" : [ "rare" ]
+          }, {
+            "id" : "5a376f505532049f6e052f9c1c3001d488fcf5889d61a50a358af58754f60b86",
+            "table" : "rare",
+            "columns" : [ "c14" ],
+            "source_query_ids" : [ "rare" ]
+          }, {
+            "id" : "03678c0043d03de8cd00272be3e4a8a8ad87ec2aa64fbc3f9bdfb8b3c1641503",
+            "table" : "rare",
+            "columns" : [ "c15", "c10" ],
+            "source_query_ids" : [ "rare" ]
+          } ],
+          "size_attempts" : 16,
+          "final_pool_size" : 16,
+          "status" : "partial",
+          "stop_reasons" : [ "NO_IMPROVEMENT", "REPAIR_LIMIT" ],
+          "selected_ids" : [ ],
+          "selected_cost_by_query_id" : {
+            "cheap" : 1.0,
+            "rare" : 10000.0
+          },
+          "baseline_cost_by_query_id" : {
+            "cheap" : 1.0,
+            "rare" : 10000.0
+          },
+          "profile_metrics" : [ {
+            "profile_id" : "observed",
+            "normalized_weight" : 1.0,
+            "baseline_cost" : 11000.0,
+            "cost" : 11000.0,
+            "gain" : 0.0,
+            "ratio" : 1.0,
+            "gain_percent" : 0.0
+          } ],
+          "mean_cost" : 11000.0,
+          "baseline_mean_cost" : 11000.0,
+          "mean_ratio" : 1.0,
+          "worst_ratio" : 1.0,
+          "selected_estimated_bytes" : 0,
+          "selected_budgeted_bytes" : 0,
+          "selected_write_units_per_hour" : 0.0,
+          "duration_millis" : 0,
+          "duration_source" : "Frozen test clock; not a performance measurement",
+          "statistics" : {
+            "actual_explain_attempts" : 0,
+            "synthetic_evaluation_attempts" : 45,
+            "completed_synthetic_evaluations" : 45,
+            "synthetic_query_cost_lookups" : 90,
+            "cache_hits" : 0,
+            "repair_attempts" : 28
+          },
+          "limits" : {
+            "command_timeout_millis" : 90000,
+            "search_timeout_millis" : 60000,
+            "explain_timeout_millis" : 2000,
+            "connect_timeout_millis" : 5000,
+            "max_explain_attempts" : 2000,
+            "max_repair_attempts" : 28
+          }
+        }
+      },
+      "comparison" : {
+        "same_sql_profiles_budgets_limits_baseline" : true,
+        "same_final_pool_size" : 16,
+        "removed_from_shortlist" : [ "01f55b19022c2b7cd4789b250f4040ae898023a694e5a2b96cfcf181ce78473d", "0205c749ac638d572a8f750afa8859623f684cbac32a08e17cf9df44c0b0e2af", "04ce1007d1b2cd36c715f35bdb10f08660efcddf1e340ac4a498e44ba35a767d", "051d64d62bd75ff1c1970dc0ed1a2687122a28c92ab96676a3e2c9d71edc4e46", "05c34c26d89e9d97130aef04cab0c07f82e7be389dc687f57c8d65d295b560a6", "06309a41e76c1ee4bd3eb02643ce75eb72c370d1f5c0a1e0fc19ee71d3116bc0", "064c411dd0a2a7b1d6c77250f6a63c29206062bd0fd727325bfa8ccd6ae238dc", "069597b055339677c605d0f5c4537d78a2d8afa65624c78174dd218b53ce6f9d", "3e7bf565d71270a212e8a0f92b4de4b7ed657e6b15967f36fd695833b1dcb7e6", "3f43c268fa3df8fa7fc3a6754f580f47c3c5f758e9b4f033d7b8b8c004c1dafc", "4671a33f5c1305f95f4bd7fb165aaea19b9d8b3ee19d68d0ddd17a7f7791aa6c", "65f3f0b3c777c13bd52dc34cd0bcfefc02dea270083a5cbb914e658eb4305df9", "6e7aacf3711e0763e4bf0b705e69a51e023ed55a1b3672581341a07c4d6e452a", "a8d6a20bd3170d3f6f2a6073167e72d22ea7ee5ae42351484de046b455097f2c", "c24d5446178b7c1376a1a8758bccdf76551e659f3cce064f4f6216464a3277b1", "d93817919a7feda345d55f3474c5502448bee3fd8484f096e74a4463e556acfb" ],
+        "added_to_shortlist" : [ "00262e48c742f8c742c4f357f33bf435af6476cd55e27c52fd95791d4e4ad40b", "002f4bf74999b34a856649383e8d84b841fdefc33d5421c2b012b2f608fecc37", "00c0b4ff1f561ff3f0645d8a37c93290bfd730a4f0b194d634643458ce3447d5", "025c655e5ec3212ae833f6dccb434e8c236b91cbbf7e202ce286d1a3c71ef27e", "02c13a06f7470a7b1401b9e8135baccd331bb09c66170a6d5be8701f728d3486", "02dd09ac8fc84001f1598a38904d7a6d18ad5fc39fd276d2973b22df082b3b4b", "03487fc96b5c93c30ea2573a637ae97030904ac8c9c9926489d6786b07039b2e", "03678c0043d03de8cd00272be3e4a8a8ad87ec2aa64fbc3f9bdfb8b3c1641503", "15dbb32d6ea7a7ff5ee0a7ab613b59e9219ecc9b0035ea88855e8a508d5999f0", "17fd18f90452478e1b3420f388e80b5884e360384fcee0f9fc5ec47ba93739bb", "24d785a43cc06eb5826c2a79f38d0f3047cc25b93d8ffbc1060b00ef41de7fd3", "2f3c461d4f267f855f1c25695885fc3bbaafffa9de7f445a58cdcdf2077092a6", "345046816353b9e211bd85b888b29bd1a17e7675761bf49fae25de0bc47ec795", "3ae7e57116b6b747b938fcc445314cd0fa26170074b390826f0e308540439d27", "591e43f295d9105ab1b285ca63ea60c17a2a7a46e7bb6f51ee8bbf875f83a70a", "5a376f505532049f6e052f9c1c3001d488fcf5889d61a50a358af58754f60b86" ],
+        "shortlist_intersection" : [ ],
+        "winner_on_this_fixture" : "frequency"
+      }
+    }
+  },
+  "default_decision" : "Keep frequency; baseline_cost remains experimental pending representative PostgreSQL observations."
+}

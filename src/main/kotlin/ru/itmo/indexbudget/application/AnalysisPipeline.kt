@@ -1,5 +1,6 @@
 package ru.itmo.indexbudget.application
 
+import ru.itmo.indexbudget.comparison.ManualIndexEvaluator
 import ru.itmo.indexbudget.candidates.CandidateGenerator
 import ru.itmo.indexbudget.domain.*
 import ru.itmo.indexbudget.optimizer.Optimizer
@@ -25,17 +26,41 @@ class AnalysisPipeline(
     private val resolvedValidator: ResolvedWorkloadValidator = ResolvedWorkloadValidator(),
     private val shutdownCancellation: ShutdownCancellation = JvmShutdownCancellation(),
 ) : AnalysisRunner {
-    override fun run(input: WorkloadInput, outputDirectory: Path, context: RunContext): SearchResult {
+    override fun run(input: WorkloadInput, outputDirectory: Path, context: RunContext): SearchResult =
+        runInternal(input, outputDirectory, context, null)
+
+    /** A series supplies its once-prepared pool; this invocation still owns its session and baseline. */
+    fun runWithFixedPool(
+        input: WorkloadInput,
+        outputDirectory: Path,
+        context: RunContext,
+        pool: PreparedCandidatePool,
+    ): SearchResult = runInternal(input, outputDirectory, context, pool)
+
+    private fun runInternal(
+        input: WorkloadInput,
+        outputDirectory: Path,
+        context: RunContext,
+        fixedPool: PreparedCandidatePool?,
+    ): SearchResult {
+        var manual: ManualComparison? = input.manualIndexes?.let { ManualComparison(ManualComparisonStatus.NOT_EVALUATED) }
+        val manualEvaluator = ManualIndexEvaluator()
         var baseline: EvaluationResult? = null
         var checkpoint: SearchCheckpoint? = null
         var candidateBatch = CandidateBatch(emptyList())
         var result: SearchResult? = null
         var failure: AnalysisError? = null
         val cleanupErrors = mutableListOf<AnalysisError>()
+        val operationStopReasons = mutableListOf<StopReason>()
         val catalogWarnings = mutableListOf<AnalysisWarning>()
         val activeSession = AtomicReference<AnalysisSession?>()
         var registration: AutoCloseable? = null
         try {
+            context.selectAnalysisMode(input.analysisMode)
+            val fixedSelection = fixedPool?.let { pool ->
+                CandidatePreparation(metrics).selectFixedPool(pool, input, context)
+                    .also { candidateBatch = it.reportBatch }
+            }
             registration = shutdownCancellation.register {
                 context.cancel()
                 // The adapter owns thread-safe cancellation of a pending statement/connection.
@@ -58,6 +83,7 @@ class AnalysisPipeline(
                 "Resolution must preserve original SQL"
             }
             resolvedValidator.validate(resolved, context)
+            input.manualIndexes?.let { manual = manualEvaluator.prepare(it, catalog, resolved, context) }
             context.completePhase()
 
             context.startSearch()
@@ -86,11 +112,15 @@ class AnalysisPipeline(
                     SearchDiagnostics(stopReasons = listOf(earlyStop)))
             } else {
                 context.enterPhase(AnalysisPhase.CANDIDATES)
-                candidateBatch = candidateGenerator.generate(resolved, catalog, context)
-                context.checkDeadline()
-                val searchCandidates = prepareCandidateSizes(candidateBatch, session, input, context) { preparedBatch ->
-                    candidateBatch = preparedBatch
+                val preparation = CandidatePreparation(metrics)
+                val prepared = if (fixedSelection == null) {
+                    candidateBatch = candidateGenerator.generate(resolved, catalog, context, evaluatedBaseline)
+                    preparation.prepare(candidateBatch, session, input, context) { candidateBatch = it }
+                } else {
+                    fixedSelection
                 }
+                val searchCandidates = prepared.searchBatch
+                context.checkDeadline()
                 context.completePhase()
                 if (searchCandidates.candidates.isEmpty()) {
                     result = SearchResult.Completed(input.objective, evaluatedBaseline, empty, empty,
@@ -123,10 +153,16 @@ class AnalysisPipeline(
                     if (result.status == RunStatus.COMPLETED) context.checkDeadline()
                 }
             }
+            if (manual != null && result.status != RunStatus.FAILED) {
+                manual = manualEvaluator.evaluate(checkNotNull(manual), resolved, evaluatedBaseline,
+                    session, metrics, context) { manual = it }
+            }
         } catch (error: AnalysisException) {
             failure = error.error
             // The adapter preserves the primary failure and attaches safe typed cleanup failures.
-            cleanupErrors += error.suppressed.filterIsInstance<AnalysisException>().map { it.error }
+            val operationErrors = error.suppressed.filterIsInstance<AnalysisException>().map { it.error }
+            cleanupErrors += operationErrors
+            operationStopReasons += operationErrors.mapNotNull { partialReason(it.code) }
         } catch (_: Exception) {
             // Unexpected parser/driver/implementation exceptions may contain SQL or credentials.
             failure = AnalysisError(ErrorCode.INTERNAL_ERROR, "Analysis component failed unexpectedly.")
@@ -148,6 +184,7 @@ class AnalysisPipeline(
             result = result,
             failure = failure,
             cleanupErrors = cleanupErrors,
+            operationStopReasons = operationStopReasons,
             catalogWarnings = catalogWarnings,
             candidateBatch = candidateBatch,
             context = context,
@@ -156,8 +193,11 @@ class AnalysisPipeline(
         // Neither report port can access the closed session. This path also accepts an expired run.
         context.enterReport()
         try {
-            val report = reportBuilder.build(input, candidateBatch, finalResult, context)
+            val builtReport = reportBuilder.build(input, candidateBatch, finalResult, context)
+            val report = if (manual == null) builtReport else builtReport.copy(manualComparison = manual)
             require(report.runId == context.runId && report.inputHash == context.inputHash &&
+                report.analysisMode == context.analysisMode &&
+                report.candidateRanking == input.candidateRanking &&
                 report.result == finalResult && report.input == input) {
                 "Report must describe this invocation and saved result"
             }
@@ -172,60 +212,6 @@ class AnalysisPipeline(
         return finalResult
     }
 
-    /** Preserve the full shortlist for reports; return only usable candidates for search. */
-    private fun prepareCandidateSizes(
-        shortlist: CandidateBatch,
-        session: AnalysisSession,
-        input: WorkloadInput,
-        context: RunContext,
-        onPrepared: (CandidateBatch) -> Unit,
-    ): CandidateBatch {
-        var reportBatch = shortlist
-        val preparedCandidates = mutableListOf<IndexCandidate>()
-        val reportedCandidates = mutableListOf<IndexCandidate>()
-        val shortlistedCandidates = shortlist.candidates
-        for ((index, candidate) in shortlistedCandidates.withIndex()) {
-            context.checkDeadline()
-            var pendingFailure: AnalysisException? = null
-            try {
-                val bytes = session.estimateSize(candidate, context)
-                if (bytes < 0) throw AnalysisException(AnalysisError(
-                    ErrorCode.NUMERIC_ERROR, "Estimated index size must be nonnegative.",
-                ))
-                val sized = candidate.copy(estimatedBytes = bytes)
-                val usage = metrics.assessBudget(listOf(sized), input).usage
-                val prepared = sized.copy(budgetedBytes = usage.budgetedBytes,
-                    writeUnitsPerHour = usage.writeUnitsPerHour)
-                preparedCandidates += prepared
-                reportedCandidates += prepared
-            } catch (error: AnalysisException) {
-                if (error.error.code != ErrorCode.HYPOTHETICAL_INDEX_ERROR) throw error
-                reportedCandidates += candidate.copy(estimatedBytes = null, budgetedBytes = null,
-                    writeUnitsPerHour = null)
-                reportBatch = reportBatch.copy(diagnostics = reportBatch.diagnostics.copy(
-                    decisions = reportBatch.diagnostics.decisions + CandidateDecision(
-                        CandidateReason.HYPOTHETICAL_INDEX_ERROR, candidateId = candidate.id,
-                        phase = AnalysisPhase.CANDIDATES,
-                    ),
-                    warnings = reportBatch.diagnostics.warnings + AnalysisWarning(
-                        WarningCode.CANDIDATE_REJECTED, "A hypothetical index could not be created.",
-                        details = mapOf("candidate_id" to candidate.id),
-                    ),
-                ))
-                if (error.suppressed.isNotEmpty()) pendingFailure = error
-            }
-            // Publish before checking the deadline: failed and unvisited entries keep unknown estimates.
-            reportBatch = reportBatch.copy(
-                candidates = reportedCandidates.toList() + shortlistedCandidates.drop(index + 1),
-            )
-            onPrepared(reportBatch)
-            // A local rejection is recoverable only if its session cleanup succeeded.
-            pendingFailure?.let { throw it }
-            context.checkDeadline()
-        }
-        return reportBatch.copy(candidates = preparedCandidates.toList())
-    }
-
     private fun finalizeResult(
         objective: Objective,
         baseline: EvaluationResult?,
@@ -233,6 +219,7 @@ class AnalysisPipeline(
         result: SearchResult?,
         failure: AnalysisError?,
         cleanupErrors: List<AnalysisError>,
+        operationStopReasons: List<StopReason>,
         catalogWarnings: List<AnalysisWarning>,
         candidateBatch: CandidateBatch,
         context: RunContext,
@@ -260,9 +247,13 @@ class AnalysisPipeline(
             val reason = partialReason(primaryFailure.code) ?: if (
                 primaryFailure.code == ErrorCode.HYPOTHETICAL_INDEX_ERROR
             ) cleanupErrors.firstNotNullOfOrNull { partialReason(it.code) } else null
-            if (reason != null && baseline != null && checkpoint != null) {
+            // A recoverable primary failure must not hide a fatal error found during cleanup.
+            // Keep the original error as primary, but do not publish a usable result after a
+            // numeric, input, catalog or internal failure in any part of that operation.
+            val fatalCleanup = cleanupErrors.any { partialReason(it.code) == null }
+            if (reason != null && !fatalCleanup && baseline != null && checkpoint != null) {
                 SearchResult.Partial(objective, baseline, checkpoint.bestRobust, checkpoint.bestMean,
-                    diagnostics.copy(stopReasons = (diagnostics.stopReasons + reason).distinct()))
+                    diagnostics.copy(stopReasons = (diagnostics.stopReasons + reason + operationStopReasons).distinct()))
             } else {
                 SearchResult.Failed(objective, primaryFailure, baseline, diagnostics)
             }

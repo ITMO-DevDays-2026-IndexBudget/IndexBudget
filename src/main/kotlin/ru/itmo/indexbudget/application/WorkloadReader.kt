@@ -1,8 +1,11 @@
 package ru.itmo.indexbudget.application
 
 import org.springframework.stereotype.Component
+import ru.itmo.indexbudget.domain.*
 import ru.itmo.indexbudget.domain.AnalysisError
 import ru.itmo.indexbudget.domain.AnalysisException
+import ru.itmo.indexbudget.domain.AnalysisMode
+import ru.itmo.indexbudget.domain.CandidateRanking
 import ru.itmo.indexbudget.domain.Constraints
 import ru.itmo.indexbudget.domain.ErrorCode
 import ru.itmo.indexbudget.domain.Objective
@@ -11,6 +14,14 @@ import ru.itmo.indexbudget.domain.ProfileWeights
 import ru.itmo.indexbudget.domain.QueryInput
 import ru.itmo.indexbudget.domain.RunContext
 import ru.itmo.indexbudget.domain.TableWriteRates
+import ru.itmo.indexbudget.domain.WorkloadProvenance
+import ru.itmo.indexbudget.domain.ObservationWindow
+import ru.itmo.indexbudget.domain.ObservationCoverage
+import ru.itmo.indexbudget.domain.QueryExample
+import ru.itmo.indexbudget.domain.QueryExampleSource
+import java.time.Instant
+import java.time.format.DateTimeParseException
+import java.util.UUID
 import ru.itmo.indexbudget.domain.WorkloadInput
 import tools.jackson.core.JacksonException
 import tools.jackson.core.StreamReadFeature
@@ -35,7 +46,16 @@ class WorkloadReader {
         .enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS)
         .build()
 
-    fun read(path: Path, context: RunContext? = null): WorkloadInput {
+    fun read(
+        path: Path,
+        context: RunContext? = null,
+        analysisModeOverride: AnalysisMode? = null,
+        candidateRankingOverride: CandidateRanking? = null,
+    ): WorkloadInput {
+        // Until the JSON mode is known, allow the largest preset while reading/parsing the source.
+        // The clock is never restarted: selecting the actual mode below immediately checks its
+        // own command budget, and every remaining validation/analysis operation uses that preset.
+        context?.selectAnalysisMode(analysisModeOverride ?: AnalysisMode.DEEP)
         context?.checkDeadline()
         val root = readJsonObject(path, context)
         val version = root.get("schema_version")
@@ -46,7 +66,27 @@ class WorkloadReader {
         }
         objectNode(root, Location("workload"), setOf(
             "schema_version", "objective", "queries", "profiles", "constraints", "table_write_rates",
+            "analysis_mode", "candidate_ranking", "manual_indexes", "provenance",
         ))
+        val requestedMode = when (val value = root.get("analysis_mode")) {
+            null -> AnalysisMode.NORMAL
+            else -> when (string(value, Location("analysis_mode"))) {
+                "fast" -> AnalysisMode.FAST
+                "normal" -> AnalysisMode.NORMAL
+                "deep" -> AnalysisMode.DEEP
+                else -> invalid(Location("analysis_mode"), "Expected fast, normal or deep.")
+            }
+        }
+        val analysisMode = analysisModeOverride ?: requestedMode
+        context?.selectAnalysisMode(analysisMode)
+        val requestedRanking = when (val value = root.get("candidate_ranking")) {
+            null -> CandidateRanking.FREQUENCY
+            else -> {
+                val name = string(value, Location("candidate_ranking"))
+                CandidateRanking.entries.firstOrNull { it.wireName == name }
+                    ?: invalid(Location("candidate_ranking"), "Expected frequency or baseline_cost.")
+            }
+        }
         val objective = when (val value = root.get("objective")) {
             null -> Objective.ROBUST
             else -> when (string(value, Location("objective"))) {
@@ -64,10 +104,12 @@ class WorkloadReader {
         ProfileWeights.normalize(profiles)
         context?.checkDeadline()
         val writeRates = writeRates(root.get("table_write_rates"))
+        val manual = manualIndexes(root.get("manual_indexes"))
         if (constraints.writeBudgetUnitsPerHour != null && writeRates == null) {
             invalid(Location("table_write_rates"), "An enabled write budget requires a complete write profile.",
                 ErrorCode.INVALID_WRITE_PROFILE)
         }
+        val provenance = provenance(root.get("provenance"), queries, profiles)
         context?.checkDeadline()
         if (context != null) {
             val canonical = StringBuilder()
@@ -77,7 +119,38 @@ class WorkloadReader {
             context.checkDeadline()
             context.recordInputHash(HexFormat.of().formatHex(digest))
         }
-        return WorkloadInput(queries, profiles, constraints, objective = objective, tableWriteRates = writeRates)
+        return WorkloadInput(queries, profiles, constraints, objective = objective, tableWriteRates = writeRates,
+            manualIndexes = manual, analysisMode = analysisMode, candidateRanking = candidateRankingOverride ?: requestedRanking,
+            provenance = provenance)
+    }
+
+    private fun manualIndexes(node: JsonNode?): List<IndexDefinition>? {
+        if (node == null) return null
+        val location = Location("manual_indexes")
+        return array(node, location, 5).mapIndexed { index, value ->
+            val at = location.child(index.toString())
+            objectNode(value, at, setOf("schema", "table", "keys"))
+            val table = TableRef(identifier(value.get("schema"), at.child("schema")), identifier(value.get("table"), at.child("table")))
+            val keys = array(value.get("keys"), at.child("keys"), 2).mapIndexed { position, key ->
+                val keyAt = at.child("keys").child(position.toString())
+                objectNode(key, keyAt, setOf("column", "direction", "nulls"))
+                val column = identifier(key.get("column"), keyAt.child("column"))
+                val direction = when (key.get("direction")?.let { string(it, keyAt.child("direction")) } ?: "asc") {
+                    "asc" -> SortDirection.ASC
+                    "desc" -> SortDirection.DESC
+                    else -> invalid(keyAt.child("direction"), "Expected asc or desc.")
+                }
+                val nulls = when (key.get("nulls")?.let { string(it, keyAt.child("nulls")) }) {
+                    null -> if (direction == SortDirection.DESC) NullsOrder.FIRST else NullsOrder.LAST
+                    "first" -> NullsOrder.FIRST
+                    "last" -> NullsOrder.LAST
+                    else -> invalid(keyAt.child("nulls"), "Expected first or last.")
+                }
+                IndexKey(ColumnRef(table, column), direction, nulls)
+            }
+            if (keys.map { it.column }.distinct().size != keys.size) invalid(at, "Repeated index key.")
+            IndexDefinition(table, keys)
+        }
     }
 
     /** Sort JSON objects only: array order, string values and absent fields retain their meaning. */
@@ -227,6 +300,94 @@ class WorkloadReader {
         }.toMap()
     }
 
+    private fun provenance(node: JsonNode?, queries: List<QueryInput>, profiles: List<Profile>): WorkloadProvenance? {
+        if (node == null || node.isNull) return null
+        val location = Location("provenance")
+        val value = objectNode(node, location, setOf(
+            "schema_version", "source", "source_id", "selection_rule", "windows", "query_examples",
+        ))
+        if (integer(value.get("schema_version"), location.child("schema_version")) != 1L) {
+            invalid(location.child("schema_version"), "Expected provenance schema_version: 1.",
+                ErrorCode.UNSUPPORTED_SCHEMA_VERSION)
+        }
+        if (string(value.get("source"), location.child("source")) != "pg_stat_statements") {
+            invalid(location.child("source"), "Expected pg_stat_statements.")
+        }
+        val sourceIdText = string(value.get("source_id"), location.child("source_id"))
+        val sourceId = try { UUID.fromString(sourceIdText) } catch (_: IllegalArgumentException) {
+            invalid(location.child("source_id"), "Expected a source UUID, never a connection URL.")
+        }
+        if (!sourceId.toString().equals(sourceIdText, ignoreCase = true)) {
+            invalid(location.child("source_id"), "Expected a canonical source UUID.")
+        }
+        val rule = string(value.get("selection_rule"), location.child("selection_rule"))
+        if (rule.length > 1000) invalid(location.child("selection_rule"), "Selection rule must not exceed 1000 characters.")
+        val windows = array(value.get("windows"), location.child("windows"), 3).mapIndexed { index, entry ->
+            val at = location.child("windows[$index]")
+            val window = objectNode(entry, at, setOf("profile_id", "started_at", "finished_at", "complete", "coverage"))
+            val profileId = string(window.get("profile_id"), at.child("profile_id"))
+            val startedAt = instant(window.get("started_at"), at.child("started_at"))
+            val finishedAt = instant(window.get("finished_at"), at.child("finished_at"))
+            if (finishedAt <= startedAt) invalid(at.child("finished_at"), "Observation interval must be positive.")
+            val complete = window.get("complete")
+            if (complete == null || !complete.isBoolean) invalid(at.child("complete"), "Expected a boolean.")
+            ObservationWindow(profileId, startedAt, finishedAt, complete.booleanValue(),
+                coverage(window.get("coverage"), at.child("coverage")))
+        }
+        if (windows.map { it.profileId }.toSet() != profiles.map { it.id }.toSet() || windows.size != profiles.size) {
+            invalid(location.child("windows"), "Expected exactly one observation window per workload profile.")
+        }
+        val examples = array(value.get("query_examples"), location.child("query_examples"), 20).mapIndexed { index, entry ->
+            val at = location.child("query_examples[$index]")
+            val example = objectNode(entry, at, setOf("query_id", "source"))
+            val source = when (string(example.get("source"), at.child("source"))) {
+                "user_supplied_literals" -> QueryExampleSource.USER_SUPPLIED_LITERALS
+                "original_literal_sql" -> QueryExampleSource.ORIGINAL_LITERAL_SQL
+                else -> invalid(at.child("source"), "Expected user_supplied_literals or original_literal_sql.")
+            }
+            QueryExample(string(example.get("query_id"), at.child("query_id")), source)
+        }
+        if (examples.map { it.queryId }.toSet() != queries.map { it.id }.toSet() || examples.size != queries.size) {
+            invalid(location.child("query_examples"), "Expected exactly one example origin per workload query.")
+        }
+        return WorkloadProvenance(sourceId, rule, windows, examples)
+    }
+
+    private fun instant(node: JsonNode?, location: Location): Instant = try {
+        Instant.parse(string(node, location))
+    } catch (_: DateTimeParseException) {
+        invalid(location, "Expected an ISO-8601 timestamp with UTC offset.")
+    }
+
+    private fun coverage(node: JsonNode?, location: Location): ObservationCoverage {
+        val value = objectNode(node, location, setOf(
+            "denominator", "selected_calls", "available_calls", "selected_exec_time_millis", "available_exec_time_millis",
+        ))
+        if (string(value.get("denominator"), location.child("denominator")) != "available_complete_entries") {
+            invalid(location.child("denominator"), "Expected available_complete_entries.")
+        }
+        fun count(name: String): Long? {
+            val entry = value.get(name) ?: invalid(location.child(name), "Value is required; use null for unknown.")
+            if (entry.isNull) return null
+            val count = integer(entry, location.child(name))
+            if (count < 0) invalid(location.child(name), "Count must be nonnegative.")
+            return count
+        }
+        fun time(name: String): Double? {
+            val entry = value.get(name) ?: invalid(location.child(name), "Value is required; use null for unknown.")
+            return if (entry.isNull) null else number(entry, location.child(name))
+        }
+        val selectedCalls = count("selected_calls")
+        val availableCalls = count("available_calls")
+        val selectedTime = time("selected_exec_time_millis")
+        val availableTime = time("available_exec_time_millis")
+        if (selectedCalls != null && availableCalls != null && selectedCalls > availableCalls ||
+            selectedTime != null && availableTime != null && selectedTime > availableTime) {
+            invalid(location, "Selected observations cannot exceed available observations.")
+        }
+        return ObservationCoverage(selectedCalls, availableCalls, selectedTime, availableTime)
+    }
+
     private fun objectNode(node: JsonNode?, location: Location, allowed: Set<String>): JsonNode {
         if (node == null || !node.isObject) invalid(location, "Expected an object.")
         if (node.properties().any { it.key !in allowed }) invalid(location, "Unknown field in object.")
@@ -239,10 +400,16 @@ class WorkloadReader {
         return node.toList()
     }
 
-    private fun string(node: JsonNode?, location: Location): String {
+    private fun identifier(node: JsonNode?, location: Location): String {
+        val value = string(node, location, allowBlank = true)
+        if (value.isEmpty() || '\u0000' in value) invalid(location, "Expected a nonempty identifier without NUL.")
+        return value
+    }
+
+    private fun string(node: JsonNode?, location: Location, allowBlank: Boolean = false): String {
         if (node == null || !node.isString) invalid(location, "Expected a nonblank string.")
         val value = node.stringValue()
-        if (value.isBlank()) invalid(location, "Expected a nonblank string.")
+        if (!allowBlank && value.isBlank()) invalid(location, "Expected a nonblank string.")
         try {
             Charsets.UTF_8.newEncoder().onMalformedInput(CodingErrorAction.REPORT)
                 .encode(java.nio.CharBuffer.wrap(value))

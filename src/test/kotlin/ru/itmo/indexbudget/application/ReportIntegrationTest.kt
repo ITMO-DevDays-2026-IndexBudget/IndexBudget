@@ -12,6 +12,8 @@ import ru.itmo.indexbudget.optimizer.GreedyOptimizer
 import ru.itmo.indexbudget.postgres.AnalysisSession
 import ru.itmo.indexbudget.postgres.AnalysisSessionFactory
 import ru.itmo.indexbudget.report.AtomicReportExporter
+import ru.itmo.indexbudget.report.HtmlReportRenderer
+import tools.jackson.databind.node.ObjectNode
 import ru.itmo.indexbudget.report.DefaultReportBuilder
 import ru.itmo.indexbudget.report.ReportBuilder
 import ru.itmo.indexbudget.report.ReportRenderer
@@ -124,19 +126,44 @@ class ReportIntegrationTest {
         assertNoStagingDirectories()
     }
 
+    @Test
+    fun `CLI carries provenance and shared summary to JSON and HTML without additional EXPLAIN`() {
+        val run = execute("provenance", withProvenance = true)
+        assertEquals(0, run.exitCode, run.stderr)
+        assertTrue(run.closed)
+        assertEquals(3, run.evaluationCalls)
+        assertEquals(6, run.context.statistics().explainAttempts)
+        val report = requireNotNull(run.rendered)
+        assertSame(run.built, report)
+        val json = mapper.readTree(Files.readString(run.output.resolve("report.json")))
+        assertEquals(report.summary.meanEffect.gainPercent, json["summary"]["mean_effect"]["gain_percent"].doubleValue())
+        assertEquals(report.summary.worstRatio, json["summary"]["worst_ratio"].doubleValue())
+        assertEquals(report.workloadProvenance?.sourceId.toString(), json["workload_provenance"]["source_id"].stringValue())
+        val html = Files.readString(run.output.resolve("report.html"))
+        assertTrue(html.contains("pg_stat_statements"))
+        assertTrue(html.contains("50 %"))
+        assertTrue(html.contains("Историческое время выполнения"))
+    }
+
     private fun execute(
         name: String,
         objective: Objective = Objective.ROBUST,
         failEvaluation: Int? = null,
         renderFailure: Boolean = false,
         occupyOutput: Boolean = false,
+        withProvenance: Boolean = false,
     ): Run {
         val run = Run(directory.resolve(name))
         val input = ContractFixtures.workload(objective).let {
             it.copy(constraints = it.constraints.copy(maxIndexes = 1))
         }
         val source = directory.resolve("$name.json")
-        Files.writeString(source, workloadJson(input))
+        val document = mapper.readTree(workloadJson(input)) as ObjectNode
+        if (withProvenance) {
+            document.set("provenance", mapper.readTree(
+                Files.readString(Path.of("examples/workload-v2-provenance.json")))["provenance"])
+        }
+        Files.writeString(source, mapper.writeValueAsString(document))
         val canonicalCandidates = ContractFixtures.candidates().map { candidate ->
             candidate.copy(definition = candidate.definition.copy(keys = candidate.definition.keys.map { key ->
                 key.copy(operatorClass = if (key.column.name == "created_at")
@@ -155,7 +182,7 @@ class ReportIntegrationTest {
 
             override fun estimateSize(candidate: IndexCandidate, context: RunContext): Long {
                 assertFalse(run.closed)
-                return requireNotNull(candidate.estimatedBytes)
+                return requireNotNull(ContractFixtures.candidates().single { it.id == candidate.id }.estimatedBytes)
             }
 
             override fun evaluate(candidates: List<IndexCandidate>, workload: ResolvedWorkload,
@@ -211,7 +238,7 @@ class ReportIntegrationTest {
                         Files.createDirectories(run.output)
                         Files.writeString(run.output.resolve("another-run.sql"), "other run")
                     }
-                    return "renderer:${report.runId}"
+                    return if (withProvenance) HtmlReportRenderer().render(report) else "renderer:${report.runId}"
                 }
             }),
             shutdownCancellation = ShutdownCancellation { AutoCloseable {} },

@@ -54,10 +54,17 @@ data class DatabaseVersions(val postgresVersion: String? = null, val hypopgVersi
  */
 class RunContext(
     val runId: String = UUID.randomUUID().toString(),
-    val limits: RunLimits = RunLimits(),
+    limits: RunLimits? = null,
     private val clock: NanoClock = NanoClock(System::nanoTime),
     private var onProgress: (RunProgress) -> Unit = {},
+    analysisMode: AnalysisMode = AnalysisMode.NORMAL,
 ) {
+    // Explicit limits support deterministic tests and offline tools; always report effective values.
+    private val limitsOverride = limits
+    var limits: RunLimits = limits ?: analysisMode.limits
+        private set
+    var analysisMode: AnalysisMode = analysisMode
+        private set
     private val commandStartedAt = clock.nanoTime()
     private var searchStartedAt: Long? = null
     private var explainAttempts = 0
@@ -69,6 +76,16 @@ class RunContext(
     private val cancelled = AtomicBoolean()
 
     val isCancelled: Boolean get() = cancelled.get()
+
+    /** Select during validation, retaining time already spent since command startup. */
+    fun selectAnalysisMode(mode: AnalysisMode) {
+        check(phase == AnalysisPhase.VALIDATION && searchStartedAt == null && evaluationAttempts == 0) {
+            "Analysis mode must be selected before introspection and evaluation"
+        }
+        analysisMode = mode
+        limits = limitsOverride ?: mode.limits
+        checkDeadline()
+    }
 
     /** Fingerprint of validated source JSON, before DTO defaults; never stores the source itself. */
     var inputHash: String? = null
@@ -160,10 +177,27 @@ class RunContext(
     }
 
     fun reserveExplainAttempt() {
+        claimExplainAttempt()
+        publishProgress()
+    }
+
+    /**
+     * JDBC uses this boundary so synchronous progress observers cannot delay SQL after reservation.
+     * Publish even on failure, but only once the actual execute call has begun.
+     */
+    fun <T> withExplainAttempt(execute: () -> T): T {
+        claimExplainAttempt()
+        try {
+            return execute()
+        } finally {
+            publishProgress()
+        }
+    }
+
+    private fun claimExplainAttempt() {
         checkDeadline()
         if (explainAttempts >= limits.maxExplainAttempts) fail(ErrorCode.EXPLAIN_LIMIT, "EXPLAIN attempt limit reached")
         explainAttempts++
-        publishProgress()
     }
 
     fun reserveEvaluationAttempt() {

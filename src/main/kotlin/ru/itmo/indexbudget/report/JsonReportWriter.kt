@@ -4,13 +4,14 @@ import ru.itmo.indexbudget.domain.*
 import tools.jackson.databind.DeserializationFeature
 import tools.jackson.databind.json.JsonMapper
 
-/** Explicit report v2 wire format; domain implementation details never define public JSON fields. */
+/** Explicit report v3 wire format; domain implementation details never define public JSON fields. */
 class JsonReportWriter {
     private val mapper = JsonMapper.builder()
         .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
         .build()
 
     fun render(report: AnalysisReport): String {
+        require(report.schemaVersion == 3 && report.specVersion == "0.2") { "Expected report v3 / spec 0.2" }
         val result = report.result
         val input = report.input
         val comparisons = report.queryComparisons.associateBy { it.queryId }
@@ -23,10 +24,16 @@ class JsonReportWriter {
             "duration_millis" to report.durationMillis,
             "environment" to environment(report.environment),
             "status" to result.status.name.lowercase(),
+            "analysis_mode" to report.analysisMode.name.lowercase(),
+            "candidate_ranking" to report.candidateRanking.wireName,
             "selected_objective" to result.selectedObjective.name.lowercase(),
             "comparison_scope" to report.comparisonScope.name.lowercase(),
             "incumbents_coincide" to report.incumbentsCoincide,
             "price_of_robustness" to report.priceOfRobustness,
+            "summary" to summary(report.summary),
+            "profile_comparisons" to report.profileComparisons.map(::series),
+            "query_effects" to report.queryEffects.map(::series),
+            "workload_provenance" to report.workloadProvenance?.let(::provenance),
             "profiles" to input?.profiles?.map { profile -> linkedMapOf(
                 "id" to profile.id,
                 "weight" to profile.weight,
@@ -34,6 +41,7 @@ class JsonReportWriter {
                 "calls_per_hour" to profile.callsPerHour.toSortedMap(),
             ) },
             "budgets" to input?.constraints?.let(::budgets),
+            "write_proxy_model" to "row_changes_times_key_and_include_columns",
             "table_write_rates" to input?.tableWriteRates?.toSortedMap()?.mapValues { (_, rates) -> linkedMapOf(
                 "inserts_per_hour" to rates.insertsPerHour,
                 "updates_per_hour" to rates.updatesPerHour,
@@ -54,12 +62,34 @@ class JsonReportWriter {
             "selected_indexes" to report.candidates.candidates.filter { it.id in selectedIds }.sortedBy { it.id }
                 .map(::candidate),
             "candidates" to report.candidates.candidates.sortedBy { it.id }.map(::candidate),
+            "manual_requested_indexes" to input?.manualIndexes?.map { definition -> linkedMapOf(
+                "schema" to definition.table.schema, "table" to definition.table.name,
+                "keys" to definition.keys.map { key -> linkedMapOf("column" to key.column.name,
+                    "direction" to key.direction.name.lowercase(), "nulls" to key.nulls.name.lowercase()) },
+            ) },
+            "manual_comparison" to report.manualComparison?.let(::manualComparison),
             "candidate_diagnostics" to candidateDiagnostics(report.candidates.diagnostics),
             "diagnostics" to diagnostics(result.diagnostics),
             "error" to (result as? SearchResult.Failed)?.error?.let(::error),
         )
         return mapper.writerWithDefaultPrettyPrinter().writeValueAsString(root) + "\n"
     }
+
+    private fun manualComparison(value: ManualComparison) = linkedMapOf(
+        "origin" to "manual_outside_automatic_shortlist",
+        "comparison_scope" to "separate_manual_evaluation",
+        "status" to value.status.wireValue, "admissible" to value.admissible,
+        "candidates" to value.candidates.map(::candidate),
+        "decisions" to value.decisions.map(::decision),
+        "configuration" to value.evaluation?.let { configuration(it, value.metrics) },
+        "budget_violations" to value.budgetViolations.map { it.name }.sorted(),
+        "evaluation_violations" to value.evaluationViolations.map(::error),
+        "queries" to value.queryComparisons.map { linkedMapOf(
+            "query_id" to it.queryId, "baseline_cost" to it.baselineCost,
+            "manual_cost" to it.selectedCost, "regression" to it.regression,
+        ) },
+        "error" to value.error?.let(::error),
+    )
 
     private fun environment(value: EnvironmentInfo) = linkedMapOf(
         "application_version" to value.applicationVersion,
@@ -98,13 +128,72 @@ class JsonReportWriter {
         "mean_cost" to value.meanCost,
         "mean_ratio" to value.meanRatio,
         "worst_ratio" to value.worstRatio,
-        "budget_usage" to linkedMapOf(
-            "estimated_bytes" to value.budgetUsage.estimatedBytes,
-            "budgeted_bytes" to value.budgetUsage.budgetedBytes,
-            "write_units_per_hour" to value.budgetUsage.writeUnitsPerHour,
-            "index_count" to value.budgetUsage.indexCount,
-            "size_safety_factor" to value.budgetUsage.sizeSafetyFactor,
-        ),
+        "budget_usage" to budgetUsage(value.budgetUsage),
+    )
+
+    private fun budgetUsage(value: BudgetUsage) = linkedMapOf(
+        "estimated_bytes" to value.estimatedBytes,
+        "budgeted_bytes" to value.budgetedBytes,
+        "write_units_per_hour" to value.writeUnitsPerHour,
+        "index_count" to value.indexCount,
+        "size_safety_factor" to value.sizeSafetyFactor,
+    )
+
+    private fun effect(value: CostEffect) = linkedMapOf(
+        "baseline_cost" to value.baselineCost,
+        "cost" to value.cost,
+        "gain" to value.gain,
+        "ratio" to value.ratio,
+        "gain_percent" to value.gainPercent,
+        "relative_status" to value.relativeStatus.name.lowercase(),
+    )
+
+    private fun series(value: CostComparisonSeries) = linkedMapOf(
+        "id" to value.id,
+        "baseline" to effect(value.baseline),
+        "selected" to effect(value.selected),
+        "best_robust" to effect(value.bestRobust),
+        "best_mean" to effect(value.bestMean),
+    )
+
+    private fun summary(value: RecommendationSummary) = linkedMapOf(
+        "status" to value.status.name.lowercase(),
+        "selected_index_ids" to value.selectedIndexIds,
+        "mean_effect" to effect(value.meanEffect),
+        "worst_ratio" to value.worstRatio,
+        "budget_usage" to value.budgetUsage?.let(::budgetUsage),
+        "budget_limits" to value.budgetLimits?.let(::budgets),
+        "write_limit_enabled" to value.writeLimitEnabled,
+        "regressed_query_count" to value.regressedQueryCount,
+        "comparison_scope" to value.comparisonScope.name.lowercase(),
+        "incumbents_coincide" to value.incumbentsCoincide,
+        "price_of_robustness" to value.priceOfRobustness,
+        "stop_reasons" to value.stopReasons.map { it.name },
+        "errors" to value.errors.map(::error),
+    )
+
+    private fun provenance(value: WorkloadProvenance) = linkedMapOf(
+        "schema_version" to value.schemaVersion,
+        "source" to "pg_stat_statements",
+        "source_id" to value.sourceId.toString(),
+        "selection_rule" to value.selectionRule,
+        "windows" to value.windows.map { window -> linkedMapOf(
+            "profile_id" to window.profileId,
+            "started_at" to window.startedAt.toString(),
+            "finished_at" to window.finishedAt.toString(),
+            "complete" to window.complete,
+            "coverage" to linkedMapOf(
+                "denominator" to "available_complete_entries",
+                "selected_calls" to window.coverage.selectedCalls,
+                "available_calls" to window.coverage.availableCalls,
+                "selected_exec_time_millis" to window.coverage.selectedExecTimeMillis,
+                "available_exec_time_millis" to window.coverage.availableExecTimeMillis,
+            ),
+        ) },
+        "query_examples" to value.queryExamples.map { example -> linkedMapOf(
+            "query_id" to example.queryId,
+            "source" to example.source.name.lowercase(),
+        ) },
     )
 
     private fun candidate(value: IndexCandidate) = linkedMapOf(
@@ -112,6 +201,7 @@ class JsonReportWriter {
         "definition" to linkedMapOf(
             "table" to table(value.definition.table),
             "method" to value.definition.method,
+            "included_columns" to value.definition.includedColumns.map(::column),
             "unique" to value.definition.unique,
             "keys" to value.definition.keys.map { key -> linkedMapOf(
                 "column" to column(key.column),
@@ -122,6 +212,9 @@ class JsonReportWriter {
             ) },
         ),
         "source_query_ids" to value.sourceQueryIds.sorted(),
+        "source_branches" to value.sourceBranches.sortedWith(compareBy({ it.queryId }, { it.conditionPath })).map {
+            linkedMapOf("query_id" to it.queryId, "condition_path" to it.conditionPath)
+        },
         "generation_reasons" to value.generationReasons.map { it.name }.sorted(),
         "ddl" to value.ddl,
         "estimated_bytes" to value.estimatedBytes,
@@ -136,6 +229,26 @@ class JsonReportWriter {
         "candidates_before_global_deduplication" to value.candidatesBeforeGlobalDeduplication,
         "candidates_after_global_deduplication" to value.candidatesAfterGlobalDeduplication,
         "shortlisted_candidates" to value.shortlistedCandidates,
+        "initial_shortlisted_candidates" to value.initialShortlistedCandidates,
+        "reserve_candidates" to value.reserveCandidates,
+        "reserve_candidate_limit" to value.reserveCandidateLimit,
+        "max_size_attempts" to value.maxSizeAttempts,
+        "preparation_scope" to value.preparationScope.name.lowercase(),
+        "fixed_pool_selection" to value.fixedPoolSelection?.let { point -> linkedMapOf(
+            "pool_candidates" to point.poolCandidates,
+            "admissible_candidates" to point.admissibleCandidates,
+            "budget_rejected_candidates" to point.budgetRejectedCandidates,
+            "size_attempts" to point.sizeAttempts,
+        ) },
+        "preparation" to value.preparation?.let { preparation -> linkedMapOf(
+            "examined_candidates" to preparation.examinedCandidates,
+            "size_attempts" to preparation.sizeAttempts,
+            "budget_rejected_candidates" to preparation.budgetRejectedCandidates,
+            "candidate_errors" to preparation.candidateErrors,
+            "refilled_candidates" to preparation.refilledCandidates,
+            "final_shortlisted_candidates" to preparation.finalShortlistedCandidates,
+            "stop_reason" to preparation.stopReason.name,
+        ) },
         "ungenerated_definitions" to value.ungeneratedDefinitions,
         "local_scopes" to value.localScopes.map { scope -> linkedMapOf(
             "query_id" to scope.queryId,
@@ -144,8 +257,11 @@ class JsonReportWriter {
             "retained_columns" to scope.retainedColumns,
             "enumerated_definitions" to scope.enumeratedDefinitions,
             "deduplicated_definitions" to scope.deduplicatedDefinitions,
+            "unindexable_variants" to scope.unindexableVariants,
             "retained_definitions" to scope.retainedDefinitions,
             "excluded_columns" to scope.excludedColumns.map(::column),
+            "enumerated_include_definitions" to scope.enumeratedIncludeDefinitions,
+            "retained_include_definitions" to scope.retainedIncludeDefinitions,
         ) },
         "decisions" to value.decisions.map(::decision),
         "warnings" to value.warnings.map(::warning),

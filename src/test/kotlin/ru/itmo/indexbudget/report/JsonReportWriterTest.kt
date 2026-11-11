@@ -11,15 +11,28 @@ class JsonReportWriterTest {
     private val writer = JsonReportWriter()
 
     @Test
-    fun `wire v2 exposes both incumbents from one pool and embeds saved plan JSON`() {
+    fun `legacy diagnostics preserve the initial shortlist alias`() {
+        val source = ContractFixtures.report()
+        val report = source.copy(candidates = source.candidates.copy(
+            diagnostics = CandidateDiagnostics(shortlistedCandidates = 16)))
+        val json = mapper.readTree(writer.render(report))["candidate_diagnostics"]
+        assertEquals(16, json["shortlisted_candidates"].intValue())
+        assertEquals(16, json["initial_shortlisted_candidates"].intValue())
+        assertEquals("run", json["preparation_scope"].stringValue())
+        assertTrue(json["fixed_pool_selection"].isNull)
+    }
+
+    @Test
+    fun `wire v3 exposes both incumbents from one pool and embeds saved plan JSON`() {
         val report = ContractFixtures.report(objective = Objective.MEAN)
         val json = mapper.readTree(writer.render(report))
 
-        assertEquals(2, json["schema_version"].intValue())
+        assertEquals(3, json["schema_version"].intValue())
         assertEquals("0.2", json["spec_version"].stringValue())
         assertEquals(report.runId, json["run_id"].stringValue())
         assertEquals(report.inputHash, json["input_hash"].stringValue())
         assertEquals("completed", json["status"].stringValue())
+        assertEquals("normal", json["analysis_mode"].stringValue())
         assertEquals("mean", json["selected_objective"].stringValue())
         assertEquals("evaluated_sets", json["comparison_scope"].stringValue())
         assertFalse(json["incumbents_coincide"].booleanValue())
@@ -56,9 +69,46 @@ class JsonReportWriterTest {
         assertTrue(json["candidates"][1]["write_units_per_hour"].isNull)
         assertNull(json["candidates"][1]["cost"])
         assertTrue(json["candidate_diagnostics"]["ungenerated_definitions"].isNull)
+        assertTrue(json["candidate_diagnostics"]["preparation"].isNull)
         assertTrue(json["diagnostics"]["unexamined_configurations"].isNull)
         assertEquals("GLOBAL_CANDIDATE_LIMIT", json["candidate_diagnostics"]["decisions"][0]["reason"].stringValue())
         assertTrue(json["incumbents_coincide"].booleanValue())
+    }
+
+    @Test
+    fun `candidate preparation preserves original pool refill counts and every stop reason`() {
+        val source = ContractFixtures.report()
+        for (reason in CandidatePreparationStopReason.entries) {
+            val report = source.copy(candidates = source.candidates.copy(
+                diagnostics = source.candidates.diagnostics.copy(
+                    shortlistedCandidates = 16, initialShortlistedCandidates = 16,
+                    reserveCandidates = 2, reserveCandidateLimit = 48, maxSizeAttempts = 32,
+                    preparation = CandidatePreparationStatistics(
+                        examinedCandidates = 18, sizeAttempts = 18,
+                        budgetRejectedCandidates = 14, candidateErrors = 0,
+                        refilledCandidates = 2, finalShortlistedCandidates = 4,
+                        stopReason = reason,
+                    ),
+                ),
+            ))
+            val json = mapper.readTree(writer.render(report))
+            assertEquals(3, json["schema_version"].intValue())
+            val diagnostics = json["candidate_diagnostics"]
+            assertEquals(16, diagnostics["shortlisted_candidates"].intValue())
+            assertEquals(16, diagnostics["initial_shortlisted_candidates"].intValue())
+            assertEquals(2, diagnostics["reserve_candidates"].intValue())
+            assertEquals(48, diagnostics["reserve_candidate_limit"].intValue())
+            assertEquals(32, diagnostics["max_size_attempts"].intValue())
+            val preparation = diagnostics["preparation"]
+            assertEquals(18, preparation["examined_candidates"].intValue())
+            assertEquals(18, preparation["size_attempts"].intValue())
+            assertEquals(14, preparation["budget_rejected_candidates"].intValue())
+            assertEquals(0, preparation["candidate_errors"].intValue())
+            assertEquals(2, preparation["refilled_candidates"].intValue())
+            assertEquals(4, preparation["final_shortlisted_candidates"].intValue())
+            assertEquals(reason.name, preparation["stop_reason"].stringValue())
+            assertNull(preparation["sizeAttempts"])
+        }
     }
 
     @Test
@@ -74,6 +124,48 @@ class JsonReportWriterTest {
         assertEquals("EXPLAIN_FAILED", json["diagnostics"]["errors"][0]["code"].stringValue())
         assertEquals(json["best_robust"], json["best_mean"])
         assertFalse(json["baseline"]["plans_by_query_id"].isNull)
+    }
+
+    @Test
+    fun `every mode preserves effective limits counters and stop reasons in all statuses`() {
+        for (mode in AnalysisMode.entries) {
+            for (status in RunStatus.entries) {
+                val source = ContractFixtures.report(status = status)
+                val diagnostics = source.result.diagnostics.copy(
+                    limits = mode.limits,
+                    statistics = RunStatistics(47, 19, 17, 3, 7),
+                )
+                val result = when (val saved = source.result) {
+                    is SearchResult.Completed -> saved.copy(diagnostics = diagnostics)
+                    is SearchResult.Partial -> saved.copy(diagnostics = diagnostics)
+                    is SearchResult.Failed -> saved.copy(diagnostics = diagnostics)
+                }
+                // The effective mode is a run fact, including a failed report with no source input.
+                val report = source.copy(analysisMode = mode, result = result,
+                    input = if (status == RunStatus.FAILED) null else source.input)
+                val json = mapper.readTree(writer.render(report))
+
+                assertEquals(mode.name.lowercase(), json["analysis_mode"].stringValue())
+                assertEquals(status.name.lowercase(), json["status"].stringValue())
+                val limits = json["diagnostics"]["limits"]
+                assertEquals(mode.limits.commandTimeout.toMillis(), limits["command_timeout_millis"].longValue())
+                assertEquals(mode.limits.searchTimeout.toMillis(), limits["search_timeout_millis"].longValue())
+                assertEquals(mode.limits.explainTimeout.toMillis(), limits["explain_timeout_millis"].longValue())
+                assertEquals(mode.limits.connectTimeout.toMillis(), limits["connect_timeout_millis"].longValue())
+                assertEquals(mode.limits.maxExplainAttempts, limits["max_explain_attempts"].intValue())
+                assertEquals(mode.limits.maxRepairAttempts, limits["max_repair_attempts"].intValue())
+                val counters = json["diagnostics"]["statistics"]
+                assertEquals(47, counters["explain_attempts"].intValue())
+                assertEquals(19, counters["evaluation_attempts"].intValue())
+                assertEquals(17, counters["completed_evaluations"].intValue())
+                assertEquals(3, counters["cache_hits"].intValue())
+                assertEquals(7, counters["repair_attempts"].intValue())
+                assertEquals(diagnostics.stopReasons.map { it.name },
+                    json["diagnostics"]["stop_reasons"].toList().map { it.stringValue() })
+                assertSame(source.result.baseline, report.result.baseline)
+                assertSame(source.result.selected, report.result.selected)
+            }
+        }
     }
 
     @Test
@@ -105,6 +197,13 @@ class JsonReportWriterTest {
         val json = mapper.readTree(writer.render(edited))
 
         assertEquals(sql, json["queries"][0]["sql"].stringValue())
+    }
+
+    @Test
+    fun `old report version cannot silently emit a new definition format`() {
+        assertThrows(IllegalArgumentException::class.java) {
+            writer.render(ContractFixtures.report().copy(schemaVersion = 2))
+        }
     }
 
     @Test

@@ -23,24 +23,27 @@ class CandidateShortlistPipelineTest {
             assertInstanceOf(JdbcAnalysisSessionFactory::class.java, context.getBean(AnalysisSessionFactory::class.java))
             assertInstanceOf(MetricsCalculatorImpl::class.java, context.getBean(MetricsCalculator::class.java))
             assertInstanceOf(ObjectiveComparatorImpl::class.java, context.getBean(ObjectiveComparator::class.java))
-            assertInstanceOf(GreedyOptimizer::class.java, context.getBean(Optimizer::class.java))
+            assertInstanceOf(LimitedRepairOptimizer::class.java, context.getBean(Optimizer::class.java))
             assertInstanceOf(UnavailableAnalysisRunner::class.java, context.getBean(AnalysisRunner::class.java))
         }
     }
 
     @Test
-    fun `only final sixteen get sizes and hypothesis or budget rejection never refills shortlist`(@TempDir output: Path) {
+    fun `preparation refills two rejected candidates and stops after sixteen admissible sizes`(@TempDir output: Path) {
         val scenario = CandidateGenerationFixtures.wideAllFilters()
         val input = scenario.workload.input.copy(constraints = Constraints(1000, null))
         val catalog = scenario.catalog.withSqlSemantics()
         val sized = mutableListOf<String>()
+        var generatedQueue = emptyList<IndexCandidate>()
         var generated = 0
+        var evaluated = 0
         var closed = false
         var exported: AnalysisReport? = null
         val session = object : AnalysisSession {
             override fun readCatalog(tables: Set<TableName>, context: RunContext) = catalog
             override fun evaluate(candidates: List<IndexCandidate>, workload: ResolvedWorkload, context: RunContext): EvaluationResult {
                 assertTrue(candidates.isEmpty(), "Only the synthetic baseline is evaluated in this contract test")
+                evaluated++
                 return EvaluationResult(emptyList(), input.queries.associate { it.id to 100.0 },
                     input.queries.associate { it.id to ExplainPlan("{}") })
             }
@@ -59,13 +62,15 @@ class CandidateShortlistPipelineTest {
                                   evaluator: ConfigurationEvaluator, metrics: MetricsCalculator,
                                   comparator: ObjectiveComparator, context: RunContext,
                                   onCheckpoint: (SearchCheckpoint) -> Unit): SearchResult {
-                assertEquals(15, candidates.candidates.size, "Hypothesis failure is excluded, not refilled")
-                val rejected = candidates.candidates.filter { !metrics.assessBudget(listOf(it), input).admissible }
-                assertEquals(listOf(sized[1]), rejected.map { it.id })
+                // The first two attempts fail locally or exceed storage; positions 3–18 fill all sixteen seats.
+                assertEquals(16, candidates.candidates.size)
+                assertEquals(generatedQueue.drop(2).take(16).map { it.id }, candidates.candidates.map { it.id })
+                assertTrue(candidates.candidates.all { metrics.assessBudget(listOf(it), input).admissible })
+                assertTrue(candidates.candidates.all { it.estimatedBytes == 10L && it.budgetedBytes == 12L })
+                assertTrue(candidates.reserve.isEmpty())
                 val empty = EvaluatedConfiguration(baseline, metrics.calculate(input, baseline, baseline,
                     metrics.assessBudget(emptyList(), input).usage))
-                val diagnostics = SearchDiagnostics(candidateDecisions = listOf(CandidateDecision(
-                    CandidateReason.STORAGE_BUDGET, candidateId = rejected.single().id, phase = AnalysisPhase.GREEDY)))
+                val diagnostics = SearchDiagnostics()
                 onCheckpoint(SearchCheckpoint(empty, empty, diagnostics))
                 context.completePhase()
                 return SearchResult.Completed(input.objective, baseline, empty, empty, diagnostics)
@@ -77,7 +82,9 @@ class CandidateShortlistPipelineTest {
             candidateGenerator = object : CandidateGenerator {
                 override fun generate(workload: ResolvedWorkload, catalog: CatalogSnapshot, context: RunContext): CandidateBatch {
                     generated++
-                    return ProfileAwareCandidateGenerator().generate(workload, catalog, context)
+                    return ProfileAwareCandidateGenerator().generate(workload, catalog, context).also {
+                        generatedQueue = it.candidates + it.reserve
+                    }
                 }
             },
             metrics = MetricsCalculatorImpl(), comparator = ObjectiveComparatorImpl(), optimizer = optimizer,
@@ -91,15 +98,35 @@ class CandidateShortlistPipelineTest {
         )
         assertEquals(RunStatus.COMPLETED, pipeline.run(input, output, RunContext()).status)
         assertEquals(1, generated)
-        assertEquals(16, sized.size)
-        assertEquals(16, sized.toSet().size)
+        assertEquals(1, evaluated)
+        assertEquals(32, generatedQueue.size)
+        assertEquals(18, sized.size)
+        assertEquals(18, sized.toSet().size)
+        assertEquals(generatedQueue.take(18).map { it.id }, sized)
         val report = checkNotNull(exported)
-        assertEquals(sized, report.candidates.candidates.map { it.id })
+        assertEquals(generatedQueue.map { it.id }, report.candidates.candidates.map { it.id })
+        assertTrue(report.candidates.reserve.isEmpty())
         assertNull(report.candidates.candidates.first().estimatedBytes)
+        assertNull(report.candidates.candidates.first().budgetedBytes)
+        assertEquals(2000L, report.candidates.candidates[1].estimatedBytes)
+        assertEquals(2400L, report.candidates.candidates[1].budgetedBytes)
+        assertTrue(report.candidates.candidates.drop(18).all {
+            it.estimatedBytes == null && it.budgetedBytes == null && it.writeUnitsPerHour == null
+        })
+        assertEquals(CandidatePreparationStatistics(18, 18, 1, 1, 2, 16,
+            CandidatePreparationStopReason.SHORTLIST_FULL), report.candidates.diagnostics.preparation)
         assertEquals(setOf(CandidateReason.COLUMN_SHORTLIST_TRUNCATED, CandidateReason.LOCAL_CANDIDATE_LIMIT,
-            CandidateReason.GLOBAL_CANDIDATE_LIMIT, CandidateReason.HYPOTHETICAL_INDEX_ERROR,
-            CandidateReason.STORAGE_BUDGET), report.result.diagnostics.candidateDecisions.map { it.reason }.toSet())
-        assertEquals("false", report.candidates.diagnostics.warnings.single {
+            CandidateReason.HYPOTHETICAL_INDEX_ERROR, CandidateReason.STORAGE_BUDGET,
+            CandidateReason.NOT_EVALUATED_DUE_TO_LIMIT), report.result.diagnostics.candidateDecisions.map { it.reason }.toSet())
+        val decisions = report.result.diagnostics.candidateDecisions
+        assertEquals(sized.first(), decisions.single { it.reason == CandidateReason.HYPOTHETICAL_INDEX_ERROR }.candidateId)
+        val budgetRejection = decisions.single { it.reason == CandidateReason.STORAGE_BUDGET }
+        assertEquals(sized[1], budgetRejection.candidateId)
+        assertEquals(AnalysisPhase.CANDIDATES, budgetRejection.phase)
+        assertEquals(generatedQueue.drop(18).map { it.id }.toSet(), decisions.filter {
+            it.reason == CandidateReason.NOT_EVALUATED_DUE_TO_LIMIT
+        }.map { it.candidateId }.toSet())
+        assertEquals("true", report.candidates.diagnostics.warnings.single {
             it.code == WarningCode.GLOBAL_CANDIDATE_LIMIT
         }.details["refill_after_budget_filter"])
     }
