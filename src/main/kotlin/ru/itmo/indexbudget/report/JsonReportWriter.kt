@@ -4,13 +4,14 @@ import ru.itmo.indexbudget.domain.*
 import tools.jackson.databind.DeserializationFeature
 import tools.jackson.databind.json.JsonMapper
 
-/** Explicit report v2 wire format; domain implementation details never define public JSON fields. */
+/** Explicit report v3 wire format; domain implementation details never define public JSON fields. */
 class JsonReportWriter {
     private val mapper = JsonMapper.builder()
         .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
         .build()
 
     fun render(report: AnalysisReport): String {
+        require(report.schemaVersion == 3 && report.specVersion == "0.2") { "Expected report v3 / spec 0.2" }
         val result = report.result
         val input = report.input
         val comparisons = report.queryComparisons.associateBy { it.queryId }
@@ -34,6 +35,7 @@ class JsonReportWriter {
                 "calls_per_hour" to profile.callsPerHour.toSortedMap(),
             ) },
             "budgets" to input?.constraints?.let(::budgets),
+            "write_proxy_model" to "row_changes_times_key_and_include_columns",
             "table_write_rates" to input?.tableWriteRates?.toSortedMap()?.mapValues { (_, rates) -> linkedMapOf(
                 "inserts_per_hour" to rates.insertsPerHour,
                 "updates_per_hour" to rates.updatesPerHour,
@@ -112,6 +114,7 @@ class JsonReportWriter {
         "definition" to linkedMapOf(
             "table" to table(value.definition.table),
             "method" to value.definition.method,
+            "included_columns" to value.definition.includedColumns.map(::column),
             "unique" to value.definition.unique,
             "keys" to value.definition.keys.map { key -> linkedMapOf(
                 "column" to column(key.column),
@@ -146,6 +149,8 @@ class JsonReportWriter {
             "deduplicated_definitions" to scope.deduplicatedDefinitions,
             "retained_definitions" to scope.retainedDefinitions,
             "excluded_columns" to scope.excludedColumns.map(::column),
+            "enumerated_include_definitions" to scope.enumeratedIncludeDefinitions,
+            "retained_include_definitions" to scope.retainedIncludeDefinitions,
         ) },
         "decisions" to value.decisions.map(::decision),
         "warnings" to value.warnings.map(::warning),

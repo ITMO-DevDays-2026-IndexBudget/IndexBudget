@@ -2,6 +2,7 @@ package ru.itmo.indexbudget.domain
 
 enum class GenerationReason(val pairPriority: Int? = null) {
     SINGLE_COLUMN,
+    COVERING_PROJECTION,
     ORDER_BY_PAIR(0),
     EQUALITY_AND_ORDER(1),
     EQUALITY_AND_RANGE(2),
@@ -27,6 +28,8 @@ enum class CandidateReason {
     EXACT_EXISTING_DUPLICATE,
     COLUMN_SHORTLIST_TRUNCATED,
     LOCAL_CANDIDATE_LIMIT,
+    INCLUDE_PAYLOAD_LIMIT,
+    INCLUDE_VARIANT_LIMIT,
     GLOBAL_CANDIDATE_LIMIT,
     STORAGE_BUDGET,
     WRITE_BUDGET,
@@ -58,6 +61,8 @@ data class LocalGenerationStatistics(
     val excludedColumns: List<ColumnRef> = emptyList(),
     /** Before the local cap; null only for producers that do not observe this stage. */
     val candidatesAfterExistingDeduplication: Int? = null,
+    val enumeratedIncludeDefinitions: Int = 0,
+    val retainedIncludeDefinitions: Int = 0,
 )
 
 data class CandidateDiagnostics(

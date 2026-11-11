@@ -37,6 +37,10 @@ class BtreeCandidateCanonicalizer(
         context.checkDeadline()
         val table = tables[definition.table] ?: catalogError("Candidate table is absent from catalog")
         if (table.kind != TableKind.ORDINARY) catalogError("Candidate requires an ordinary table")
+        for (column in definition.includedColumns) {
+            context.checkDeadline()
+            if (column.name !in columns.getValue(table.ref)) catalogError("INCLUDE column is absent from catalog")
+        }
         val resolved = definition.copy(keys = definition.keys.map { key ->
             context.checkDeadline()
             val column = columns.getValue(table.ref)[key.column.name]
@@ -119,7 +123,9 @@ class BtreeCandidateCanonicalizer(
         for (index in tables[table]?.existingIndexes.orEmpty()) {
             context.checkDeadline()
             if (index.table != table || index.method != "btree" || !index.valid || !index.ready || !index.accessible ||
-                index.predicate != null || index.expressions.isNotEmpty() || index.includedColumns.isNotEmpty() ||
+                index.predicate != null || index.expressions.isNotEmpty() || index.includedColumns.size > 2 ||
+                index.includedColumns.distinct().size != index.includedColumns.size ||
+                index.includedColumns.any { it.table != table || it.name !in columns.getValue(table) || it in index.keys.map(IndexKey::column) } ||
                 index.keys.size !in 1..2 || index.keys.map { it.column }.distinct().size != index.keys.size
             ) continue
             // Missing metadata is not evidence of equality. Never substitute defaults for real keys.
@@ -128,7 +134,7 @@ class BtreeCandidateCanonicalizer(
                     key.column.name !in columns.getValue(table) ||
                     (key.collation == null && columns.getValue(table).getValue(key.column.name).collation != null)
             }) continue
-            val definition = CanonicalIndex.normalize(IndexDefinition(table, index.keys))
+            val definition = CanonicalIndex.normalize(IndexDefinition(table, index.keys, includedColumns = index.includedColumns))
             result.getOrPut(definition) { mutableListOf() }.add(index.name)
         }
         return result.mapValues { (_, names) -> names.distinct().sorted() }

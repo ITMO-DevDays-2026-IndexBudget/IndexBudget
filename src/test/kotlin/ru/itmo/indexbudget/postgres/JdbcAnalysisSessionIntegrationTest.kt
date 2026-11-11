@@ -80,6 +80,76 @@ class JdbcAnalysisSessionIntegrationTest {
     }
 
     @Test
+    fun `generated INCLUDE uses real sizes costs budgets catalog and retains no benefit case`() {
+        // Visibility preparation belongs to the disposable fixture, never to analyze.
+        sql(admin, "VACUUM (ANALYZE) $schema.records")
+        val input = WorkloadInput(listOf(
+            QueryInput("positive", "SELECT b FROM $schema.records WHERE a = 314"),
+            QueryInput("negative", "SELECT payload FROM $schema.records WHERE a > 0"),
+        ), listOf(Profile("p", 1.0, mapOf("positive" to 1.0, "negative" to 1.0))),
+            Constraints(100_000_000, 300.0), tableWriteRates = mapOf(
+                "$schema.records" to TableWriteRates(10.0, 20.0, 30.0)))
+        val context = RunContext().apply { startSearch() }
+        val analyzer = JSqlParserSqlAnalyzer()
+        val parsed = analyzer.parse(input, context)
+        val catalog = session.readCatalog(parsed.referencedTables, context)
+        val resolved = analyzer.resolve(parsed, catalog, context)
+        val generated = ru.itmo.indexbudget.candidates.ProfileAwareCandidateGenerator().generate(resolved, catalog, context)
+        val covering = generated.candidates.filter { it.definition.includedColumns.isNotEmpty() }
+        assertEquals(2, covering.size)
+        val baseline = session.evaluate(emptyList(), resolved, context)
+        val metrics = MetricsCalculatorImpl()
+        val samples = covering.sortedBy { it.sourceQueryIds.single() }.map { candidate ->
+            val size = session.estimateSize(candidate, context)
+            val measured = candidate.copy(estimatedBytes = size)
+            val assessment = metrics.assessBudget(listOf(measured), input)
+            assertTrue(assessment.admissible)
+            assertEquals(120.0, assessment.usage.writeUnitsPerHour)
+            assertEquals(setOf(BudgetViolation.WRITE_BUDGET), metrics.assessBudget(listOf(measured),
+                input.copy(constraints = input.constraints.copy(writeBudgetUnitsPerHour = 119.0))).violations)
+            assertEquals(setOf(BudgetViolation.STORAGE_BUDGET), metrics.assessBudget(listOf(measured),
+                input.copy(constraints = input.constraints.copy(storageBudgetBytes = assessment.usage.budgetedBytes - 1))).violations)
+            val evaluated = session.evaluate(listOf(measured), resolved, context)
+            val source = candidate.sourceQueryIds.single()
+            val cost = evaluated.costByQueryId.getValue(source)
+            if (source == "positive") {
+                assertTrue(cost < baseline.costByQueryId.getValue(source))
+                assertTrue(evaluated.plansByQueryId.getValue(source).json.contains("Index Only Scan"))
+            } else {
+                assertEquals(baseline.costByQueryId.getValue(source), cost)
+            }
+            assertTrue(size > 0)
+            assertEquals(0, hypothesisCount(connection))
+            mapOf("query_id" to source, "ddl" to candidate.ddl!!.replace(schema, "include_demo"),
+                "estimated_bytes" to size, "budgeted_bytes" to assessment.usage.budgetedBytes,
+                "write_units_per_hour" to assessment.usage.writeUnitsPerHour,
+                "storage_budget_bytes" to input.constraints.storageBudgetBytes,
+                "write_budget_units_per_hour" to input.constraints.writeBudgetUnitsPerHour,
+                "baseline_cost" to baseline.costByQueryId.getValue(source), "covering_cost" to cost)
+        }
+        // Real catalog distinguishes included positions from search keys, then exact dedup consumes it.
+        val positive = covering.single { "positive" in it.sourceQueryIds }
+        sql(admin, positive.ddl!!)
+        val after = session.readCatalog(parsed.referencedTables, context)
+        assertTrue(after.tables.single().existingIndexes.any {
+            it.includedColumns == positive.definition.includedColumns &&
+                it.keys.map { key -> key.column } == positive.definition.keys.map { key -> key.column }
+        })
+        val deduped = ru.itmo.indexbudget.candidates.ProfileAwareCandidateGenerator().generate(resolved, after, context)
+        assertFalse(deduped.candidates.any { it.id == positive.id })
+        assertTrue(deduped.candidates.any { it.definition.includedColumns.isEmpty() })
+        fun version(sql: String) = connection.createStatement().use { statement ->
+            statement.executeQuery(sql).use { rows -> check(rows.next()); rows.getString(1) }
+        }
+        val sample = mapOf("postgres_version" to version("SHOW server_version"),
+            "hypopg_version" to version("SELECT extversion FROM pg_extension WHERE extname = 'hypopg'"),
+            "fixture_rows" to 50000, "samples" to samples)
+        val output = java.nio.file.Path.of("build", "include-demo", "real-costs.json")
+        java.nio.file.Files.createDirectories(output.parent)
+        java.nio.file.Files.writeString(output, mapper.writerWithDefaultPrettyPrinter().writeValueAsString(sample) + "\n")
+    }
+
+    @Test
     fun `exact sets shared query vector real baseline indexes and settings use one backend`() {
         val pid = scalar(connection, "SELECT pg_backend_pid()")
         val settings = settings()
