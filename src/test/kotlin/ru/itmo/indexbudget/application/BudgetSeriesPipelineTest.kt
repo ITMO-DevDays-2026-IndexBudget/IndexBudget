@@ -20,6 +20,28 @@ class BudgetSeriesPipelineTest {
     private val noShutdown = ShutdownCancellation { AutoCloseable {} }
 
     @Test
+    fun `a fixed pool rejects changed critical query guards`() {
+        val changed = input.copy(constraints = input.constraints.copy(queryCostGuards = mapOf("records_by_group" to 1.25)))
+        val failure = assertThrows(AnalysisException::class.java) {
+            CandidatePreparation(MetricsCalculatorImpl()).selectFixedPool(preparation(input).pool, changed, RunContext())
+        }
+        assertEquals(ErrorCode.INVALID_INPUT, failure.error.code)
+    }
+
+    @Test
+    fun `critical query guards remain fixed and visible through the entire budget series`() {
+        val guarded = input.copy(constraints = input.constraints.copy(queryCostGuards = mapOf("records_by_group" to 1.25)))
+        val analysis = FakeAnalysis()
+        val result = BudgetSeriesPipeline(analysis, noShutdown).run(guarded,
+            request("1000000", "2000000", "3000000"), directory.resolve("out"), RunContext())
+        assertEquals(SeriesStatus.COMPLETED, result.status)
+        assertEquals(guarded.constraints.queryCostGuards, analysis.prepared!!.pool.input.constraints.queryCostGuards)
+        assertTrue(analysis.pointInputs.all { it.constraints.queryCostGuards == guarded.constraints.queryCostGuards })
+        assertEquals(1.25, summary()["settings"]["constraints"]["query_cost_guards"]["records_by_group"].doubleValue())
+        assertEquals(1.25, summary()["preparation"]["maximum_budgets"]["query_cost_guards"]["records_by_group"].doubleValue())
+    }
+
+    @Test
     fun `different actual source and unknown source never appear as matched conditions`() {
         val analysis = FakeAnalysis()
         analysis.point = { _, output, _, _ ->

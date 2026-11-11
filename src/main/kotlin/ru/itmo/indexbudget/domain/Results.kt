@@ -138,6 +138,8 @@ data class AnalysisReport(
     val analysisMode: AnalysisMode = AnalysisMode.NORMAL,
     /** Effective shortlist strategy, including baseline-only and interrupted runs. */
     val candidateRanking: CandidateRanking = input?.candidateRanking ?: CandidateRanking.FREQUENCY,
+    /** Critical-query planner-cost guard outcomes for the selected set; empty without guards or a selected set. */
+    val costGuards: List<CostGuardOutcome> = emptyList(),
 ) {
     // Derived once per immutable report, including copies used by render fixtures.
     val summary: RecommendationSummary = ReportSummary.recommendation(this)

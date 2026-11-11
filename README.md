@@ -76,6 +76,7 @@ build/install/indexbudget/bin/indexbudget analyze \
 - Положительные конечные веса и возможность их нормирования без переполнения суммы или потери положительного веса. Исходные относительные веса сохраняются.
 - `objective`: `robust` по умолчанию либо `mean`; целый неотрицательный `storage_budget_bytes`, целый `max_indexes` от 0 до 5 (по умолчанию 5). `write_budget_units_per_hour` обязателен: неотрицательное конечное число, включая 0, либо явный `null` для отключения лимита.
 - При включённом write budget требуется `table_write_rates`. Каждая переданная запись содержит все три неотрицательных конечных rate; `source` может быть только `manual`, при отсутствии используется это значение. При выключенном лимите профиль можно не передавать. `ResolvedWorkloadValidator` после SQL resolution проверяет точное покрытие всех физических workload-таблиц; неполный или лишний переданный профиль отклоняется и при выключенном лимите. Ключи — точные `schema.name` с сохранением регистра, без интерпретации SQL-алиасов и кавычек.
+- Необязательные `constraints.query_cost_guards` (#78) отмечают критические SQL и задают максимальное отношение final/baseline planner cost (не проценты, ≥ 1.0; равенство порогу проходит). Набор с превышением отклоняется целиком с `CRITICAL_QUERY_REGRESSION` и не обновляет incumbents; при нулевом baseline отношением не считается ноль, а любой положительный cost нарушает guard. Это ограничение planner cost, не latency/SLA; прежний вход без поля сохраняет поведение. Пример — [workload-v2-guards.json](examples/workload-v2-guards.json).
 - `output-dir` должен быть новым или пустым каталогом. Непустой каталог при начальной валидации отклоняется с `OUTPUT_DIRECTORY_NOT_EMPTY` (exit 2); существующие файлы сохраняются. Неоднозначный путь с `..` после ещё не созданного каталога отклоняется с `INVALID_INPUT`. Экспорт повторяет проверку перед публикацией; отказ этой повторной проверки обрабатывается как `EXPORT_FAILED` (exit 1).
 
 В [examples/](examples/) есть варианты с двумя SQL для `robust` и `mean`, включая выключенную модель записи. SQL-анализатор проверяет поддержанный AST и лимит 256 сравнений WHERE/JOIN, разрешает имена через CatalogSnapshot и передаёт полный ResolvedWorkload генератору (#8/#9). DSN PostgreSQL-адаптера задаётся через `INDEXBUDGET_DATABASE_URL`; `.env.example` служит шаблоном, автоматическое чтение `.env` не реализовано.
@@ -286,6 +287,23 @@ build/install/indexbudget/bin/indexbudget analyze-series \
 [docs/manual-index-comparison.md](docs/manual-index-comparison.md).
 
 ## Сбор наблюдаемой нагрузки
+
+После снимков можно построить обычный workload v2:
+
+```text
+indexbudget import-workload --config import-config.json --output-dir imported
+indexbudget analyze --workload imported/workload.json --output-dir analysis
+```
+
+Импорт требует 1–3 окна, явные SQL-примеры с литералами и исходный контекст схем,
+проверяет AST/типы/имена и отбирает до 20 SQL по всем профилям. UNKNOWN не становится
+нулём. Workload и отдельный манифест сохраняют периоды, отбор и репрезентативность
+примеров; provenance переносится в JSON/HTML анализа. Бюджеты/write rates остаются
+ручными. [Форматы и ограничения #67](docs/observed-workload-import.md),
+[синтетический комплект](examples/observed-import/import-config.json).
+
+Реальный маршрут на одноразовой PostgreSQL/HypoPG проверяется `bash demo/check-import.sh`
+и CI `postgres-observed-import`; требуется работающий Docker Engine.
 
 `indexbudget stats --help` описывает отдельные команды `stats snapshot` и `stats pair`
 для read-only снимков pg_stat_statements в PostgreSQL 16. Они не запускают подбор индексов,

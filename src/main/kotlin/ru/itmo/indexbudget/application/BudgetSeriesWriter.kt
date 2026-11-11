@@ -71,7 +71,8 @@ internal class BudgetSeriesWriter(
     }
 
     private fun budgets(value: Constraints) = mapOf("storage_budget_bytes" to value.storageBudgetBytes,
-        "write_budget_units_per_hour" to value.writeBudgetUnitsPerHour, "max_indexes" to value.maxIndexes)
+        "write_budget_units_per_hour" to value.writeBudgetUnitsPerHour, "max_indexes" to value.maxIndexes,
+        "query_cost_guards" to value.queryCostGuards.toSortedMap())
 
     private fun limits(value: RunLimits) = mapOf("command_timeout_millis" to value.commandTimeout.toMillis(),
         "search_timeout_millis" to value.searchTimeout.toMillis(), "explain_timeout_millis" to value.explainTimeout.toMillis(),

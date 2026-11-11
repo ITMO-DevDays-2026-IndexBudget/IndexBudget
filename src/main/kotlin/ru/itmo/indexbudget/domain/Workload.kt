@@ -32,6 +32,8 @@ data class Constraints(
     val storageBudgetBytes: Long,
     val writeBudgetUnitsPerHour: Double?,
     val maxIndexes: Int = 5,
+    /** Optional per-query planner-cost guards: query ID -> maximum allowed selected/baseline cost ratio (>= 1.0). */
+    val queryCostGuards: Map<String, Double> = emptyMap(),
 )
 
 data class TableWriteRates(

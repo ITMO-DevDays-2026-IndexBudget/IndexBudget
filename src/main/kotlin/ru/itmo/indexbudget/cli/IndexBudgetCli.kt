@@ -26,6 +26,7 @@ class IndexBudgetCli(
     private val analysisRunner: AnalysisRunner = UnavailableAnalysisRunner(),
     private val statisticsCommand: StatisticsCommand = StatisticsCommand(),
     private val budgetSeriesCommand: BudgetSeriesCommand = BudgetSeriesCommand(workloadReader),
+    private val importWorkloadCommand: ImportWorkloadCommand = ImportWorkloadCommand(),
 ) {
 
     fun execute(
@@ -36,6 +37,7 @@ class IndexBudgetCli(
     ): Int {
         if (args.firstOrNull() == "stats") return statisticsCommand.execute(args, out, err)
         if (args.firstOrNull() == "analyze-series") return budgetSeriesCommand.execute(args, out, err, context)
+        if (args.firstOrNull() == "import-workload") return importWorkloadCommand.execute(args, out, err)
         context.observeProgress { CliDiagnostics.progress(err, it) }
         if (args.isEmpty() || args.contentEquals(arrayOf("--help")) ||
             args.contentEquals(arrayOf("analyze", "--help"))) {
@@ -171,6 +173,7 @@ class IndexBudgetCli(
               indexbudget analyze --workload <path> --output-dir <path> [--analysis-mode fast|normal|deep] [--candidate-ranking frequency|baseline_cost]
               indexbudget analyze-series --help
               indexbudget stats --help
+              indexbudget import-workload --help
 
             Validates JSON v2, shared queries, frequency profiles and budgets.
             Optional manual_indexes: 1–5 structured B-tree definitions, evaluated separately after search.

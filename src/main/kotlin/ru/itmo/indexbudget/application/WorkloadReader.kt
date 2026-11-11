@@ -68,6 +68,7 @@ class WorkloadReader {
             "schema_version", "objective", "queries", "profiles", "constraints", "table_write_rates",
             "analysis_mode", "candidate_ranking", "manual_indexes", "provenance",
         ))
+        // query_cost_guards keys are cross-checked against queries below, after queries are parsed.
         val requestedMode = when (val value = root.get("analysis_mode")) {
             null -> AnalysisMode.NORMAL
             else -> when (string(value, Location("analysis_mode"))) {
@@ -98,6 +99,7 @@ class WorkloadReader {
         val constraints = constraints(root.get("constraints"))
         context?.checkDeadline()
         val queries = queries(root.get("queries"))
+        validateCostGuards(constraints.queryCostGuards, queries)
         context?.checkDeadline()
         val profiles = profiles(root.get("profiles"), queries)
         context?.checkDeadline()
@@ -211,7 +213,8 @@ class WorkloadReader {
 
     private fun constraints(node: JsonNode?): Constraints {
         val location = Location("constraints")
-        val value = objectNode(node, location, setOf("storage_budget_bytes", "write_budget_units_per_hour", "max_indexes"))
+        val value = objectNode(node, location,
+            setOf("storage_budget_bytes", "write_budget_units_per_hour", "max_indexes", "query_cost_guards"))
         val storage = integer(value.get("storage_budget_bytes"), location.child("storage_budget_bytes"))
         if (storage < 0) invalid(location.child("storage_budget_bytes"), "Storage budget must be nonnegative.")
         val writeNode = value.get("write_budget_units_per_hour")
@@ -219,7 +222,34 @@ class WorkloadReader {
         val write = if (writeNode.isNull) null else number(writeNode, location.child("write_budget_units_per_hour"))
         val maxIndexes = value.get("max_indexes")?.let { integer(it, location.child("max_indexes")) } ?: 5L
         if (maxIndexes !in 0L..5L) invalid(location.child("max_indexes"), "max_indexes must be an integer from 0 to 5.")
-        return Constraints(storage, write, maxIndexes.toInt())
+        return Constraints(storage, write, maxIndexes.toInt(), queryCostGuards = costGuards(value.get("query_cost_guards")))
+    }
+
+    /** Ratios, not percents: 1.0 forbids any worsening, 1.1 allows 10% worse planner cost.
+     * An absent field means no guards; an explicit null or any non-object is INVALID_INPUT,
+     * so a malformed configuration never silently disables critical-SQL constraints. */
+    private fun costGuards(node: JsonNode?): Map<String, Double> {
+        if (node == null) return emptyMap()
+        val location = Location("constraints.query_cost_guards")
+        if (!node.isObject) invalid(location, "Expected an object of query ID to maximum cost ratio.")
+        return node.properties().associate { (queryId, value) ->
+            val guardLocation = location.copy(queryId = queryId)
+            val ratio = number(value, guardLocation)
+            if (ratio < 1.0) {
+                invalid(guardLocation, "Cost guard must be a ratio of at least 1.0; 1.0 forbids any worsening.")
+            }
+            queryId to ratio
+        }
+    }
+
+    private fun validateCostGuards(guards: Map<String, Double>, queries: List<QueryInput>) {
+        val knownIds = queries.map { it.id }.toSet()
+        for (queryId in guards.keys.sorted()) {
+            if (queryId !in knownIds) {
+                invalid(Location("constraints.query_cost_guards", queryId = queryId),
+                    "Unknown query ID in query_cost_guards.")
+            }
+        }
     }
 
     private fun queries(node: JsonNode?): List<QueryInput> {

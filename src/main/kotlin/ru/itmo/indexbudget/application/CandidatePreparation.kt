@@ -159,7 +159,8 @@ class CandidatePreparation(private val metrics: MetricsCalculator) {
         val maximumWrite = pool.input.constraints.writeBudgetUnitsPerHour
         val pointWrite = input.constraints.writeBudgetUnitsPerHour
         if (input.copy(constraints = pool.input.constraints) != pool.input ||
-            input.constraints.maxIndexes != pool.input.constraints.maxIndexes ||
+            input.constraints.copy(storageBudgetBytes = pool.input.constraints.storageBudgetBytes,
+                writeBudgetUnitsPerHour = maximumWrite) != pool.input.constraints ||
             input.constraints.storageBudgetBytes > pool.input.constraints.storageBudgetBytes ||
             (maximumWrite != null && (pointWrite == null || pointWrite > maximumWrite))) {
             throw AnalysisException(AnalysisError(ErrorCode.INVALID_INPUT,

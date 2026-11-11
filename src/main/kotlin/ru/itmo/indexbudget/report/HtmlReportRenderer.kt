@@ -328,6 +328,7 @@ class HtmlReportRenderer : ReportRenderer {
                 append("</tr>")
             }
         }
+        costGuards(report)
         queryIds.forEachIndexed { index, id ->
             append("<details id=\"query-").append(index).append("\"><summary>SQL и сохранённые планы · ").append(h(id)).append("</summary><h4>Исходный SQL</h4>")
             pre(report.input?.queries?.firstOrNull { it.id == id }?.sql ?: "Исходный SQL отсутствует в модели.")
@@ -342,6 +343,40 @@ class HtmlReportRenderer : ReportRenderer {
             append("</details></details>")
         }
         append("</section>")
+    }
+
+    private fun StringBuilder.costGuards(report: AnalysisReport) {
+        val guards = report.input?.constraints?.queryCostGuards.orEmpty()
+        if (guards.isEmpty()) return
+        append("<h3>Ограничения planner cost для критических SQL</h3>")
+        append("<p class=\"muted\">Предел — максимальное отношение final/baseline planner cost; равенство порогу допустимо. ")
+        append("Это ограничение стоимости планировщика, а не latency и не SLA. Наборы с нарушением отклоняются целиком ")
+        append("и не обновляют лучшие результаты.</p>")
+        val outcomes = report.costGuards.associateBy { it.queryId }
+        table(listOf("SQL", "Предел отношения", "Baseline cost", "Final cost", "Наблюдаемое отношение", "Статус")) {
+            guards.keys.sorted().forEach { queryId ->
+                val outcome = outcomes[queryId]
+                if (outcome == null) {
+                    row(queryId, number(guards.getValue(queryId)), "Нет данных", "Нет данных", "Нет данных", "Нет данных")
+                    return@forEach
+                }
+                append(if (outcome.violated) "<tr class=\"regression\">" else "<tr>")
+                cell(queryId)
+                cell(number(outcome.maxRatio))
+                cell(number(outcome.baselineCost))
+                cell(number(outcome.selectedCost))
+                cell(when {
+                    outcome.zeroBaseline -> "Неприменимо (нулевой baseline)"
+                    else -> number(outcome.observedRatio)
+                })
+                cell(when {
+                    outcome.violated && outcome.zeroBaseline -> "Нарушено: положительный cost при нулевом baseline"
+                    outcome.violated -> "Нарушено"
+                    else -> "Соблюдено"
+                })
+                append("</tr>")
+            }
+        }
     }
 
     private fun StringBuilder.search(report: AnalysisReport) {

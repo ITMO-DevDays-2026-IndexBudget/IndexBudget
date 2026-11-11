@@ -28,7 +28,7 @@ build/install/indexbudget/bin/indexbudget analyze-series \
 }
 ```
 
-Для [write-серии](../examples/budget-series-write.json) поле `budget` равно `write_budget_units_per_hour`; нужен полный `table_write_rates` общего workload. Значение выбранного бюджета в исходном workload заменяется для подготовки и каждой точки, второй бюджет и `max_indexes` сохраняются.
+Для [write-серии](../examples/budget-series-write.json) поле `budget` равно `write_budget_units_per_hour`; нужен полный `table_write_rates` общего workload. Значение выбранного бюджета в исходном workload заменяется для подготовки и каждой точки, второй бюджет, `max_indexes` и `query_cost_guards` сохраняются. Ограничения критических SQL также включены в общие `settings.constraints` и максимальные бюджеты подготовки.
 
 | Поле | Правило |
 | --- | --- |
