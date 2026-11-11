@@ -23,6 +23,46 @@ class JsonReportWriterTest {
     }
 
     @Test
+    fun `cost guards echo limits and label outcomes as planner cost ratios`() {
+        val source = ContractFixtures.report(objective = Objective.MEAN)
+        val report = source.copy(
+            input = source.input?.let {
+                it.copy(constraints = it.constraints.copy(
+                    queryCostGuards = mapOf("records_by_group" to 1.5, "records_by_value" to 1.0)))
+            },
+            costGuards = listOf(
+                CostGuardOutcome("records_by_group", 1.5, 100.0, 90.0, 0.9, zeroBaseline = false, violated = false),
+                CostGuardOutcome("records_by_value", 1.0, 0.0, 0.0, null, zeroBaseline = true, violated = false),
+            ),
+        )
+        val rendered = mapper.readTree(writer.render(report))
+
+        val guards = rendered["cost_guards"]
+        assertEquals("planner_cost_ratio", guards["basis"].stringValue())
+        assertEquals(1.5, guards["max_ratio_by_query_id"]["records_by_group"].doubleValue())
+        assertEquals(1.0, guards["max_ratio_by_query_id"]["records_by_value"].doubleValue())
+        val group = guards["outcomes"][0]
+        assertEquals("records_by_group", group["query_id"].stringValue())
+        assertEquals(0.9, group["observed_ratio"].doubleValue())
+        assertEquals(false, group["violated"].booleanValue())
+        val value = guards["outcomes"][1]
+        assertTrue(value["observed_ratio"].isNull)
+        assertTrue(value["zero_baseline"].booleanValue())
+        assertEquals(1.0, rendered["budgets"]["query_cost_guards"]["records_by_value"].doubleValue())
+        // Guards are explicitly not a latency or SLA promise.
+        assertTrue(guards["note"].stringValue().contains("not latency or SLA"))
+    }
+
+    @Test
+    fun `reports without guards keep an empty cost guard section`() {
+        val json = mapper.readTree(writer.render(ContractFixtures.report()))
+
+        assertEquals(0, json["cost_guards"]["outcomes"].size())
+        assertTrue(json["cost_guards"]["max_ratio_by_query_id"].isEmpty)
+        assertTrue(json["budgets"]["query_cost_guards"].isEmpty)
+    }
+
+    @Test
     fun `wire v3 exposes both incumbents from one pool and embeds saved plan JSON`() {
         val report = ContractFixtures.report(objective = Objective.MEAN)
         val json = mapper.readTree(writer.render(report))

@@ -11,6 +11,7 @@ import org.junit.jupiter.api.io.TempDir
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.Arguments
 import org.junit.jupiter.params.provider.MethodSource
+import org.junit.jupiter.params.provider.ValueSource
 import ru.itmo.indexbudget.domain.AnalysisError
 import ru.itmo.indexbudget.domain.AnalysisException
 import ru.itmo.indexbudget.domain.AnalysisMode
@@ -44,6 +45,10 @@ class WorkloadReaderTest {
         assertEquals(Objective.MEAN, noWrite.objective)
         assertNull(noWrite.tableWriteRates)
         assertNull(noWrite.constraints.writeBudgetUnitsPerHour)
+
+        val guarded = reader.read(Path.of("examples/workload-v2-guards.json"))
+        assertEquals(mapOf("records_by_group" to 1.05, "records_by_value" to 1.0),
+            guarded.constraints.queryCostGuards)
 
         val poc = reader.read(Path.of("demo/workload-poc.json"))
         assertEquals(3, poc.queries.size)
@@ -277,6 +282,40 @@ class WorkloadReaderTest {
         assertEquals(0, zero.constraints.maxIndexes)
         assertEquals(Long.MAX_VALUE, read(json(constraints = constraintsJson(storage = "9223372036854775807")))
             .constraints.storageBudgetBytes)
+    }
+
+    @Test
+    fun `query cost guards are optional ratios over known query IDs`() {
+        assertEquals(emptyMap<String, Double>(), read(json()).constraints.queryCostGuards)
+        assertEquals(emptyMap<String, Double>(), read(json(constraints = constraintsJson(costGuards = "{}")))
+            .constraints.queryCostGuards)
+        val guards = read(json(constraints = constraintsJson(costGuards = """{"q1":1.0,"q2":2.5}""")))
+            .constraints.queryCostGuards
+        assertEquals(mapOf("q1" to 1.0, "q2" to 2.5), guards)
+        // The field extends v2 compatibly: an absent field keeps the previous fingerprint.
+        assertNotEquals(fingerprint(json()), fingerprint(json(constraints = constraintsJson(costGuards = """{"q1":1}"""))))
+    }
+
+    @ParameterizedTest(name = "query_cost_guards = {0}")
+    @ValueSource(strings = ["null", "\"q1\"", "[]", "{\"q1\":\"1.1\"}", "{\"q1\":null}"])
+    fun `query cost guards must be an object of numbers`(value: String) {
+        failure(json(constraints = constraintsJson(costGuards = value)))
+    }
+
+    @ParameterizedTest(name = "ratio = {0}")
+    @ValueSource(strings = ["0.9", "0", "-1", "1e999"])
+    fun `query cost guard ratios are at least one and finite`(value: String) {
+        val error = failure(json(constraints = constraintsJson(costGuards = "{\"q1\":$value}")))
+        assertEquals("constraints.query_cost_guards", error.details["field"])
+        assertEquals("q1", error.queryId)
+    }
+
+    @Test
+    fun `query cost guards reject unknown query IDs with their location`() {
+        val error = failure(json(constraints = constraintsJson(costGuards = """{"q3":1.1}""")))
+        assertEquals(ErrorCode.INVALID_INPUT, error.code)
+        assertEquals("q3", error.queryId)
+        assertEquals("constraints.query_cost_guards", error.details["field"])
     }
 
     @ParameterizedTest(name = "{0} = {1}")
@@ -528,10 +567,12 @@ class WorkloadReaderTest {
         storage: String? = "1024",
         writeBudget: String? = "null",
         maxIndexes: String? = "5",
+        costGuards: String? = null,
     ): String = listOfNotNull(
         storage?.let { "\"storage_budget_bytes\":$it" },
         writeBudget?.let { "\"write_budget_units_per_hour\":$it" },
         maxIndexes?.let { "\"max_indexes\":$it" },
+        costGuards?.let { "\"query_cost_guards\":$it" },
     ).joinToString(prefix = "{", postfix = "}")
 
     private fun ratesJson(

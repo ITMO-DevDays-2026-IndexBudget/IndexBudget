@@ -349,6 +349,54 @@ class GreedyOptimizerTest {
         assertEquals(ComparisonScope.EVALUATED_SETS, result.comparisonScope)
     }
 
+    @Test
+    fun `a guard rejection keeps both incumbents on the baseline with a completed baseline-only result`() {
+        val fixture = scenario(
+            candidates = listOf(candidate("A")),
+            costs = mapOf(
+                emptyList<String>() to vector(100.0, 100.0),
+                listOf("A") to vector(200.0, 1.0),
+            ),
+            profiles = listOf(Profile("heavy", 1.0, mapOf("q1" to 1.0, "q2" to 1000.0))),
+            constraints = Constraints(1000, null, 2, queryCostGuards = mapOf("q1" to 1.0)),
+        )
+
+        val search = search(fixture)
+
+        // The mean improves ~80x, but the guarded q1 doubles: the set is excluded from both incumbents.
+        val rejected = search.rejectedEvaluations.values.single()
+        assertEquals(ErrorCode.CRITICAL_QUERY_REGRESSION, rejected.violations.single().code)
+        assertEquals("q1", rejected.violations.single().queryId)
+        assertTrue(requireNotNull(rejected.metrics.meanRatio) < 1.0)
+        assertTrue(search.result is SearchResult.Completed)
+        assertEquals(emptyList<String>(), search.result.bestRobust.evaluation.candidateIds)
+        assertEquals(emptyList<String>(), search.result.bestMean.evaluation.candidateIds)
+        assertEquals(emptyList<String>(), search.result.selected.evaluation.candidateIds)
+        assertTrue(StopReason.NO_IMPROVEMENT in search.result.diagnostics.stopReasons)
+        assertTrue(search.result.diagnostics.warnings.any {
+            it.code == WarningCode.CANDIDATE_REJECTED && it.queryId == "q1"
+        })
+    }
+
+    @Test
+    fun `a guard limit at the observed ratio accepts the set and updates incumbents`() {
+        val fixture = scenario(
+            candidates = listOf(candidate("A")),
+            costs = mapOf(
+                emptyList<String>() to vector(100.0, 100.0),
+                listOf("A") to vector(110.0, 1.0),
+            ),
+            profiles = listOf(Profile("heavy", 1.0, mapOf("q1" to 1.0, "q2" to 100.0))),
+            constraints = Constraints(1000, null, 2, queryCostGuards = mapOf("q1" to 1.1)),
+        )
+
+        val search = search(fixture)
+
+        assertTrue(search.rejectedEvaluations.isEmpty())
+        assertEquals(listOf("A"), search.result.bestRobust.evaluation.candidateIds)
+        assertEquals(listOf("A"), search.result.bestMean.evaluation.candidateIds)
+    }
+
     private fun search(fixture: SearchScenario): GreedySearchResult {
         val context = RunContext()
         context.startSearch()

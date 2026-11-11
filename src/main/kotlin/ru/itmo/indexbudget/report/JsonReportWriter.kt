@@ -41,6 +41,12 @@ class JsonReportWriter {
                 "calls_per_hour" to profile.callsPerHour.toSortedMap(),
             ) },
             "budgets" to input?.constraints?.let(::budgets),
+            "cost_guards" to linkedMapOf(
+                "basis" to "planner_cost_ratio",
+                "note" to "Optional per-query constraints on planner cost ratios; not latency or SLA.",
+                "max_ratio_by_query_id" to input?.constraints?.queryCostGuards?.toSortedMap(),
+                "outcomes" to report.costGuards.map(::costGuard),
+            ),
             "write_proxy_model" to "row_changes_times_key_and_include_columns",
             "table_write_rates" to input?.tableWriteRates?.toSortedMap()?.mapValues { (_, rates) -> linkedMapOf(
                 "inserts_per_hour" to rates.insertsPerHour,
@@ -103,6 +109,17 @@ class JsonReportWriter {
         "storage_budget_bytes" to value.storageBudgetBytes,
         "write_budget_units_per_hour" to value.writeBudgetUnitsPerHour,
         "max_indexes" to value.maxIndexes,
+        "query_cost_guards" to value.queryCostGuards.toSortedMap(),
+    )
+
+    private fun costGuard(value: CostGuardOutcome) = linkedMapOf(
+        "query_id" to value.queryId,
+        "max_ratio" to value.maxRatio,
+        "baseline_cost" to value.baselineCost,
+        "selected_cost" to value.selectedCost,
+        "observed_ratio" to value.observedRatio,
+        "zero_baseline" to value.zeroBaseline,
+        "violated" to value.violated,
     )
 
     private fun configuration(value: EvaluationResult, metrics: SetMetrics?) = linkedMapOf(

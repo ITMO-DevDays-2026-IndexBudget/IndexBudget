@@ -150,7 +150,7 @@ RunContext общий для стадий: монотонное время, dead
 
 Hash — SHA-256 от UTF-8 JSON с рекурсивной сортировкой ключей без пробелов, с сохранением строк SQL и порядка массивов. Нормализация для hash не переписывает SQL и не включает применённые defaults или CLI-переопределения режима/рейтинга. JSON/HTML/SQL относятся к одному run ID/hash и выбранному набору.
 
-Поля `best_robust`, `best_mean`, `comparison_scope: "evaluated_sets"`, `selected_objective` обозначают сравнение в одном исследованном пуле. Это не обещание двух независимых поисков или глобального оптимума. Цена устойчивости — `C_mean(best_robust) - C_mean(best_mean)` в этом пуле; совпавшие наборы показываются явно. Per-query регрессии выделяются, но hard guard для каждого SQL не заявлен.
+Поля `best_robust`, `best_mean`, `comparison_scope: "evaluated_sets"`, `selected_objective` обозначают сравнение в одном исследованном пуле. Это не обещание двух независимых поисков или глобального оптимума. Цена устойчивости — `C_mean(best_robust) - C_mean(best_mean)` в этом пуле; совпавшие наборы показываются явно. Per-query регрессии выделяются; необязательный hard guard planner cost для критических SQL (#78, `query_cost_guards`) отклоняет набор целиком и не обновляет incumbents. Это ограничение planner cost, а не latency/SLA.
 
 Сводка #68 содержит выбранные IDs, эффект по ожидаемым costs, R, готовые расходы/лимиты,
 число регрессий SQL и причины partial/failed. `profile_comparisons`/`query_effects` описывают
