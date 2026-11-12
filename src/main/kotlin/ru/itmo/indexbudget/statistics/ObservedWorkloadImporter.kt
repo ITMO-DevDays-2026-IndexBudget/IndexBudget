@@ -6,8 +6,21 @@ import java.security.MessageDigest
 import java.util.HexFormat
 
 data class SqlExample(val key: StatisticsKey, val sql: String, val searchPath: List<String>)
+
+/** The workload-facing part of an observed write profile: rates for the resolved workload tables only. */
+data class ImportedWriteProfile(
+    val ratesByTable: Map<String, TableWriteRates>,
+    val hotUpdatesPerHour: Map<String, Double>,
+    /** Snapshot faults for every observed table, including tables outside this workload. */
+    val tableFaults: Map<String, String>,
+    val workloadTables: Set<String>,
+    val complete: Boolean,
+    val reasons: List<String>,
+)
+
 data class ImportedWorkload(val workload: Map<String, Any?>, val manifest: Map<String, Any?>,
-    val resolvedQueries: List<ResolvedQuery>, val error: AnalysisError? = null)
+    val resolvedQueries: List<ResolvedQuery>, val error: AnalysisError? = null,
+    val writeProfile: ImportedWriteProfile? = null)
 
 /** The catalog port must use the explicitly declared path, never the connection's accidental default. */
 fun interface ImportCatalog {
@@ -15,11 +28,24 @@ fun interface ImportCatalog {
 }
 
 class ObservedWorkloadImporter(private val catalog: ImportCatalog) {
-    fun build(frequencies: FrequencyProfiles, examples: List<SqlExample>, options: Map<String, Any?>,
-        context: RunContext = RunContext()): ImportedWorkload {
+    /**
+     * @param writeProfile one observed write window (#107). The importer is the single owner of the
+     * final manifest: it filters the profile down to the resolved workload tables, embeds the
+     * `write_profile` manifest section and only then hashes the exact published bytes for provenance.
+     */
+    fun build(
+        frequencies: FrequencyProfiles,
+        examples: List<SqlExample>,
+        options: Map<String, Any?>,
+        context: RunContext = RunContext(),
+        writeProfile: WriteProfileCalculator.WriteProfile? = null,
+    ): ImportedWorkload {
         context.checkDeadline()
-        if (options.keys.any { it !in setOf("constraints", "objective", "table_write_rates", "analysis_mode", "candidate_ranking") })
+        if (options.keys.any { it !in setOf("constraints", "objective", "table_write_rates", "table_write_rates_origin", "analysis_mode", "candidate_ranking") })
             ImportJson.fail("Import options may only specify budgets, objective, write rates and analysis presets.")
+        if (writeProfile != null && (options.containsKey("table_write_rates") || options.containsKey("table_write_rates_origin"))) {
+            ImportJson.fail("Choose either manual table_write_rates or one observed window, not both.")
+        }
         val profiles = frequencies.profiles
         if (profiles.size !in 1..3 || profiles.map { it.id }.distinct().size != profiles.size)
             ImportJson.fail("Provide one to three unique profiles.")
@@ -107,6 +133,48 @@ class ObservedWorkloadImporter(private val catalog: ImportCatalog) {
             "No supported queries with complete frequencies and explicit examples remain; see import-manifest.json.") else null
         val ordered = selected.sortedWith(KEY_ORDER)
         val queryIds = ordered.associateWith(::id)
+        // The shared snapshot covers the whole database, but the exported profile serves exactly
+        // the resolved workload tables (#107): rates never leak tables the workload does not touch.
+        val importedProfile = writeProfile?.let { profile ->
+            val workloadTables = linkedSetOf<String>()
+            for (key in ordered) {
+                for (table in eligible.getValue(key).tables) workloadTables += "${table.schema}.${table.name}"
+            }
+            val observedTables = profile.rates.keys + profile.tableFaults.keys
+            val uncovered = workloadTables - observedTables
+            if (uncovered.isNotEmpty()) {
+                ImportJson.fail("The observed write window does not cover workload table(s): " +
+                    uncovered.sorted().joinToString(", ") + ".", ErrorCode.INVALID_WRITE_PROFILE)
+            }
+            val rates = profile.rates.filterKeys { it in workloadTables }
+            val faults = profile.tableFaults.filterKeys { it in workloadTables }
+            val reasons = linkedSetOf<WriteProfileReason>()
+            // Only whole-window reasons stay global; per-table faults are filtered to the workload.
+            if (WriteProfileReason.INCOMPLETE_SNAPSHOT in profile.reasons) {
+                reasons += WriteProfileReason.INCOMPLETE_SNAPSHOT
+            }
+            reasons += faults.values
+            val complete = reasons.isEmpty() && rates.keys == workloadTables
+            val imported = ImportedWriteProfile(
+                ratesByTable = rates,
+                hotUpdatesPerHour = profile.hotUpdatesPerHour.filterKeys { it in workloadTables },
+                tableFaults = profile.tableFaults.mapValues { it.value.name },
+                workloadTables = workloadTables,
+                complete = complete,
+                reasons = reasons.map { it.name },
+            )
+            // An incomplete observation never silently disables an enabled write budget and is
+            // never replaced by manual values.
+            if (writeBudgetEnabled(options) && !complete) {
+                ImportJson.fail("The observed write window is incomplete: ${imported.reasons.joinToString(",")}. " +
+                    "Widen the window or drop write_budget_units_per_hour explicitly.",
+                    ErrorCode.INVALID_WRITE_PROFILE)
+            }
+            if (complete && rates.isEmpty()) {
+                ImportJson.fail("A complete write profile cannot be empty.", ErrorCode.INVALID_WRITE_PROFILE)
+            }
+            imported
+        }
         val importedProfiles = profiles.mapIndexed { index, profile ->
             val calls = ordered.associate { queryIds.getValue(it) to requireNotNull(observations[index].getValue(it).callsPerHour) }
             if (calls.values.none { it > 0 } && selectionError == null) selectionError = AnalysisError(ErrorCode.INVALID_INPUT,
@@ -169,6 +237,34 @@ class ObservedWorkloadImporter(private val catalog: ImportCatalog) {
                         "historical_exec_time_ms" to row?.totalExecTimeMillis, "reasons" to row?.reasons?.map { it.name }) } }) },
             "limitations" to listOf("representative_literals_not_generic_plan", "historical_time_is_not_predicted_latency",
                 "pg16_targeted_reset_may_be_undetectable", "top_level_only_to_avoid_nested_double_counting"))
+        importedProfile?.let { imported ->
+            // One owner assembles the final manifest and hashes exactly the published bytes (#107):
+            // rates_by_table carries only the workload tables, table_faults keeps the whole
+            // snapshot diagnostics — faults of unrelated tables never block this workload.
+            manifest["write_profile"] = linkedMapOf(
+                "source" to "pg_stat_user_tables",
+                "source_id" to writeProfile.sourceId.toString(),
+                "database_oid" to writeProfile.databaseOid,
+                "postgres_version" to writeProfile.postgresVersion,
+                "from" to writeProfile.from, "to" to writeProfile.to,
+                "period_seconds" to writeProfile.periodSeconds,
+                "complete" to imported.complete,
+                "reasons" to imported.reasons,
+                "workload_tables" to imported.workloadTables,
+                "rates_by_table" to imported.ratesByTable.toSortedMap().mapValues { (table, rates) ->
+                    linkedMapOf("inserts_per_hour" to rates.insertsPerHour,
+                        "updates_per_hour" to rates.updatesPerHour,
+                        "deletes_per_hour" to rates.deletesPerHour,
+                        "hot_updates_per_hour" to imported.hotUpdatesPerHour[table])
+                },
+                "table_faults" to imported.tableFaults.toSortedMap(),
+                "limitations" to listOf("changed_rows_not_sql_calls",
+                    "hot_updates_are_historical_diagnostics_never_index_price",
+                    "pg16_targeted_reset_may_be_undetectable",
+                    "observed_rows_never_mixed_with_pg_stat_statements",
+                    "rates_cover_exactly_the_resolved_workload_tables"),
+            )
+        }
         // Use #68's existing report-facing contract unchanged. Rich per-key evidence stays in the
         // separate versioned manifest, referenced by name + exact byte hash in the selection rule.
         val provenance = linkedMapOf<String, Any?>("schema_version" to 1, "source" to "pg_stat_statements",
@@ -185,8 +281,27 @@ class ObservedWorkloadImporter(private val catalog: ImportCatalog) {
             "queries" to ordered.map { mapOf("id" to queryIds.getValue(it), "sql" to eligible.getValue(it).sql) },
             "profiles" to importedProfiles)
         workload.putAll(options)
+        importedProfile?.let { imported ->
+            // Observed rates are rows per hour, not SQL calls; they never mix with statements counts.
+            workload["table_write_rates"] = imported.ratesByTable.toSortedMap().mapValues { (_, rates) ->
+                linkedMapOf("inserts_per_hour" to rates.insertsPerHour,
+                    "updates_per_hour" to rates.updatesPerHour,
+                    "deletes_per_hour" to rates.deletesPerHour,
+                    "source" to "observed")
+            }
+            workload["table_write_rates_origin"] = linkedMapOf(
+                "kind" to "observed",
+                "window" to linkedMapOf("from" to writeProfile.from, "to" to writeProfile.to,
+                    "period_seconds" to writeProfile.periodSeconds),
+                "complete" to imported.complete,
+                "reasons" to imported.reasons,
+                "source" to linkedMapOf("source_id" to writeProfile.sourceId.toString(),
+                    "database_oid" to writeProfile.databaseOid,
+                    "postgres_version" to writeProfile.postgresVersion),
+            )
+        }
         workload["provenance"] = provenance
-        return ImportedWorkload(workload, manifest, ordered.map { eligible.getValue(it) }, selectionError)
+        return ImportedWorkload(workload, manifest, ordered.map { eligible.getValue(it) }, selectionError, importedProfile)
     }
 
     companion object {
@@ -195,5 +310,11 @@ class ObservedWorkloadImporter(private val catalog: ImportCatalog) {
             { it.userid }, { it.queryid }, { it.toplevel })
         internal fun hash(bytes: ByteArray): String = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes))
         fun id(key: StatisticsKey): String = "obs_" + hash(ImportJson.mapper.writeValueAsBytes(ImportJson.key(key)))
+        private fun writeBudgetEnabled(options: Map<String, Any?>): Boolean = when (val constraints = options["constraints"]) {
+            is Map<*, *> -> constraints["write_budget_units_per_hour"] != null
+            is tools.jackson.databind.JsonNode -> !constraints.isNull &&
+                constraints.get("write_budget_units_per_hour")?.isNull == false
+            else -> false
+        }
     }
 }

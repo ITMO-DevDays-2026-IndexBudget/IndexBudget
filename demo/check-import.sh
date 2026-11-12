@@ -32,13 +32,26 @@ export INDEXBUDGET_IMPORT_HYPOPG_TEST=true
 python3 - <<'PY'
 from pathlib import Path
 import xml.etree.ElementTree as ET
-for suite, count in (
-    ('statistics.ObservedImportIntegrationTest', 3),
-    ('report.ReportImportIntegrationTest', 1),
+# Required scenario names, not brittle counts: adding a test must not break this gate.
+for suite, required in (
+    ('statistics.ObservedImportIntegrationTest', (
+        'actual snapshots import through CLI with closed resources and replayable provenance',
+        'no eligible examples publishes a failed manifest without a successful workload',
+        'an observed table write window yields one write profile and refuses silent fallbacks',
+        'actual workload snapshots import analyze and HTML JSON SQL carry the same provenance',
+    )),
+    ('report.ReportImportIntegrationTest', (
+        'real imported windows and recommendation survive shared model and both renderers without new evaluations',
+    )),
 ):
     root = ET.parse(Path(f'build/test-results/test/TEST-ru.itmo.indexbudget.{suite}.xml')).getroot()
-    if int(root.attrib['tests']) != count or any(int(root.attrib[name]) != 0 for name in ('skipped', 'failures', 'errors')):
+    if any(int(root.attrib[name]) != 0 for name in ('skipped', 'failures', 'errors')):
         raise SystemExit(f'{suite}: all actual importer/report scenarios must execute without skips or failures.')
+    # Kotlin backtick test methods appear with a trailing () in the JUnit XML.
+    executed = {case.attrib['name'].removesuffix('()') for case in root.iter('testcase')}
+    missing = [name for name in required if name not in executed]
+    if missing:
+        raise SystemExit(f'{suite}: mandatory scenarios did not execute: {missing}')
 print('Snapshots -> import -> analyze -> summary/HTML/JSON/SQL verified against the real import manifest.')
 print('Evidence: build/report-import-verification/')
 PY

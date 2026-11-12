@@ -56,6 +56,16 @@ class JsonReportWriter {
                 "deletes_per_hour" to rates.deletesPerHour,
                 "source" to rates.source.name.lowercase(),
             ) },
+            "table_write_rates_origin" to input?.tableWriteRatesOrigin?.let { origin -> linkedMapOf(
+                "kind" to "observed",
+                "window" to linkedMapOf("from" to origin.from, "to" to origin.to,
+                    "period_seconds" to origin.periodSeconds),
+                "complete" to origin.complete,
+                "reasons" to origin.reasons,
+                "source" to linkedMapOf("source_id" to origin.sourceId,
+                    "database_oid" to origin.databaseOid,
+                    "postgres_version" to origin.postgresVersion),
+            ) },
             "queries" to input?.queries?.map { query -> linkedMapOf(
                 "id" to query.id,
                 "sql" to query.sql,

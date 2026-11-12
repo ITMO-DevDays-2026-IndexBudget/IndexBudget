@@ -361,6 +361,60 @@ class WorkloadReaderTest {
         }
     }
 
+    @Test
+    fun `observed write rates require exactly one explicit origin window`() {
+        val observed = ratesJson(inserts = "10", source = "\"observed\"")
+        val workload = read(json(writeRates = observed, writeOrigin = originJson()))
+        assertEquals(WriteRateSource.OBSERVED,
+            requireNotNull(workload.tableWriteRates).getValue("public.records").source)
+        val origin = requireNotNull(workload.tableWriteRatesOrigin)
+        assertEquals("2026-11-12T10:00:00Z", origin.from)
+        assertEquals("2026-11-12T11:00:00Z", origin.to)
+        assertEquals(3600.0, origin.periodSeconds)
+        assertEquals(true, origin.complete)
+        assertEquals(emptyList<String>(), origin.reasons)
+        assertEquals("d0d60c19-eb9d-42ee-9e01-935560eb7e20", origin.sourceId)
+        assertEquals(16384L, origin.databaseOid)
+        assertEquals("16.8", origin.postgresVersion)
+        // The collector source UUID is optional metadata: older workloads without it stay readable.
+        assertEquals(null, read(json(writeRates = observed, writeOrigin = originJson(sourceId = null)))
+            .tableWriteRatesOrigin?.sourceId)
+        // The origin joins the canonical form: the same rates observed and by hand differ by hash,
+        // while plain manual input keeps its previous fingerprint.
+        assertNotEquals(fingerprint(json(writeRates = ratesJson(inserts = "10"))),
+            fingerprint(json(writeRates = observed, writeOrigin = originJson())))
+
+        // Observed rates without an origin, an origin over manual rates, an origin without rates
+        // and mixed sources are all rejected instead of being guessed.
+        failure(json(writeRates = observed), ErrorCode.INVALID_WRITE_PROFILE)
+        failure(json(writeRates = ratesJson(), writeOrigin = originJson()), ErrorCode.INVALID_WRITE_PROFILE)
+        failure(json(writeOrigin = originJson()), ErrorCode.INVALID_WRITE_PROFILE)
+        // Two structurally correct entries with different sources must fail on the source mix
+        // itself, not on an accidental extra nesting level.
+        val mixed = failure(json(
+            writeRates = """{"public.records":${ratesEntry(inserts = "10", source = "\"observed\"")},""" +
+                """"public.orders":${ratesEntry(source = "\"manual\"")}}""",
+            writeOrigin = originJson(),
+        ), ErrorCode.INVALID_WRITE_PROFILE)
+        assertEquals("table_write_rates_origin", mixed.details.getValue("field"))
+        failure(json(writeOrigin = """{"kind":"manual"}"""), ErrorCode.INVALID_WRITE_PROFILE)
+    }
+
+    @Test
+    fun `an incomplete observed origin never silently disables an enabled write budget`() {
+        val incomplete = originJson(complete = "false", reasons = """["COUNTER_DECREASE"]""")
+        val observed = ratesJson(source = "\"observed\"")
+
+        // Without a write budget the incomplete observation is kept honestly.
+        val workload = read(json(writeRates = observed, writeOrigin = incomplete))
+        assertEquals(false, requireNotNull(workload.tableWriteRatesOrigin).complete)
+        assertEquals(listOf("COUNTER_DECREASE"), workload.tableWriteRatesOrigin.reasons)
+
+        // An enabled write budget demands a complete observed profile instead of guessing.
+        failure(json(writeRates = observed, writeOrigin = incomplete,
+            constraints = constraintsJson(writeBudget = "100")), ErrorCode.INVALID_WRITE_PROFILE)
+    }
+
     @ParameterizedTest(name = "{0} = {1}")
     @MethodSource("invalidWriteRates")
     fun `write rates must be present finite nonnegative numbers`(field: String, description: String, value: String?) {
@@ -543,6 +597,7 @@ class WorkloadReaderTest {
         ),
         objective: String? = null,
         writeRates: String? = null,
+        writeOrigin: String? = null,
         constraints: String = constraintsJson(),
         schemaVersion: String? = "2",
         analysisMode: String? = null,
@@ -554,6 +609,7 @@ class WorkloadReaderTest {
         "\"profiles\":[${profiles.joinToString(",")} ]",
         "\"constraints\":$constraints",
         writeRates?.let { "\"table_write_rates\":$it" },
+        writeOrigin?.let { "\"table_write_rates_origin\":$it" },
     ).joinToString(prefix = "{", postfix = "}")
 
     private fun query(id: String, sql: String = "SELECT id FROM public.records"): String =
@@ -561,6 +617,15 @@ class WorkloadReaderTest {
 
     private fun profile(id: String = "normal", weight: String = "1", calls: String = """{"q1":1,"q2":1}"""): String =
         """{"id":${quote(id)},"weight":$weight,"calls_per_hour":$calls}"""
+
+    private fun originJson(
+        complete: String = "true",
+        reasons: String = "[]",
+        periodSeconds: String = "3600",
+        sourceId: String? = "\"d0d60c19-eb9d-42ee-9e01-935560eb7e20\"",
+    ): String = """{"kind":"observed","window":{"from":"2026-11-12T10:00:00Z","to":"2026-11-12T11:00:00Z",
+        "period_seconds":$periodSeconds},"complete":$complete,"reasons":$reasons,
+        "source":{${sourceId?.let { "\"source_id\":$it," } ?: ""}"database_oid":16384,"postgres_version":"16.8"}}"""
 
     // null опускает поле, строка "null" передаёт явный JSON null; остальные значения — сырые JSON-токены.
     private fun constraintsJson(
@@ -580,12 +645,20 @@ class WorkloadReaderTest {
         updates: String? = "0",
         deletes: String? = "0",
         source: String? = "\"manual\"",
+    ): String = """{"public.records":${ratesEntry(inserts, updates, deletes, source)}}"""
+
+    /** One structurally correct table entry: a value inside table_write_rates, never a nested map. */
+    private fun ratesEntry(
+        inserts: String? = "0",
+        updates: String? = "0",
+        deletes: String? = "0",
+        source: String? = "\"manual\"",
     ): String = listOfNotNull(
         inserts?.let { "\"inserts_per_hour\":$it" },
         updates?.let { "\"updates_per_hour\":$it" },
         deletes?.let { "\"deletes_per_hour\":$it" },
         source?.let { "\"source\":$it" },
-    ).joinToString(prefix = "{\"public.records\":{", postfix = "}}")
+    ).joinToString(prefix = "{", postfix = "}")
 
     private fun quote(value: String): String = mapper.writeValueAsString(value)
 
