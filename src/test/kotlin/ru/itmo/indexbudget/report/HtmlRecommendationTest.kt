@@ -15,7 +15,7 @@ class HtmlRecommendationTest {
         val source = ContractFixtures.report(sameIncumbents = true)
         val original = source.candidates.candidates.single()
         for (method in listOf("btree", "brin", "hash")) {
-            val expected = "records · $method (created_at)"
+            val expected = "$method (created_at)"
             val candidate = if (method == "btree") original else original.copy(definition = original.definition.copy(
                 method = method, keys = listOf(IndexKey(original.definition.keys.single().column,
                     operatorClass = if (method == "brin") "pg_catalog.timestamp_minmax_ops" else "pg_catalog.timestamp_ops"))))
@@ -23,6 +23,7 @@ class HtmlRecommendationTest {
             val report = DefaultReportBuilder().build(input, source.candidates.copy(candidates = listOf(candidate)),
                 source.result, RunContext())
             val overview = section(renderer.render(report), "overview")
+            assertTrue(overview.contains("<th scope=\"row\"><code>records</code></th>"))
             val recommendation = overview.substringAfter("<ul class=\"recommended-indexes\">", "").substringBefore("</ul>")
             assertTrue(recommendation.contains("<code>$expected</code>"), recommendation)
         }
@@ -34,7 +35,8 @@ class HtmlRecommendationTest {
         val html = renderer.render(report)
         val overview = section(html, "overview")
         val selected = report.candidates.candidates.single { it.id in report.summary.selectedIndexIds.orEmpty() }
-        assertTrue(overview.contains(selected.definition.table.name + " · btree ("))
+        assertTrue(overview.contains("<th scope=\"row\"><code>${selected.definition.table.name}</code></th>"))
+        assertTrue(overview.contains("<code>btree ("))
         assertTrue(overview.contains("<dt>Регрессии SQL</dt><dd>1 из 2</dd>"))
         assertTrue(overview.contains("href=\"#queries\""))
         assertFalse(overview.contains("Полностью оценённые наборы"))

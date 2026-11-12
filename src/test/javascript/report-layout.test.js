@@ -48,9 +48,31 @@ async function queryAgreement(page, saved, prefix = '') {
         assert.equal(await page.locator('.profile-plot, .chart-track, .budget-meter').count(), 0,
           'Repeated charts and resource bars are replaced by saved-value tables');
         await queryAgreement(page, saved);
+        const groupedIndexes = await page.locator('#overview .recommended-table tbody tr').evaluateAll(groups =>
+          groups.map(group => ({table: group.querySelector('th').textContent, count: group.querySelectorAll('li').length})));
+        const selectedByTable = new Map();
+        for (const candidate of saved.selected_indexes ?? []) {
+          const table = candidate.definition.table;
+          const ambiguous = saved.candidates.some(other => other.definition.table.name === table.name && other.definition.table.schema !== table.schema);
+          const label = ambiguous ? `${table.schema}.${table.name}` : table.name;
+          selectedByTable.set(label, (selectedByTable.get(label) ?? 0) + 1);
+        }
+        assert.deepEqual(new Map(groupedIndexes.map(group => [group.table, group.count])), selectedByTable,
+          'Every selected index appears once in its table group');
+        assert.equal(groupedIndexes.length, selectedByTable.size, 'Each table has one group');
+        if (await page.locator('.resource-note').count()) {
+          assert.equal(await page.locator('.resource-note').evaluate(e => getComputedStyle(e).fontSize),
+            await page.locator('.resource-note + p').evaluate(e => getComputedStyle(e).fontSize),
+            'Both resource notes use the same font size');
+        }
         if (saved.queries?.length) {
           // Visibility also detects a blocked script or an incorrect CSP hash.
           assert.ok(await page.locator('.query-controls').isVisible(), `${width}px/${name}: sorting unavailable`);
+          assert.equal(await page.locator('.query-legend').evaluate(e => getComputedStyle(e).fontSize),
+            await page.locator('.query-controls label').evaluate(e => getComputedStyle(e).fontSize));
+          assert.equal(await page.locator('.query-details-group').getAttribute('open'), null);
+          assert.equal(await page.locator('#query-0 > summary').isVisible(), false,
+            'Query disclosures are hidden inside the collapsed group');
         }
         const profileRows = await page.locator('.profile-table tr[data-profile-id]').evaluateAll(elements =>
           elements.map(row => ({...row.dataset})));
@@ -88,6 +110,7 @@ async function queryAgreement(page, saved, prefix = '') {
     await page.keyboard.press('Space');
     assert.ok(await firstDisclosure.evaluate(summary => !summary.parentElement.open), 'Space closes native details');
     await page.locator('a[href="#query-0"]').first().click();
+    assert.ok(await page.locator('.query-details-group').evaluate(details => details.open), 'SQL link opens the parent group');
     assert.ok(await page.locator('#query-0').evaluate(details => details.open), 'SQL link reveals saved SQL');
     const original = await page.locator('#query-comparison tbody tr').evaluateAll(rows => rows.map(row => ({...row.dataset})));
     await page.selectOption('#query-sort', 'original');
@@ -108,6 +131,7 @@ async function queryAgreement(page, saved, prefix = '') {
     await fallback.goto(preview('regression'));
     await noPageOverflow(fallback, 'No-JS report overflows');
     assert.equal(await fallback.locator('#query-comparison tbody tr').first().getAttribute('data-regression'), '1');
+    await fallback.locator('.query-details-group > summary').click();
     await fallback.locator('#query-0 > summary').click();
     assert.ok(await fallback.locator('#query-0').evaluate(details => details.open), 'No-JS SQL details remain available');
     await fallback.close();

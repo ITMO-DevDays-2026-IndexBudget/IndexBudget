@@ -250,6 +250,7 @@ async function noPageOverflow(page, message) {
         elements.map(element => ({id: element.dataset.variant, hidden: element.hidden || getComputedStyle(element).display === 'none'})));
       assert.deepEqual(new Set(fallbackVariants.map(value => value.id)), new Set(summary.points.map(point => String(point.ordinal))));
       assert.ok(fallbackVariants.every(value => !value.hidden), 'Without JS every variant and its missing-data state remain accessible');
+      await fallback.locator('#series-query-catalog > .query-details-group > summary').click();
       const first = fallback.locator('#series-query-catalog details.query-detail').first();
       if (await first.count()) {
         await first.locator(':scope > summary').click();

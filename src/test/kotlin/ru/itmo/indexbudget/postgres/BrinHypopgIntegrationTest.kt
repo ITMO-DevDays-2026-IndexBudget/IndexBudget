@@ -239,8 +239,8 @@ class BrinHypopgIntegrationTest {
         for (candidate in result.candidates.candidates.filter { it.id in checkNotNull(result.result.selected) { "Expected selected to be available" }.evaluation.candidateIds }) {
             assertTrue(sql.contains(checkNotNull(candidate.ddl) { "Expected ddl to be available" }))
             val expected = when (candidate.definition.method) {
-                "btree" -> "events · btree (sequence)"
-                "brin" -> "events · brin (sequence)"
+                "btree" -> "btree (sequence)"
+                "brin" -> "brin (sequence)"
                 else -> error("Unexpected method")
             }
             assertTrue(recommendation.contains("<code>$expected</code>"), recommendation)

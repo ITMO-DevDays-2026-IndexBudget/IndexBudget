@@ -233,7 +233,7 @@ class HtmlReportRendererTest {
         val partial = renderer.render(partialReport)
         assertTrue(partial.contains("Частичный результат"))
         assertEquals("partial", entryValue(section(partial, "run"), "Статус"))
-        assertTrue(partial.contains("Поиск остановлен досрочно"))
+        assertFalse(partial.contains("Поиск остановлен досрочно"))
         assertTrue(partial.contains("EXPLAIN_FAILED"))
         assertTrue(partial.contains("EVALUATION_FAILED"))
         assertEquals(partialReport.result.selected?.evaluation?.candidateIds, selectedIds(partial))

@@ -58,7 +58,7 @@ internal class HtmlSeriesCatalog(reports: Map<Int, AnalysisReport>, summary: Jso
     }
 
     fun queries(): String = buildString {
-        append("<section id=\"series-query-catalog\"><h2>SQL и планы</h2>")
+        append("<section id=\"series-query-catalog\"><details class=\"query-details-group\"><summary>Подробности по запросам</summary>")
         if (queryGroups.isEmpty()) append("<p>Исходные SQL не сохранены.</p>")
         queryGroups.entries.forEachIndexed { index, (query, occurrences) ->
             val kind = occurrences.firstNotNullOfOrNull { it.report?.statementKinds?.get(query.id)?.name } ?: summaryKinds[query.id]
@@ -118,7 +118,7 @@ internal class HtmlSeriesCatalog(reports: Map<Int, AnalysisReport>, summary: Jso
             }
             append("</details>")
         }
-        append("</section>")
+        append("</details></section>")
     }
 
     fun indexes(): String = buildString {
