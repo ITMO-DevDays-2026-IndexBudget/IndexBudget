@@ -1,168 +1,138 @@
 # IndexBudget
 
-IndexBudget подбирает дополнительные индексы PostgreSQL под несколько сценариев
-нагрузки и ограничения места и записи. Передайте SQL, частоты и бюджеты — получите
-лучший найденный допустимый набор и объяснение компромиссов. Рекомендация учитывает
-существующие индексы и оценивает каждый новый набор целиком через HypoPG.
+IndexBudget помогает выбрать индексы PostgreSQL, когда у базы несколько сценариев нагрузки и ограниченный бюджет. Ты задаёшь SQL, частоты и допустимые расходы места и записи, а получаешь набор индексов с объяснением выбора.
 
-Например, для запросов с фильтром по группе и сортировкой по дате результат может
-содержать индекс `(group_id, created_at)`. Это иллюстрация, а не обещание выбора или
-ускорения. Реальный запуск сохраняет:
+## Что можно сделать
 
-- **report.html** — автономный отчёт: набор, профили, расходы, регрессии и ограничения;
-- **report.json** — точные метрики, планы, происхождение и диагностику;
-- **indexes.sql** — DDL выбранного набора для отдельной проверки и применения.
+- Сравнить обычную нагрузку и пиковый сценарий. Увидеть, какие запросы выигрывают, а какие становятся дороже по оценке PostgreSQL.
+- Проверить несколько бюджетов за один запуск. Например, сравнить рекомендации для 16, 32 и 64 MiB.
+- Оценить свою идею набора индексов рядом с автоматической рекомендацией.
+- Задать частоты вручную или собрать workload из статистики своей БД.
+- Открыть отчёт без сервера и передать его коллеге вместе с JSON и SQL.
 
-Обычный анализ не выполняет UPDATE/DELETE, физический CREATE INDEX, ANALYZE или
-EXPLAIN ANALYZE. При неуспешном запуске успешный SQL рекомендаций не публикуется.
+## Быстрый старт
 
-## Быстрый запуск: локальное демо
+Нужны **JDK 25**, **Python 3.10+**, **Docker с Compose v2** и Git. При первой сборке нужен интернет для Gradle, зависимостей и Docker-образа. Команды ниже рассчитаны на macOS/Linux.
 
-Нужны **JDK 25**, **Python 3.10+**, **Docker Engine с Compose v2** и Git. Gradle
-устанавливается Wrapper; первая сборка требует доступа к Gradle distributions,
-Plugin Portal, Maven Central, Docker Hub, GitHub и apt-репозиториям образа.
-Порты по умолчанию: HTTP `8090`, собственная БД демо `127.0.0.1:55433`.
-
-Из чистого checkout:
+**1. Забери проект.**
 
 ```sh
 git clone https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget.git
 cd IndexBudget
+```
+
+**2. Проверь Java и собери CLI.**
+
+```sh
 java -version
 python3 --version
-docker compose version
 ./gradlew --no-daemon build installDist
+```
+
+Java должна показывать версию 25. Если выбрана другая, задай `JAVA_HOME` на установленную JDK 25 и добавь `$JAVA_HOME/bin` в `PATH`. На Windows используй `gradlew.bat` и CLI launcher `.bat`.
+
+**3. Подними локальную БД демо.** Docker должен быть запущен.
+
+```sh
 docker compose -f frontend/compose.yaml up -d --build --wait
+```
+
+**4. Запусти веб-интерфейс.** Для этого демо `.env` и пароли не нужны.
+
+```sh
 python3 frontend/server.py
 ```
 
-Проверьте, что Java показывает 25. Если нужно, задайте `JAVA_HOME` на установленную
-JDK 25 и добавьте `$JAVA_HOME/bin` в `PATH` до сборки. На Windows используйте
-`gradlew.bat` и launcher `.bat`; shell-команды примеров рассчитаны на macOS/Linux.
-Файлы `.idea/` и локальные настройки автора не требуются.
+**5. Открой <http://127.0.0.1:8090>.** Выбери «Чтение и запись» и запусти анализ. Из результата задания открой отчёт.
 
-Откройте <http://127.0.0.1:8090>, оставьте датасет «Чтение и запись» и запустите анализ.
-Откройте отчёт из результата задания. Для серии выберите 3–5 разных бюджетов места
-либо записи: единый отчёт сравнит варианты. Процент готовности не выдумывается;
-интерфейс показывает стадии и состояния точек. Пригодные результаты сохраняются
-при частичной ошибке. Полные настройки и восстановление job — [в инструкции демо](frontend/README.md).
+В демо четыре фиксированных датасета. SQL и частоты можно менять, схема берётся из выбранного датасета. Вкладка «Примеры» поможет собрать нагрузку. Для сравнения бюджетов переключись на серию и задай 3–5 разных значений места или записи.
 
-Остановка: Ctrl+C в терминале сервера, затем
-`docker compose -f frontend/compose.yaml stop`. БД frontend одноразовая (tmpfs):
-после пересоздания данные готовятся заново. Общий стенд и его volume не затрагиваются.
-[Статус проверки этого пути](docs/onboarding-verification.md).
+Чтобы остановить демо, нажми Ctrl+C в терминале сервера, затем выполни:
+
+```sh
+docker compose -f frontend/compose.yaml stop
+```
+
+Демо использует HTTP-порт `8090` и собственную PostgreSQL на `127.0.0.1:55433`. Данные БД одноразовые: после пересоздания контейнера датасет готовится заново. [Другие порты и настройки](frontend/README.md). [Что проверено в быстром старте](docs/onboarding-verification.md).
 
 ## Примеры и свои SQL
 
-Четыре фиксированных датасета, их схема и seed принадлежат демо; SQL можно редактировать,
-но создать свою схему через форму нельзя. Вкладка «Примеры» использует
-[общую библиотеку SQL и частот](demo/scenarios/README.md). Для собственной БД используйте CLI:
-подготовьте PostgreSQL 16 с HypoPG 1.4.2, доступную статистику и отдельную роль анализа.
-[Локальная SELECT demo-БД и подключение](demo/README.md); [права DML](docs/dml-analysis.md).
+Допустим, часто нужен список последних записей одной группы:
+
+```sql
+SELECT id, value
+FROM public.records
+WHERE group_id = 42
+ORDER BY created_at DESC
+LIMIT 20;
+```
+
+Для такого запроса может пригодиться индекс `(group_id, created_at)`. IndexBudget проверяет набор целиком с учётом других SQL и бюджетов. Конкретный индекс и ускорение заранее не обещаются.
+
+### Один запуск через CLI
+
+Для своей БД подготовь PostgreSQL 16 с HypoPG 1.4.2 и роль анализа. [Инструкция для локальной SELECT demo-БД](demo/README.md) описывает данные, права и подключение.
 
 ```sh
 export INDEXBUDGET_DATABASE_URL='jdbc:postgresql://127.0.0.1:55432/indexbudget?user=ANALYSIS_USER&password=LOCAL_PASSWORD'
 build/install/indexbudget/bin/indexbudget analyze \
-  --workload demo/workload-poc.json --output-dir reports/run-001
+  --workload demo/workload-poc.json \
+  --output-dir reports/run-001
 ```
 
-В URL замените пользователя/пароль локальными реквизитами. Не коммитьте их.
-CLI не читает `.env` автоматически; output-каталог должен быть новым или пустым.
-В [workload-poc.json](demo/workload-poc.json) три SELECT, два профиля, ручные rates и бюджеты.
-Для своих SQL скопируйте его и согласованно измените queries, calls_per_hour и таблицы записи.
+Замени реквизиты в URL своими. CLI читает эту переменную окружения, но не загружает `.env` автоматически. Не сохраняй пароли в Git. Каждый запуск требует нового или пустого output-каталога.
 
-Workload **JSON v2** содержит 1–20 SQL и 1–3 профиля. `calls_per_hour` — частоты
-SQL, `weight` — относительный вес сценария. Одна и та же оценка SQL обслуживает все
-профили. `objective: robust` (default) минимизирует худшее отношение стоимости профиля
-к baseline; `mean` — отношение ожидаемых стоимостей. Оба лучших набора сохраняются
-из одного исследованного пула. Совпадение наборов допустимо.
+В [готовом workload](demo/workload-poc.json) три SELECT и два профиля частот. Скопируй его для своих SQL. В каждом профиле `calls_per_hour` задаёт частоты всех запросов, а `weight` — вес сценария. Всего можно передать 1–20 SQL и 1–3 профиля.
 
-`storage_budget_bytes` задаёт место с запасом; `write_budget_units_per_hour` — условную
-цену обслуживания новых индексов, явный `null` отключает этот лимит. `table_write_rates`
-задаёт изменённые строки/час для всех используемых таблиц, отдельно INSERT/UPDATE/DELETE:
-это **не** частоты вызовов SQL. Профиль может быть manual или observed; для observed
-нужны полное происхождение и совместимое окно наблюдения. Неполный профиль не превращается
-в нули. [Формат, формулы и импорт записи](docs/table-write-profile.md),
-[источник записи в демо и HTML](docs/write-profile-ui.md).
+Расходы на запись задаются отдельно: `table_write_rates` содержит изменённые строки в час по таблицам. Это ручной (`manual`) профиль или наблюдаемый (`observed`) профиль из совместимой пары снимков. [Формат и расчёт rates](docs/table-write-profile.md), [выбор источника в демо](docs/write-profile-ui.md).
 
-Серия меняет один бюджет, сохраняя workload и общий пул кандидатов:
+После анализа получишь:
+
+```text
+reports/run-001/
+  report.html   # вывод, запросы, расходы и ограничения
+  report.json   # точные метрики, планы и диагностика
+  indexes.sql   # DDL выбранных индексов для отдельной проверки
+```
+
+### Серия бюджетов
 
 ```sh
 build/install/indexbudget/bin/indexbudget analyze-series \
-  --workload demo/workload-poc.json --series examples/budget-series-storage.json \
+  --workload demo/workload-poc.json \
+  --series examples/budget-series-storage.json \
   --output-dir reports/series-001
 ```
 
-Откройте `reports/series-001/report.html`; переносите весь каталог для доступа к JSON/SQL
-точек. [Write-серия, формат, partial и сопоставимость](docs/budget-series.md).
-Режимы `fast|normal|deep` и рейтинг меняют разрешённую работу поиска:
-[ресурсные пределы](docs/analysis-modes.md), [справочник CLI](docs/cli-reference.md).
+Открой `reports/series-001/report.html`. Серия меняет один бюджет и использует общий пул кандидатов. Для передачи результатов скопируй весь каталог: там лежат JSON и SQL отдельных вариантов. [Серия по бюджету записи и правила сравнения](docs/budget-series.md).
 
-## От статистики до workload
+### Нагрузка из статистики
 
-Для реальной нагрузки используйте `stats snapshot|pair` (pg_stat_statements) и
-`table-stats snapshot|pair` (изменения строк). Сначала администратор включает нужное
-расширение/статистику и выдаёт права: сборщик не делает это автоматически.
+`stats snapshot|pair` собирает статистику SQL из `pg_stat_statements`. `table-stats snapshot|pair` сохраняет счётчики изменений строк. Администратор заранее включает статистику и выдаёт права; сборщики не меняют настройки БД.
 
-```sh
-build/install/indexbudget/bin/indexbudget stats pair \
-  --source-id 09775435-44bf-4abd-97b0-7740c01d2d2b --interval-seconds 60 --output-dir captures/read
-build/install/indexbudget/bin/indexbudget table-stats pair \
-  --source-id 09775435-44bf-4abd-97b0-7740c01d2d2b --interval-seconds 60 --output-dir captures/write
-```
+Затем `import-workload` собирает workload для обычного анализа. Для импорта нужны снимки, примеры SQL с литералами, контекст схем и бюджеты. [Пошаговый маршрут от снимков до рекомендации](docs/observed-workload-import.md), [сбор SQL-статистики](docs/statistics-snapshots.md), [сбор табличных счётчиков](docs/table-statistics-v1.md).
 
-UUID в примере замените стабильным идентификатором своего источника. Эти две команды
-снимают последовательные, а не синхронные окна; при совместном импорте подготовьте
-совместимые окна по правилам контракта. Для импорта нужны реальные снимки, 1–3 окна,
-SQL-примеры с литералами вместо `$n`, контекст схем и явные бюджеты. Синтетический
-[комплект конфигурации](examples/observed-import/import-config.json) показывает формат;
-его database/source/query IDs нельзя выдавать за IDs вашей БД.
+## Важно знать
 
-```sh
-build/install/indexbudget/bin/indexbudget import-workload \
-  --config import-config.json --output-dir imported
-build/install/indexbudget/bin/indexbudget analyze \
-  --workload imported/workload.json --output-dir reports/imported-001
-```
+- Поддерживаются ограниченный SELECT с WHERE/JOIN/ORDER BY и однотабличные UPDATE/DELETE с обязательным WHERE. INSERT/MERGE, CTE и подзапросы анализатор не принимает. [Точный SQL-поднабор](IndexBudget-spec-v0.2.md#поддержанный-sql-и-каталог).
+- Даже EXPLAIN для UPDATE/DELETE требует отдельных прав записи. Администратор настраивает opt-in роль. Анализатор не выдаёт GRANT и проверяет read-only защиту сессии. [Права и ограничения DML](docs/dml-analysis.md).
+- Обычный анализ использует HypoPG и EXPLAIN без выполнения DML. Он не строит реальные индексы и не запускает ANALYZE или EXPLAIN ANALYZE.
+- Planner cost — оценка PostgreSQL. Write proxy — условная цена обслуживания индексов. Исторические counters описывают прошлую нагрузку. Ни один из этих показателей не заменяет измеренные latency, WAL или TPS.
+- По умолчанию поиск использует `robust`: уменьшает худшее отношение стоимости профиля к baseline. `mean` сравнивает ожидаемые стоимости. Поиск ограничен ресурсами и не гарантирует глобальный оптимум или SLA. При остановке пригодный результат может сохраниться со статусом `partial` и причиной.
+- По умолчанию предлагаются B-tree. [BRIN](docs/brin.md) и [hash](docs/hash.md) включаются явно и имеют свои ограничения. [Ручной набор](docs/manual-index-comparison.md) оценивается отдельно от автоматического поиска.
 
-Подготовьте `import-config.json` по [инструкции импорта](docs/observed-workload-import.md).
-[Снимки SQL: права, лимиты и тексты](docs/statistics-snapshots.md),
-[снимки таблиц и ограничения reset PG16](docs/table-statistics-v1.md).
-Исторические counters и время наблюдения описывают прошлую нагрузку, не доказывают
-эффект будущего индекса. Ожидание окна не расходует deadline поиска.
+Реальную пользу и цену записи проверяй на отдельной test-БД. Для этого есть [физический benchmark и сохранённые результаты](demo/benchmark/README.md), включая отсутствие ускорения и рост расходов записи.
 
-## Поддержанные SQL и ограничения
+## Стек
 
-Поддерживается ограниченный SELECT с WHERE/JOIN/ORDER BY, AND/OR, IN, BETWEEN и
-null-tests, а также однотабличные UPDATE/DELETE с обязательным WHERE и ограниченными
-SET-литералами. INSERT/MERGE, CTE, подзапросы и произвольные выражения не поддерживаются.
-Точный поднабор и лимиты: [спецификация](IndexBudget-spec-v0.2.md#поддержанный-sql-и-каталог),
-[DML и права](docs/dml-analysis.md), [примеры предикатов](examples/workload-v2-predicates.json).
+Kotlin/JVM · JDK 25 · Spring Boot в режиме CLI · Gradle Wrapper · PostgreSQL 16 · HypoPG 1.4.2 · JSqlParser · Jackson · Python · HTML/CSS/JavaScript · Docker Compose.
 
-Даже EXPLAIN DML требует UPDATE соответствующих колонок и/или DELETE, помимо прав
-чтения. Администратор отдельно настраивает opt-in роль; обычная SELECT-only роль
-не расширяется. Runtime не выполняет GRANT и проверяет read-only защиту сессии.
-DML planner cost оценивает поиск/подготовку строк, не фактическую запись или триггеры.
+## Где искать подробности
 
-По умолчанию кандидаты B-tree, включая ограниченный INCLUDE. Явно доступны
-[BRIN для диапазонов](docs/brin.md) и [hash для равенства](docs/hash.md) в своих границах.
-Другие типы не заявляются готовыми. [Ручной набор](docs/manual-index-comparison.md)
-оценивается отдельно и не переписывает best_robust/best_mean автоматического поиска.
-
-Поиск ограничен пулом и ресурсами, не гарантирует глобальный оптимум или SLA.
-Planner cost — оценка PostgreSQL; HypoPG size — оценка размера; write proxy — условная
-модель, а не WAL или миллисекунды. Реальные latency/TPS/WAL/bytes измеряются только
-[отдельным физическим benchmark](demo/benchmark/README.md) на одноразовой test-БД.
-Результаты, включая отсутствие ускорения и рост цены записи, — по ссылкам в методике.
-
-## Подробные документы
-
-| Задача | Документ |
-|---|---|
-| Все параметры, ошибки, отчёты и устройство CLI | [Справочник](docs/cli-reference.md) |
-| Демо, фиксированные датасеты, одиночный/серийный запуск | [Frontend](frontend/README.md) |
-| SQL, частоты и budgets общего сценария | [Examples](demo/scenarios/README.md) |
-| Требования, форматы и границы MVP | [Спецификация](IndexBudget-spec-v0.2.md), [контракты](docs/contracts.md) |
-| Измерения robust/mean и наблюдаемых бюджетов | [Эксперимент #109](docs/experiments/observed-budgets-2026-11-12/README.md) |
-| Общий стенд, миграции и сохранение данных | [Deploy DB](deploy/db/README.md) |
-| Разработка, архитектура и ревью | [AGENTS](AGENTS.md), [ai](ai/README.md) |
+- [Справочник CLI](docs/cli-reference.md) — параметры, режимы поиска, ошибки и отчёты.
+- [Веб-демо](frontend/README.md) — датасеты, настройки формы и сохранение заданий.
+- [Библиотека SQL](demo/scenarios/README.md) — запросы чтения и изменения строк с частотами.
+- [Спецификация](IndexBudget-spec-v0.2.md) и [контракты](docs/contracts.md) — форматы и правила расчётов.
+- [Эксперимент с наблюдаемыми бюджетами](docs/experiments/observed-budgets-2026-11-12/README.md) — подробные результаты сравнения.
+- [Общий стенд](deploy/db/README.md) — обновления БД и сохранение данных.
+- [Разработка и ревью](ai/README.md), [AGENTS.md](AGENTS.md) — контекст для участников и агентов.
