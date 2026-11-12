@@ -20,7 +20,7 @@ class JsonReportWriterTest {
         val queries = mapper.readTree(writer.render(report))["queries"].toList()
         assertEquals(kinds.values.map { it.name.lowercase() }, queries.map { it["statement_kind"].asString() })
         assertTrue(queries.all { it["cost_interpretation"].asString() == "row_search_and_preparation" })
-        assertTrue(HtmlReportRenderer().render(report).contains("ModifyTable"))
+        assertTrue(HtmlReportRenderer().render(report).contains("Фактическая запись, WAL, блокировки и триггеры в эту оценку не входят"))
         val unknown = mapper.readTree(writer.render(source))["queries"][0]
         assertTrue(unknown["statement_kind"].isNull)
         assertTrue(unknown["cost_interpretation"].isNull)

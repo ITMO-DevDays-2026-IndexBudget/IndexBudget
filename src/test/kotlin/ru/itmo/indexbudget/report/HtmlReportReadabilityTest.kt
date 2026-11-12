@@ -130,7 +130,7 @@ class HtmlReportReadabilityTest {
         val history = section(html, "provenance")
         assertTrue(history.contains("Историческое время выполнения"))
         assertTrue(history.contains("Нет данных"))
-        assertTrue(history.contains("в пересчёте на час"))
+        assertTrue(history.contains("пересчитаны на час"))
     }
 
     @Test

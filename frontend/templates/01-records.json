@@ -3,7 +3,7 @@
   "version": 1,
   "name": "Каталог записей",
   "tag": "Быстрый старт",
-  "description": "Одна таблица, два сценария. Как частоты меняют выбор индексов.",
+  "description": "Одна таблица и два профиля частот. Сравни рекомендации для обычной и пиковой нагрузки.",
   "accent": "mint",
   "schema_sql": "CREATE TABLE public.records (\n  id bigint PRIMARY KEY,\n  group_id integer NOT NULL,\n  value integer NOT NULL,\n  created_at timestamp NOT NULL,\n  payload text NOT NULL\n);",
   "seed_sql": "INSERT INTO public.records\nSELECT i, (i % 1000)::integer, ((i * 37) % 997)::integer,\n       timestamp '2026-01-01 00:00:00' + i * interval '1 second',\n       repeat(md5(i::text), 4)\nFROM generate_series(1, 200000) AS g(i);",

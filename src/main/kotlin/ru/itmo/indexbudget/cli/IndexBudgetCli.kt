@@ -179,30 +179,31 @@ class IndexBudgetCli(
               indexbudget table-stats --help
               indexbudget import-workload --help
 
-            Validates JSON v2, shared queries, frequency profiles and budgets.
+            Pass queries, frequency profiles and budgets in workload JSON v2.
             Optional index_methods: nonempty subset of ["btree", "brin", "hash"]; default ["btree"], shared limits.
             Optional manual_indexes: 1–5 structured B-tree/BRIN/hash definitions; method defaults to btree.
             BRIN: one range WHERE column, default parameters/opclass, no INCLUDE or sort options.
             Hash: one simple equality WHERE column, default parameters/opclass, no INCLUDE or sort options.
             Use a new or empty output directory for each run.
-            Runs SQL resolution, bounded shortlist, HypoPG, greedy + repair and HTML/JSON/SQL export.
-            Requires a prepared PostgreSQL database with HypoPG; analysis creates no physical indexes.
-            Progress on stderr contains stages and actual EXPLAIN/set/cache counters.
+            Resolves SQL names, prepares candidates, evaluates sets with HypoPG and searches with greedy + repair.
+            Saves report.html, report.json and indexes.sql.
+            Prepare PostgreSQL with HypoPG before running. Analysis does not create physical indexes or execute DML.
+            Stderr shows stages, EXPLAIN attempts, completed sets and cache hits.
             Candidate preparation starts with up to 16 candidates and a reserve of up to 48.
-            Budget rejections are refilled from that reserve, with at most 32 size calls,
+            Candidates rejected by the budget can be replaced from the reserve. At most 32 size calls are allowed,
             including failed calls, under the shared search/command deadline.
 
             Analysis modes (CLI overrides optional JSON analysis_mode; default: normal):
               fast:   command 30s, search 20s, EXPLAIN attempts 500, repair attempts 8.
               normal: command 90s, search 60s, EXPLAIN attempts 2000, repair attempts 28.
               deep:   command 300s, search 240s, EXPLAIN attempts 10000, repair attempts 256.
-            Every mode uses a 2s EXPLAIN timeout and a 5s connection timeout, capped by remaining time.
+            EXPLAIN timeout: min(2s, remaining time). Connection timeout: min(5s, remaining time).
             Search budget starts before baseline. Modes keep the same pool of up to 16 candidates
-            and greedy/fixed-S0 repair. Limits are budgets; exact runtime or better quality is not guaranteed.
+            and greedy/fixed-S0 repair. A larger budget may return the same set. Runtime can exceed the budget due to I/O or export.
             Candidate ranking (CLI overrides optional JSON candidate_ranking; default: frequency):
               frequency: normalized scenario frequencies (original strategy).
               baseline_cost: frequencies multiplied by saved baseline planner costs (experimental).
-            Ranking orders scenario queues only; scenario quotas, arity diversity and search criteria stay the same.
+            Ranking changes queue order only. Profile quotas, key-count diversity and search criteria stay the same.
             Final stderr summary includes all counters and stop reasons.
 
             Exit codes: 0 completed/help; 1 failed; 2 invalid input; 3 partial.

@@ -114,7 +114,7 @@ class JdbcAnalysisSessionIntegrationTest {
         val evaluatedBaseline = EvaluatedConfiguration(baseline, baselineMetrics)
         val report = DefaultReportBuilder().build(input, CandidateBatch(emptyList()),
             SearchResult.Completed(input.objective, baseline, evaluatedBaseline, evaluatedBaseline), context)
-        assertTrue(HtmlReportRenderer().render(report).contains("ModifyTable"))
+        assertTrue(HtmlReportRenderer().render(report).contains("Фактическая запись, WAL, блокировки и триггеры в эту оценку не входят"))
         assertTrue(ru.itmo.indexbudget.report.JsonReportWriter().render(report).contains("row_search_and_preparation"))
     }
 
@@ -203,7 +203,7 @@ class JdbcAnalysisSessionIntegrationTest {
         val json = mapper.readTree(Files.readString(output.resolve("report.json")))
         assertEquals(listOf("select", "update", "delete"), json["queries"].toList().map { it["statement_kind"].asString() })
         assertEquals("row_search_and_preparation", json["queries"][1]["cost_interpretation"].asString())
-        assertTrue(Files.readString(output.resolve("report.html")).contains("ModifyTable"))
+        assertTrue(Files.readString(output.resolve("report.html")).contains("Фактическая запись, WAL, блокировки и триггеры в эту оценку не входят"))
         for (file in listOf("report.json", "report.html", "indexes.sql"))
             assertTrue(Files.readString(output.resolve(file)).contains(context.runId))
         assertEquals(before, longScalar(admin, "SELECT sum(id::bigint + a + b + length(payload)) FROM $schema.records"))

@@ -18,15 +18,15 @@
     "peak": "Пик: чаще ищут значение и меняют payload; относительный вес 1."
   },
   "examples": [
-    {"query_id": "records_by_group", "name": "Одна группа", "purpose": "Критический поиск группы, защищённый guard 1.05.", "syntax_hint": "Равенство; явная проекция id/value допускает ограниченный INCLUDE."},
-    {"query_id": "records_by_value", "name": "Поиск значения в пик", "purpose": "Конкурирующий доступ по другому ключу с большим весом в пиковом профиле.", "syntax_hint": "Равенство; payload — проекция, не самостоятельный ключ."},
-    {"query_id": "time_window", "name": "Минута истории", "purpose": "Фиксированный короткий временной интервал внутри seed, без зависимости от текущего времени.", "syntax_hint": "BETWEEN и явные casts timestamp; обе границы включены."},
-    {"query_id": "group_list", "name": "Три группы", "purpose": "Небольшой список искомых групп.", "syntax_hint": "IN с литералами, без подзапроса; не превращается в AND."},
-    {"query_id": "alternative_filters", "name": "Две альтернативы", "purpose": "Показать ветви условий и происхождение кандидатов.", "syntax_hint": "AND/OR и скобки; разные стороны OR не означают совместный фильтр."},
+    {"query_id": "records_by_group", "name": "Одна группа", "purpose": "Поиск записей одной группы. Лимит 1.05 допускает рост planner cost не более чем на 5%.", "syntax_hint": "Фильтр по равенству. Явный список id/value позволяет рассмотреть INCLUDE."},
+    {"query_id": "records_by_value", "name": "Поиск значения в пик", "purpose": "Поиск по другому ключу, который чаще нужен в пиковом профиле.", "syntax_hint": "Фильтр по равенству. payload возвращается в результате, но сам по себе не становится ключом индекса."},
+    {"query_id": "time_window", "name": "Минута истории", "purpose": "Записи за фиксированную минуту из демо-данных. Даты не зависят от времени запуска.", "syntax_hint": "BETWEEN и явные casts timestamp; обе границы включены."},
+    {"query_id": "group_list", "name": "Три группы", "purpose": "Небольшой список искомых групп.", "syntax_hint": "IN с тремя значениями выбирает любую из групп. Подзапроса нет."},
+    {"query_id": "alternative_filters", "name": "Две альтернативы", "purpose": "Посмотри, какие индексы предложены для разных ветвей условий.", "syntax_hint": "AND/OR и скобки; разные стороны OR не означают совместный фильтр."},
     {"query_id": "category_join", "name": "Категория группы", "purpose": "Связать записи с названием группы, отфильтровать категорию и показать свежие строки.", "syntax_hint": "INNER JOIN по равенству колонок, WHERE, ORDER BY DESC и LIMIT."},
-    {"query_id": "all_records", "name": "Массовый фильтр", "purpose": "Контроль отсутствия пользы: условие охватывает все 200000 строк seed, SELECT * требует полные строки.", "syntax_hint": "Диапазон; звёздочка отключает INCLUDE. Отрицательный результат сохраняется, planner settings не меняются."},
-    {"query_id": "update_payload", "name": "Изменить payload", "purpose": "Оценить поиск строк для однотабличного UPDATE, не исполняя запись.", "syntax_hint": "Обязательный WHERE и литеральный SET; payload не порождает INCLUDE."},
-    {"query_id": "delete_recent", "name": "Удалить две ранние записи", "purpose": "Оценить поиск строк для DELETE на фиксированном небольшом подмножестве seed.", "syntax_hint": "Одна таблица, обязательный WHERE, timestamp cast и IN; без USING/RETURNING."}
+    {"query_id": "all_records", "name": "Массовый фильтр", "purpose": "Фильтр охватывает все 200000 строк датасета, а SELECT * требует полные строки. Такой запрос помогает увидеть случай без пользы от новых индексов.", "syntax_hint": "Диапазонный фильтр. SELECT * отключает генерацию INCLUDE. Результат без улучшения тоже сохраняется; настройки планировщика не меняются."},
+    {"query_id": "update_payload", "name": "Изменить payload", "purpose": "Оцени план поиска строк для UPDATE одной таблицы. Данные не меняются.", "syntax_hint": "Обязательный WHERE и SET с литералом. Колонка payload из SET не используется для генерации INCLUDE."},
+    {"query_id": "delete_recent", "name": "Удалить две ранние записи", "purpose": "Оцени план удаления двух строк из демо-данных. DELETE не выполняется.", "syntax_hint": "Одна таблица, обязательный WHERE, timestamp cast и IN; без USING/RETURNING."}
   ],
   "unsupported_examples": [
     {"id": "update_expression", "sql": "UPDATE public.records SET value = value + 1 WHERE id = 1", "error_code": "UNSUPPORTED_SQL", "reason": "SET допускает только скалярные литералы/NULL/casts, не выражение."},

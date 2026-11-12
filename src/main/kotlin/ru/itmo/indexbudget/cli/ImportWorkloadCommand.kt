@@ -156,15 +156,16 @@ class ImportWorkloadCommand(
     companion object {
         val HELP = """
             indexbudget import-workload --config <import-config.json> --output-dir <new directory>
-            Reads 1–3 saved snapshot windows and explicit literal examples keyed by full statistics identity.
+            Builds a workload from 1–3 saved observation windows and SQL examples with explicit literals.
+            Match examples by the full source/database/user/query/toplevel key.
             Config v1: kind pg_stat_statements_import_config, windows [{id,weight,before,after}], examples path,
               constraints, optional objective/analysis_mode/candidate_ranking and exactly one write source:
               manual table_write_rates or table_write_window {before,after} from a compatible pair of
               pg_table_statistics_snapshot v1 files (the #102 collector output) or manual
               pg_stat_user_tables_snapshot v1 exports. Observed rates are changed rows per hour
               (delta * 3600 / delta_seconds), never SQL calls, never mixed with pg_stat_statements.
-              An incomplete observed window is recorded honestly and never silently disables
-              an enabled write budget; HOT updates stay a historical diagnostic.
+              Incomplete observations are marked. They do not disable
+              an enabled write budget. HOT updates are kept for historical diagnostics.
             Examples v1: kind pg_stat_statements_examples, examples [{key,sql,search_path}].
             Paths are relative to the config. search_path is explicit, starts with pg_catalog, no implicit role/temp schemas.
             AST matching permits only literal substitutions for parameters, not different queries.
@@ -172,7 +173,7 @@ class ImportWorkloadCommand(
             Unknown frequencies are never zero-filled. Nested statements are excluded to avoid double counting.
             Saves validated workload v2 and import-manifest v1; analyze remains a separate command.
             Connection INDEXBUDGET_DATABASE_URL reads catalog only; no HypoPG, EXPLAIN, workload execution or DDL.
-            Source UUID is an operator assertion, database OID must match. Historical time is not predicted latency.
+            Assign the source UUID yourself and verify the database OID. Historical time does not predict latency with new indexes.
         """.trimIndent()
     }
 }

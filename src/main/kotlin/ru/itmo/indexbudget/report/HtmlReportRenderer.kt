@@ -102,7 +102,7 @@ class HtmlReportRenderer : ReportRenderer {
     private fun StringBuilder.manualComparison(report: AnalysisReport, includeCandidateCatalog: Boolean = true) {
         val manual = report.manualComparison ?: return
         append("<section id=\"manual-comparison\"><h2>Ручной набор индексов</h2>")
-        append("<p>Отдельная оценка вне автоматического shortlist. Best robust и best mean относятся к обычному поиску.</p>")
+        append("<p>Ручной набор оценён отдельно от автоматического поиска. Он не меняет best_robust и best_mean.</p>")
         append("<p>Статус: ").append(h(manual.status.wireValue)).append(". Допустимость: ")
         text(if (manual.status != ManualComparisonStatus.COMPLETED) "Не установлена" else if (manual.admissible) "Допустим" else "Нарушает ограничения")
         append(".</p>")
@@ -156,8 +156,8 @@ class HtmlReportRenderer : ReportRenderer {
         }
         append("<div class=\"recommendation\"><h2>Предлагаемые индексы</h2>")
         when {
-            selected == null -> append("<p>Рекомендация отсутствует: пригодный результат не сохранён.</p>")
-            selected.evaluation.candidateIds.isEmpty() -> append("<p>Выбран пустой набор. Новые индексы не предлагаются.</p>")
+            selected == null -> append("<p>Пригодная рекомендация не сохранена.</p>")
+            selected.evaluation.candidateIds.isEmpty() -> append("<p>Выбран пустой набор: оставь существующие индексы.</p>")
             else -> {
                 append("<ul class=\"recommended-indexes\">")
                 selected.evaluation.candidateIds.forEachIndexed { index, id ->
@@ -196,7 +196,7 @@ class HtmlReportRenderer : ReportRenderer {
         text("SQL: ${queryCount(report) ?: "нет данных"} · профилей частот: ${report.input?.profiles?.size ?: "нет данных"}. ")
         val provenance = report.workloadProvenance
         if (provenance == null) {
-            append("Для SQL и частот вызовов источник, период и охват неизвестны; репрезентативность не подтверждена.</p>")
+            append("Источник, период и охват SQL-нагрузки не указаны. Неизвестно, насколько она отражает рабочую БД.</p>")
         } else {
             append("Источник — pg_stat_statements, разница снимков.</p><ul class=\"observation-windows\">")
             provenance.windows.forEach { window ->
@@ -205,11 +205,11 @@ class HtmlReportRenderer : ReportRenderer {
                 append("</span> · ").append(if (window.complete) "полное наблюдение" else "<strong class=\"warning-text\">неполное наблюдение</strong>")
                 append(" · выбрано вызовов: ").append(h(number(window.coverage.selectedCalls))).append("</li>")
             }
-            append("</ul><p class=\"muted\">Репрезентативность нагрузки требует отдельной проверки. ")
+            append("</ul><p class=\"muted\">Проверь, отражает ли это окно обычную нагрузку БД. ")
             append("<a href=\"#provenance\">Интервалы, охват и историческое время</a></p>")
         }
         if (report.statementKinds.values.any { it != StatementKind.SELECT }) {
-            append("<p class=\"notice\">В нагрузке есть UPDATE/DELETE: снижение planner cost относится к поиску и подготовке строк. Фактическая модификация таблицы не включена; полного ускорения DML эта оценка не предсказывает.</p>")
+            append("<p class=\"notice\">Для UPDATE/DELETE planner cost оценивает поиск и подготовку строк. Фактическая модификация таблицы не включена. Проверяй время и цену записи отдельно.</p>")
         }
         append("<p>Источник записи: ").append(h(when {
             report.input?.tableWriteRatesOrigin != null -> if (report.input.tableWriteRatesOrigin.complete) "наблюдаемый · полный" else "наблюдаемый · неполный"
@@ -228,7 +228,7 @@ class HtmlReportRenderer : ReportRenderer {
 
     private fun StringBuilder.comparison(report: AnalysisReport) {
         section("comparison", "Устойчивость или средний эффект", "Два критерия, один исследованный пул")
-        append("<p>Лучшие найденные решения из одного общего пула полностью оценённых допустимых наборов. Поиском управлял <strong>")
+        append("<p>Оба результата выбраны из одного пула полностью оценённых допустимых наборов. Критерий поиска: <strong>")
         text(report.result.selectedObjective.name.lowercase(Locale.ROOT))
         append("</strong>. Область сравнения: <code>").append(h(report.comparisonScope.name.lowercase(Locale.ROOT))).append("</code>.</p>")
         val robust = report.result.bestRobust
@@ -251,7 +251,7 @@ class HtmlReportRenderer : ReportRenderer {
         }
         append("</div><div class=\"price\"><div><strong>Цена устойчивости</strong><p>Дополнительная средняя оценка планировщика при выборе robust вместо mean</p></div><strong class=\"price-value\">")
         text(number(report.priceOfRobustness))
-        append("</strong></div><p class=\"muted\">Это сравнение найденных решений, а не два независимых поиска. Гарантии глобального оптимума нет.</p></section>")
+        append("</strong></div><p class=\"muted\">Один поиск сохраняет лучшие robust- и mean-наборы среди проверенных. Глобальный оптимум не гарантируется.</p></section>")
     }
 
     private fun StringBuilder.configuration(key: String, title: String, description: String, value: EvaluatedConfiguration?, selected: Boolean) {
@@ -301,7 +301,7 @@ class HtmlReportRenderer : ReportRenderer {
             append("</tr>")
         }
         append("</tbody></table></div>")
-        if (series.isEmpty()) append("<p>Профили отсутствуют в сохранённой модели.</p>")
+        if (series.isEmpty()) append("<p>Профили не сохранены.</p>")
         append("<details><summary>Точные стоимости и веса</summary>")
         profileMetrics(report)
         append("</details></section>")
@@ -316,7 +316,7 @@ class HtmlReportRenderer : ReportRenderer {
                     number(effect.gain), percent(effect.gainPercent, effect.baselineCost))
             }
         }
-        if (report.profileComparisons.isEmpty()) append("<p>Профили отсутствуют в сохранённой модели.</p>")
+        if (report.profileComparisons.isEmpty()) append("<p>Профили не сохранены.</p>")
     }
 
     private fun shortDefinition(candidate: IndexCandidate, report: AnalysisReport): String =
@@ -399,18 +399,18 @@ class HtmlReportRenderer : ReportRenderer {
                 row(*(listOf("SQL ${index + 1}") + profiles.map { number(it.callsPerHour[query.id]) }).toTypedArray())
             }
         }
-        append("<p class=\"muted\">Частоты в пересчёте на час; это не число реально наблюдавшихся вызовов.</p>")
+        append("<p class=\"muted\">Частоты пересчитаны на час. Фактическое число наблюдавшихся вызовов может отличаться.</p>")
         writeProfile(report)
         val provenance = report.workloadProvenance
         if (provenance == null) {
-            append("<p>Происхождение SQL и частот вызовов не задано. Их источник и охват наблюдений неизвестны.</p></section>")
+            append("<p>Источник SQL и частот не указан. Период и охват наблюдений неизвестны.</p></section>")
             return
         }
         append("<dl class=\"values\">")
         entry("Источник", "pg_stat_statements")
         entry("Идентификатор источника", provenance.sourceId.toString())
         entry("Правило отбора", provenance.selectionRule)
-        append("</dl><p>Охват относится к доступным полным записям окна, а не ко всему трафику сервера. Неизвестные значения не заменяются нулём.</p>")
+        append("</dl><p>Охват рассчитан по доступным полным записям окна. Он может не включать весь трафик сервера. Неизвестные значения показаны отдельно от нулевых.</p>")
         table(listOf("Профиль", "Начало (UTC)", "Конец (UTC)", "Длительность", "Полнота наблюдения", "Вызовы: выбрано / доступно")) {
             provenance.windows.forEach { window ->
                 row(window.profileId, window.startedAt.toString(), window.finishedAt.toString(), windowDuration(window),
@@ -418,13 +418,13 @@ class HtmlReportRenderer : ReportRenderer {
                     "${number(window.coverage.selectedCalls)} / ${number(window.coverage.availableCalls)}")
             }
         }
-        append("<details><summary>Историческое время и примеры SQL</summary><h3>Историческое время выполнения</h3><p>Измерено до рекомендации, в миллисекундах. Эти данные не являются прогнозом времени с новыми индексами и не пересчитываются из planner cost.</p>")
+        append("<details><summary>Историческое время и примеры SQL</summary><h3>Историческое время выполнения</h3><p>Это время до подбора индексов, в миллисекундах. Оно не предсказывает время с новым набором и не рассчитывается из planner cost.</p>")
         table(listOf("Профиль", "Выбранные записи, мс", "Доступные полные записи, мс")) {
             provenance.windows.forEach { window ->
                 row(window.profileId, number(window.coverage.selectedExecTimeMillis), number(window.coverage.availableExecTimeMillis))
             }
         }
-        append("<h3>Примеры SQL</h3><p>Пример с литералами представляет запись статистики; его план не характеризует все возможные значения параметров.</p>")
+        append("<h3>Примеры SQL</h3><p>План построен для конкретных литералов из примера. При других значениях параметров он может отличаться.</p>")
         table(listOf("SQL", "Происхождение примера")) {
             provenance.queryExamples.forEach { example ->
                 row(queryLabel(example.queryId, report), when (example.source) {
@@ -478,20 +478,20 @@ class HtmlReportRenderer : ReportRenderer {
     private fun StringBuilder.indexDetails(report: AnalysisReport) {
         val selected = report.result.selected
         when {
-            selected == null -> append("<p>Рекомендация отсутствует: пригодный результат не сохранён.</p>")
-            selected.evaluation.candidateIds.isEmpty() -> append("<p>Выбран пустой набор. Новые индексы не предлагаются.</p>")
+            selected == null -> append("<p>Пригодная рекомендация не сохранена.</p>")
+            selected.evaluation.candidateIds.isEmpty() -> append("<p>Выбран пустой набор: оставь существующие индексы.</p>")
             else -> selected.evaluation.candidateIds.forEachIndexed { ordinal, id ->
                 append("<article class=\"index-card\" data-selected-index=\"").append(h(id)).append("\">")
                 val candidate = report.candidates.candidates.firstOrNull { it.id == id }
                 if (candidate == null) {
-                    append("<p>Описание индекса отсутствует в модели.</p>")
+                    append("<p>Описание индекса не сохранено.</p>")
                     pre(id)
                 } else {
                     append("<h3><code>").append(h(shortDefinition(candidate, report))).append("</code></h3>")
                     append("<p class=\"muted\">Оценка: ").append(h(readableSize(candidate.estimatedBytes)))
                         .append(" · с запасом: ").append(h(readableSize(candidate.budgetedBytes))).append("</p>")
                     append("<details><summary>DDL, определение и происхождение</summary>")
-                    copyable(candidate.ddl ?: "DDL отсутствует в модели.", "copy-ddl-$ordinal", "Скопировать DDL")
+                    copyable(candidate.ddl ?: "DDL не сохранён.", "copy-ddl-$ordinal", "Скопировать DDL")
                     pre(id)
                     append("<p>").append(h(definition(candidate))).append("</p><dl class=\"values\">")
                     entry("Оценка", storageSize(candidate.estimatedBytes))
@@ -500,7 +500,7 @@ class HtmlReportRenderer : ReportRenderer {
                     entry("Источники SQL", candidate.sourceQueryIds.sorted().joinToString())
                     if (candidate.sourceBranches.isNotEmpty()) entry("Ветви условий", candidate.sourceBranches.sortedWith(compareBy({ it.queryId }, { it.conditionPath })).joinToString { "${it.queryId}: ${it.conditionPath}" })
                     entry("Происхождение", candidate.generationReasons.sortedBy { it.name }.joinToString { it.name })
-                    append("</dl><p>Источники SQL объясняют происхождение кандидата, а не измеренную индивидуальную пользу индекса.</p>")
+                    append("</dl><p>Эти SQL использованы для генерации кандидата. Польза индекса отдельно от набора не измерена.</p>")
                     if (candidate.definition.includedColumns.isNotEmpty()) append("<p>INCLUDE позволяет рассмотреть index-only scan; обращения к таблице зависят от visibility map и не исключены.</p>")
                     append("</details>")
                 }
@@ -516,9 +516,9 @@ class HtmlReportRenderer : ReportRenderer {
     private fun StringBuilder.queries(report: AnalysisReport, includeDetails: Boolean = false) {
         section("queries", "Каким запросам поможет выбранный набор", "Оценка одного выполнения запроса, planner cost")
         if (report.statementKinds.values.any { it != StatementKind.SELECT }) {
-            append("<p class=\"notice\">Для UPDATE/DELETE cost описывает поиск и подготовку строк. ModifyTable не оценивает фактическую запись, WAL, блокировки или триггеры; это не прогноз времени изменения данных. Частота вызовов не заменяет write rates таблицы.</p>")
+            append("<p class=\"notice\">Для UPDATE/DELETE cost оценивает поиск и подготовку строк. Фактическая запись, WAL, блокировки и триггеры в эту оценку не входят. Интенсивность изменения строк задаётся отдельно от частоты вызовов.</p>")
         }
-        append("<p>До — существующие индексы; с набором — они же и все предложенные. Меньшая оценка лучше.</p>")
+        append("<p>«До» — база с существующими индексами. «С набором» — та же база с добавленными гипотетическими индексами. Меньшая оценка лучше.</p>")
         val baseline = report.result.baseline
         val selected = report.result.selected?.evaluation
         val effects = report.queryEffects.associateBy { it.id }
@@ -574,7 +574,7 @@ class HtmlReportRenderer : ReportRenderer {
             append("<details class=\"query-detail\" id=\"query-").append(index).append("\"><summary>SQL ").append(index + 1).append(" · ").append(h(report.statementKinds[id]?.name ?: "Тип не сохранён")).append(" · текст, точные значения и планы</summary>")
             if (report.statementKinds[id]?.let { it != StatementKind.SELECT } == true) append("<p>Cost оценивает поиск и подготовку строк. Фактическая модификация таблицы и сопровождение индексов не включены.</p>")
             append("<h3>Исходный SQL</h3>")
-            copyable(report.input?.queries?.firstOrNull { it.id == id }?.sql ?: "Исходный SQL отсутствует в модели.", "copy-sql-$index", "Скопировать SQL")
+            copyable(report.input?.queries?.firstOrNull { it.id == id }?.sql ?: "Исходный SQL не сохранён.", "copy-sql-$index", "Скопировать SQL")
             append("<h3>Полный ID</h3>")
             pre(id)
             append("<dl class=\"values\">")
@@ -607,7 +607,7 @@ class HtmlReportRenderer : ReportRenderer {
         if (guards.isEmpty()) return
         append("<h3>Ограничения planner cost для критических SQL</h3>")
         append("<p class=\"muted\">Предел — максимальное отношение final/baseline planner cost; равенство порогу допустимо. ")
-        append("Это ограничение стоимости планировщика, а не latency и не SLA. Наборы с нарушением отклоняются целиком ")
+        append("Лимит применяется к planner cost, не к времени или SLA. Наборы с нарушением отклоняются целиком ")
         append("и не обновляют лучшие результаты.</p>")
         val outcomes = report.costGuards.associateBy { it.queryId }
         table(listOf("SQL", "Предел отношения", "Baseline cost", "Final cost", "Наблюдаемое отношение", "Статус")) {
@@ -639,7 +639,7 @@ class HtmlReportRenderer : ReportRenderer {
     private fun StringBuilder.search(report: AnalysisReport, includeCandidateCatalog: Boolean = true) {
         section("search", "Границы поиска", "Что было исследовано и где сработали ограничения")
         append("<p>Режим анализа: ").append(h(modeName(report.analysisMode))).append(".</p>")
-        append("<p>Рейтинг shortlist: ").append(h(rankingName(report.candidateRanking)))
+        append("<p>Порядок кандидатов: ").append(h(rankingName(report.candidateRanking)))
             .append(". Рейтинг задаёт порядок сценарных очередей; критерии поиска и бюджеты сохраняются.</p>")
         val search = report.result.diagnostics
         val candidates = report.candidates.diagnostics
@@ -656,10 +656,10 @@ class HtmlReportRenderer : ReportRenderer {
         append("<div class=\"caps\">")
         cap("Колонки до генерации пар", "${candidates.columnLimitPerQueryTable} на (SQL, таблица)")
         cap("Локальные кандидаты", "${candidates.localCandidateLimit} на (SQL, таблица)")
-        cap("Общий shortlist", "${candidates.fixedPoolSelection?.admissibleCandidates ?: candidates.preparation?.finalShortlistedCandidates ?: candidates.shortlistedCandidates} / ${candidates.globalCandidateLimit}")
+        cap("Итоговый пул кандидатов", "${candidates.fixedPoolSelection?.admissibleCandidates ?: candidates.preparation?.finalShortlistedCandidates ?: candidates.shortlistedCandidates} / ${candidates.globalCandidateLimit}")
         append("</div>")
         append("<dl class=\"values\">")
-        entry("Исходный shortlist", number(candidates.initialShortlistedCandidates))
+        entry("Исходный список кандидатов", number(candidates.initialShortlistedCandidates))
         entry("Кандидаты в резерве", "${number(candidates.reserveCandidates)} / ${number(candidates.reserveCandidateLimit)}")
         append("</dl>")
         if (candidates.preparationScope == CandidatePreparationScope.COMMON_POOL) {
@@ -681,10 +681,10 @@ class HtmlReportRenderer : ReportRenderer {
                 row("Бюджетные отказы", number(preparation.budgetRejectedCandidates), "Не задан")
                 row("Ошибки отдельных кандидатов", number(preparation.candidateErrors), "Не задан")
                 row("Пополнено из резерва", number(preparation.refilledCandidates), "Не задан")
-                row("Итоговый shortlist", number(preparation.finalShortlistedCandidates), number(candidates.globalCandidateLimit))
+                row("Кандидаты после подготовки", number(preparation.finalShortlistedCandidates), number(candidates.globalCandidateLimit))
             }
             val reason = when (preparation.stopReason) {
-                CandidatePreparationStopReason.SHORTLIST_FULL -> "Shortlist заполнен"
+                CandidatePreparationStopReason.SHORTLIST_FULL -> "Пул кандидатов заполнен"
                 CandidatePreparationStopReason.RESERVE_EXHAUSTED -> "Резерв исчерпан"
                 CandidatePreparationStopReason.SIZE_LIMIT -> "Достигнут лимит оценок размера"
                 CandidatePreparationStopReason.DEADLINE_EXCEEDED -> "Исчерпан бюджет времени"
@@ -716,7 +716,7 @@ class HtmlReportRenderer : ReportRenderer {
         entry("Бюджет поиска с baseline, мс", number(limits.searchTimeout.toMillis()))
         entry("Один EXPLAIN, не более, мс", number(limits.explainTimeout.toMillis()))
         entry("Подключение, не более, мс", number(limits.connectTimeout.toMillis()))
-        append("</dl><p class=\"muted\">Ограничения времени учитывают оставшийся бюджет; задержки драйвера, сети и экспорта могут увеличить время возврата. Отсечение кандидатов не означает незавершённый поиск. Непроверенные варианты не оценены по полезности.</p>")
+        append("</dl><p class=\"muted\">Таймауты ограничены остатком бюджета. Драйвер, сеть и экспорт могут задержать завершение. Отсечение кандидатов само по себе не делает результат частичным. Польза непроверенных вариантов неизвестна.</p>")
         append("<details><summary>Причины решений по кандидатам</summary>")
         // Pipeline diagnostics already include generation decisions; standalone reports may not.
         val decisions = (candidates.decisions + search.candidateDecisions).distinct()
@@ -786,7 +786,7 @@ class HtmlReportRenderer : ReportRenderer {
 
     private fun StringBuilder.resourceModel() {
         append("<details id=\"resource-model\"><summary>Как оцениваются место и запись</summary><p>Место: для каждого индекса учитывается округлённая вверх оценка HypoPG с заданным запасом, затем размеры складываются. KiB = 1 024 байта; MiB = 1 048 576 байт.</p>")
-        append("<p>Запись — условная модель, не число операций и не измеренное замедление. Модель одного индекса: <code>(INSERT + UPDATE + DELETE строк/ч) × (число ключей + число INCLUDE-колонок)</code>. Расходы индексов суммируются.</p>")
+        append("<p>Затраты записи оцениваются в условных единицах. Они не равны числу операций или измеренному замедлению. Для одного индекса: <code>(INSERT + UPDATE + DELETE строк/ч) × (число ключей + число INCLUDE-колонок)</code>. Расходы индексов суммируются.</p>")
         append("<p>Модель не измеряет WAL, I/O, HOT, ширину ключей, разрастание индексов или отложенную очистку после DELETE.</p></details>")
     }
 
@@ -804,7 +804,7 @@ class HtmlReportRenderer : ReportRenderer {
         entry("Статус", report.result.status.name.lowercase(Locale.ROOT))
         entry("Длительность анализа, мс", number(report.durationMillis))
         entry("Режим анализа", modeName(report.analysisMode))
-        entry("Рейтинг shortlist", rankingName(report.candidateRanking))
+        entry("Порядок кандидатов", rankingName(report.candidateRanking))
         entry("Методы индексов", report.indexMethods.sortedBy { it.ordinal }.joinToString { it.wireName })
         entry("Причины остановки", report.result.diagnostics.stopReasons.joinToString { it.name }.ifEmpty { "Нет данных" })
         entry("Завершённые этапы", report.result.diagnostics.completedPhases.joinToString(" → ") { it.name.lowercase(Locale.ROOT) }.ifEmpty { "Нет завершённых этапов" })
@@ -957,7 +957,7 @@ class HtmlReportRenderer : ReportRenderer {
     }
 
     private fun candidateReason(reason: CandidateReason): String = when (reason) {
-        CandidateReason.EXACT_EXISTING_DUPLICATE -> "Точный реальный дубль"
+        CandidateReason.EXACT_EXISTING_DUPLICATE -> "Совпадает с существующим индексом"
         CandidateReason.NO_BRIN_OPERATOR_CLASS -> "Нет подходящего BRIN opclass"
         CandidateReason.NO_HASH_OPERATOR_CLASS -> "Нет подходящего hash opclass"
         CandidateReason.METHOD_VARIANT_LIMIT -> "Общий предел вариантов методов"
@@ -973,7 +973,7 @@ class HtmlReportRenderer : ReportRenderer {
         CandidateReason.MAX_INDEXES -> "Достигнут лимит индексов"
         CandidateReason.EVALUATION_FAILED -> "Ошибка оценки набора"
         CandidateReason.HYPOTHETICAL_INDEX_ERROR -> "Ошибка гипотезы"
-        CandidateReason.NO_MARGINAL_IMPROVEMENT -> "Нет предельной пользы на шаге"
+        CandidateReason.NO_MARGINAL_IMPROVEMENT -> "Добавление индекса не улучшило оценку на этом шаге"
         CandidateReason.NOT_SELECTED -> "Не выбран поиском"
         CandidateReason.NOT_EVALUATED_DUE_TO_LIMIT -> "Не проверен из-за лимита"
     }

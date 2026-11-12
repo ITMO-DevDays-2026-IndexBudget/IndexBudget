@@ -31,7 +31,7 @@ class TableStatisticsCommand(
 
     private fun parse(args: Array<String>): CaptureRequest {
         val mode = args.getOrNull(1)
-        if (mode !in setOf("snapshot", "pair")) invalid("Expected table-stats snapshot or table-stats pair; see table-stats --help.")
+        if (mode !in setOf("snapshot", "pair")) invalid("Choose table-stats snapshot or table-stats pair. Run table-stats --help for options.")
         val values = linkedMapOf<String, String>()
         var i = 2
         while (i < args.size) {
@@ -83,7 +83,7 @@ class TableStatisticsCommand(
               --timeout-seconds <1..300>         default 30, independent of index search
             Reads ordinary table counters from pg_stat_user_tables in the current PostgreSQL 16 database.
             Connection: INDEXBUDGET_DATABASE_URL. Source UUID is operator-assigned, never a DSN.
-            Each collection closes its connection before the observation interval.
+            The connection closes after each snapshot. No connection is held while waiting.
             Exit: 0 complete; 3 partial; 2 invalid input; 1 failed. No reset, setup or DDL is executed.
         """.trimIndent()
     }

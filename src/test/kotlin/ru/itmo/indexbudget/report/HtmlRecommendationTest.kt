@@ -43,7 +43,7 @@ class HtmlRecommendationTest {
         assertTrue(queries.indexOf("href=\"#query-1\"") < queries.indexOf("href=\"#query-0\""))
         assertTrue(queries.contains("href=\"#query-1\">SQL 2"))
         assertTrue(queries.contains("id=\"query-1\""))
-        assertTrue(section(html, "indexes").contains("не измеренную индивидуальную пользу"))
+        assertTrue(section(html, "indexes").contains("Польза индекса отдельно от набора не измерена"))
     }
 
     @Test

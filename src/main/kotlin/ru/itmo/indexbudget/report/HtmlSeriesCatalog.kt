@@ -68,7 +68,7 @@ internal class HtmlSeriesCatalog(reports: Map<Int, AnalysisReport>, summary: Jso
                 append("<span class=\"catalog-anchor\" id=\"variant-${occurrence.ordinal}-query-${occurrence.position}\"></span>")
             }
             if (kind in setOf("UPDATE", "DELETE")) append("<p>Cost оценивает поиск и подготовку строк. Фактическая модификация таблицы и сопровождение индексов не включены.</p>")
-            if (query.sql == null) append("<p>Исходный SQL отсутствует в модели.</p>")
+            if (query.sql == null) append("<p>Исходный SQL не сохранён.</p>")
             else copyable(query.sql, "series-sql-$index", "Скопировать SQL", "data-query-sql")
             if (occurrences.isEmpty()) append("<p>SQL сохранён в исходных данных серии. Оценки выполнения отсутствуют.</p>")
             else table(listOf("Вариант", "До", "С набором", "Снижение, %", "Исходный план", "План с набором"),
@@ -168,7 +168,7 @@ internal class HtmlSeriesCatalog(reports: Map<Int, AnalysisReport>, summary: Jso
             val manual = occurrences.filter { it.manual }.map { it.ordinal }.distinct()
             if (manual.isNotEmpty()) append("<p>Есть в ручном наборе: ")
                 .append(h(manual.joinToString { "вариант $it" })).append(".</p>")
-            append("<p class=\"muted\">SQL-источники объясняют происхождение кандидата, а не индивидуальную пользу индекса.</p>")
+            append("<p class=\"muted\">Эти SQL использованы для генерации кандидата. Польза индекса отдельно от набора не измерена.</p>")
             if (key.definition.includedColumns.isNotEmpty()) append("<p class=\"muted\">INCLUDE не гарантирует index-only scan: обращения к таблице зависят от visibility map.</p>")
             append("</details></article>")
         }
@@ -200,7 +200,7 @@ internal class HtmlSeriesCatalog(reports: Map<Int, AnalysisReport>, summary: Jso
     }
 
     private fun StringBuilder.ddl(value: String?, index: Int, rendered: MutableMap<String, String>) {
-        if (value == null) append("<p>DDL отсутствует в модели.</p>")
+        if (value == null) append("<p>DDL не сохранён.</p>")
         else {
             val existing = rendered[value]
             if (existing != null) append("<p><a href=\"#").append(existing).append("\">Общее определение DDL</a></p>")

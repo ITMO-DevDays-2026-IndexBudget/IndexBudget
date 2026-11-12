@@ -155,7 +155,7 @@ class ReportSummaryTest {
         assertFalse(html.contains("<script>alert("))
         assertTrue(html.contains("&lt;script&gt;"))
         assertTrue(html.contains("Историческое время выполнения"))
-        assertTrue(html.contains("не являются прогнозом времени с новыми индексами"))
+        assertTrue(html.contains("не предсказывает время с новым набором"))
         assertTrue(html.contains("Репрезентативные литералы пользователя"))
         assertTrue(html.contains(metadata.sourceId.toString()))
     }

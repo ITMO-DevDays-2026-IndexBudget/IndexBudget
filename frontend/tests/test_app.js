@@ -482,3 +482,30 @@ test('добавление примера после очистки observed н�
   assert.equal(ui.run('materialize().table_write_rates_origin'), undefined);
   assert.throws(() => ui.run('requestSnapshot()'), /Профиль записи не задан/);
 });
+
+test('DROP easter egg recognizes commands without matching SQL text or comments', () => {
+  const ui = app();
+  for (const sql of ['DROP TABLE records', ' drop\n table IF EXISTS public.records;', 'DROP DATABASE indexbudget', 'DROP SCHEMA public CASCADE', 'DROP TABLESPACE t', 'DROP',
+    '-- note\nDROP /* note */ TABLE "records"', 'DROP -- note\rTABLE t', '/* outer /* inner */ end */ DROP TABLE t']) {
+    ui.set('sql', sql);
+    assert.equal(ui.run('startsWithDrop(sql)'), true, sql);
+  }
+  for (const sql of ["SELECT id FROM records WHERE payload = 'DROP TABLE t'", '-- DROP TABLE t\nSELECT id FROM records',
+    '/* DROP TABLE t */ SELECT id FROM records', '/* unfinished DROP TABLE t',
+    'DROP_TABLE t', 'DROPLET', '"DROP" TABLE t', '', null]) {
+    ui.set('sql', sql);
+    assert.equal(ui.run('startsWithDrop(sql)'), false, String(sql));
+  }
+});
+
+test('DROP launch saves the draft and redirects without submitting a job', async () => {
+  const ui = app();
+  const redirects = [];
+  ui.set('window', {location: {assign: url => redirects.push(url)}});
+  ui.set('fetch', () => { throw new Error('DROP must not submit an analysis'); });
+  ui.run('state.workload.queries[0].sql = "DROP DATABASE indexbudget"');
+  await ui.run('launch("analysis")');
+  assert.deepEqual(redirects, ['/drop-table.jpg']);
+  assert.ok(ui.stored.size > 0, 'Draft must survive navigation');
+  assert.equal(ui.run('busy'), false);
+});

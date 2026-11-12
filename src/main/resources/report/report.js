@@ -41,7 +41,7 @@
         range.selectNodeContents(target);
         selection.removeAllRanges();
         selection.addRange(range);
-        status.textContent = 'Текст выделен. Нажмите Ctrl+C или ⌘C.';
+        status.textContent = 'Текст выделен. Нажми Ctrl+C или ⌘C.';
       }
     });
   });

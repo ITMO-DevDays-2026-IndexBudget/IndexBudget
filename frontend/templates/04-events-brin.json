@@ -3,7 +3,7 @@
   "version": 1,
   "name": "Журнал событий",
   "tag": "BRIN · 64 KiB",
-  "description": "Миллион упорядоченных событий. При бюджете 64 KiB помещается BRIN; увеличьте бюджет до 64 MiB и сравните с B-tree.",
+  "description": "Миллион упорядоченных событий. Сравни BRIN и B-tree при бюджетах 64 KiB и 64 MiB.",
   "accent": "mint",
   "schema_sql": "CREATE TABLE public.events (\n  sequence bigint NOT NULL,\n  payload text NOT NULL\n);",
   "seed_sql": "INSERT INTO public.events\nSELECT i, repeat('x', 160)\nFROM generate_series(1, 1000000) AS g(i)\nORDER BY i;",

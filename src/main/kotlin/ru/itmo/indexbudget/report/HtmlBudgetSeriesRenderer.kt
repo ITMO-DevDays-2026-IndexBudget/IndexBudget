@@ -60,12 +60,12 @@ class HtmlBudgetSeriesRenderer {
         }
         append(WriteProfileReport.render(summary.path("settings").path("table_write_rates"), summary.path("settings").path("table_write_rates_origin")))
         if (summary.path("status").stringValue() == "running") notice("Серия ещё выполняется. Не все точки рассчитаны.")
-        if (points.any { usable(it) && !it.path("conditions_match").isTrue }) notice("Сопоставимость ограничена: условия изменились или не проверены. Разницу нельзя объяснять только бюджетом.")
+        if (points.any { usable(it) && !it.path("conditions_match").isTrue }) notice("Условия изменились или не проверены. Разница результатов может быть связана не только с бюджетом.")
         val comparable = points.filter { usable(it) && it.path("conditions_match").isTrue }.sortedBy { it.path("budget_value").decimalValue() }
         if (comparable.zipWithNext().any { (a, b) -> a.path("metrics").path("profiles").any { previous ->
             val next = profile(b, previous.path("profile_id").stringValue())?.path("gain_percent")
             previous.path("gain_percent").isNumber && next?.isNumber == true && next.decimalValue() < previous.path("gain_percent").decimalValue()
-        } }) notice("Обнаружен немонотонный эффект: больший бюджет ухудшил оценку хотя бы одного профиля. Поиск ограничен.")
+        } }) notice("При большем бюджете оценка хотя бы одного профиля стала хуже. Ограниченный поиск может выбрать такой набор.")
         error(summary.path("preparation").path("error"))
         append("</section>")
         pointsTable(summary, points, candidates, storage, reports != null)
@@ -102,7 +102,7 @@ class HtmlBudgetSeriesRenderer {
             append(catalog.queries()).append(catalog.indexes())
         }
         append("<section id=\"conditions\"><h2>Как получена оценка и где её границы</h2><p>Baseline — оценка с существующими индексами. Новые наборы оценены целиком через HypoPG, без физического построения. Поиск ограничен и не гарантирует лучший возможный набор.</p>")
-        append("<details><summary>Ограничения сравнения</summary><p>Пул кандидатов фиксирован; каждый бюджет исследует собственные комбинации. Глобальный оптимум и монотонное улучшение не гарантированы. Совпадение наблюдаемых каталога, baseline, планов и версий не доказывает неизменность всех данных и настроек БД.</p><p>Planner cost не обещает ускорение или SLA. Место — оценка HypoPG с запасом; write units/ч — условная модель, не количество операций и не измеренное замедление записи.</p></details>")
+        append("<details><summary>Ограничения сравнения</summary><p>Пул кандидатов общий, но каждый бюджет проверяет свои комбинации. Больший бюджет может дать тот же или худший результат ограниченного поиска. Глобальный оптимум не гарантируется. Совпадение каталога, baseline, планов и версий не исключает изменений других данных и настроек БД.</p><p>Planner cost не обещает ускорение или SLA. Место — оценка HypoPG с запасом; write units/ч — условная модель, не количество операций и не измеренное замедление записи.</p></details>")
         for (group in points.filter(::usable).groupBy { ids(it) }.values.filter { it.size > 1 })
             append("<details><summary>Одинаковый набор у точек ").append(h(group.joinToString { "№${it.path("ordinal").intValue()}" })).append("</summary><p>Дополнительный бюджет не обязан менять рекомендацию; при разных условиях эффект может отличаться.</p></details>")
         if (reports != null) {
@@ -152,8 +152,8 @@ class HtmlBudgetSeriesRenderer {
         append("<article class=\"series-result\" id=\"variant-$ordinal-overview\" data-overview-variant=\"$ordinal\"><p class=\"variant-label muted\">Вариант $ordinal · ")
             .append(h(budget(point.path("budget_value"), storage))).append("</p><h2>Предлагаемый набор</h2>")
         when {
-            !usable(point) -> append("<p>Рекомендация отсутствует: пригодный результат не сохранён.</p>")
-            ids(point).isEmpty() -> append("<p>Выбран пустой набор. Новые индексы не предлагаются.</p>")
+            !usable(point) -> append("<p>Пригодная рекомендация не сохранена.</p>")
+            ids(point).isEmpty() -> append("<p>Выбран пустой набор: оставь существующие индексы.</p>")
             else -> append("<p class=\"recommendation\">").append(ids(point).joinToString(" + ") { id -> "<a href=\"#series-index-catalog\"><code>${h(shortDefinition(candidates[id], candidates.values, "Определение неизвестно"))}</code></a>" }).append("</p>")
         }
         append("<p class=\"effect-sentence\">Оценочная стоимость запросов с учётом частот: ")

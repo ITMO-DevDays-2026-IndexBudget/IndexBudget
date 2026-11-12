@@ -13,11 +13,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from server import make_handler, http_json, series_result, report_artifact, Jobs, LocalRunner, ROOT, read_json, write_json, validate_request
 TEMPLATES = {t['id']: t for t in (read_json(p) for p in (ROOT / 'templates').glob('*.json'))}
 def request():
-    t = next(iter(TEMPLATES.values()))
+    t = TEMPLATES['01-records']
     return dict(template_id=t['id'], template_version=t['version'], workload=copy.deepcopy(t['workload']),
                 series=dict(schema_version=1, budget='storage_budget_bytes', values=[0, 16777216, 67108864], timeout_seconds=60))
 
 class SeriesTests(unittest.TestCase):
+    def test_series_fixture_keeps_write_profile_regardless_of_template_order(self):
+        reordered = {key: TEMPLATES[key] for key in sorted(TEMPLATES, reverse=True)}
+        self.assertNotEqual(next(iter(reordered)), '01-records')
+        with patch.dict(TEMPLATES, reordered, clear=True):
+            data = request()
+            self.assertEqual(data['template_id'], '01-records')
+            self.assertEqual(data['workload']['table_write_rates'], TEMPLATES['01-records']['workload']['table_write_rates'])
+            data['series']['budget'] = 'write_budget_units_per_hour'
+            validate_request(data, TEMPLATES)
+
     def test_validation_rejects_counts_duplicates_negative_and_missing_rates(self):
         for values in ([1, 2], [1, 1, 2], [1, 2, -1], [True, 2, 3], [0, 1, float('inf')]):
             data = request(); data['series']['values'] = values

@@ -16,9 +16,9 @@
     if (empty) {
       const state = select.selectedOptions[0]?.dataset.catalogState;
       empty.textContent = state === 'empty'
-        ? 'Выбран пустой набор. Новые индексы не предлагаются.'
+        ? 'Выбран пустой набор: оставь существующие индексы.'
         : state === 'unavailable'
-          ? 'Рекомендация отсутствует: пригодный результат не сохранён.'
+          ? 'Пригодная рекомендация не сохранена.'
           : 'Определения выбранных индексов не сохранены.';
       empty.hidden = count > 0 || !!catalogToggle?.checked;
     }

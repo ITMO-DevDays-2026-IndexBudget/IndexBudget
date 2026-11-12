@@ -31,7 +31,7 @@ class StatisticsCommand(
 
     private fun parse(args: Array<String>): CaptureRequest {
         val mode = args.getOrNull(1)
-        if (mode !in setOf("snapshot", "pair")) invalid("Expected stats snapshot or stats pair; see stats --help.")
+        if (mode !in setOf("snapshot", "pair")) invalid("Choose stats snapshot or stats pair. Run stats --help for options.")
         val values = linkedMapOf<String, String>()
         var i = 2
         while (i < args.size) {
@@ -85,9 +85,9 @@ class StatisticsCommand(
               --max-bytes <32768..67108864>       default 8388608, including metadata
               --max-query-bytes <1..1048576>      default 65536; oversized text is omitted, not truncated
               --timeout-seconds <1..300>         default 30, independent of index search
-            Reads pg_stat_statements for the current PostgreSQL 16 database, before any ranking.
+            Captures available pg_stat_statements entries for the current PostgreSQL 16 database before ranking.
             Connection: INDEXBUDGET_DATABASE_URL. Source UUID is operator-assigned, never a DSN.
-            Each collection closes its connection before the observation interval.
+            The connection closes after each snapshot. No connection is held while waiting.
             Exit: 0 complete; 3 partial; 2 invalid input; 1 failed. No reset, setup or DDL is executed.
         """.trimIndent()
     }

@@ -35,7 +35,7 @@ class IndexBudgetCliTest {
         assertTrue(result.stdout.contains("indexbudget analyze"))
         assertTrue(result.stdout.contains("indexbudget stats --help"))
         assertTrue(result.stdout.contains("a reserve of up to 48"))
-        assertTrue(result.stdout.contains("at most 32 size calls"))
+        assertTrue(result.stdout.contains("At most 32 size calls"))
         assertTrue(result.stdout.contains("shared search/command deadline"))
         assertEquals("", result.diagnosticStderr)
     }
