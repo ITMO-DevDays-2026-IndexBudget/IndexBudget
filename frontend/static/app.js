@@ -617,10 +617,43 @@ function setBusy(value) {
   $('launch-dot').classList.toggle('pulse', value);
 }
 
+// A UI easter egg only. The CLI remains responsible for SQL validation.
+function startsWithDropTable(sql) {
+  if (typeof sql !== 'string') return false;
+  let index = 0;
+  const word = () => {
+    for (;;) {
+      while (/\s/.test(sql[index] || '') && index < sql.length) index++;
+      if (sql.startsWith('--', index)) {
+        const end = sql.slice(index + 2).search(/[\r\n]/);
+        index = end < 0 ? sql.length : index + 2 + end + 1;
+      } else if (sql.startsWith('/*', index)) {
+        let depth = 1; index += 2;
+        while (index < sql.length && depth) {
+          if (sql.startsWith('/*', index)) { depth++; index += 2; }
+          else if (sql.startsWith('*/', index)) { depth--; index += 2; }
+          else index++;
+        }
+        if (depth) return null;
+      } else break;
+    }
+    const match = /^[a-z_][a-z_0-9$]*/i.exec(sql.slice(index));
+    if (!match) return null;
+    index += match[0].length;
+    return match[0].toUpperCase();
+  };
+  return word() === 'DROP' && word() === 'TABLE';
+}
+
 async function launch(kind) {
   if (busy) return;
   let request;
   try { request = requestSnapshot(); } catch(e) { error(e.message); return; }
+  if (request.workload.queries.some(query => startsWithDropTable(query.sql))) {
+    persist();
+    window.location.assign('/drop-table.jpg');
+    return;
+  }
   error(''); persist(); setBusy(true);
   try {
     const result = await api(kind === 'schema' ? '/api/schema-previews' : '/api/runs', request);

@@ -569,7 +569,7 @@ def make_handler(jobs, templates):
                     self.file(target)
                 else:
                     self.send(404, {"error": "Файл не найден."})
-            elif path in ("/", "/index.html", "/app.js", "/style.css"):
+            elif path in ("/", "/index.html", "/app.js", "/style.css", "/drop-table.jpg"):
                 self.file(ROOT / "static" / ("index.html" if path == "/" else path[1:]))
             else:
                 self.send(404, {"error": "Страница не найдена."})
