@@ -209,3 +209,59 @@ test('init восстанавливает серию до первого persist
   await second.run('init()');
   assert.deepEqual(JSON.parse(second.stored.values().next().value).seriesUI, draft.seriesUI);
 });
+
+function observedWorkload() {
+  return {schema_version: 2, table_write_rates: {'public.records': {
+    inserts_per_hour: .000125, updates_per_hour: 2000000.5, deletes_per_hour: 0, source: 'observed'}},
+    table_write_rates_origin: {kind: 'observed', window: {from: '2026-11-12T10:00:00Z', to: '2026-11-12T12:00:00Z', period_seconds: 7200},
+      complete: true, reasons: [], source: {source_id: '<script>source</script>', database_oid: 16384, postgres_version: '16.15'}}};
+}
+
+test('импорт наблюдаемой записи сохраняет дроби, окно и SQL-частоты без пересчёта', () => {
+  const ui = app(), observed = observedWorkload();
+  ui.set('observed', observed);
+  const profiles = ui.run('JSON.stringify(state.workload.profiles)');
+  const queries = ui.run('JSON.stringify(state.workload.queries)');
+  ui.run('importWriteProfile(observed); renderRates(); persist()');
+  const actual = ui.run('requestSnapshot()');
+  assert.deepEqual(JSON.parse(JSON.stringify(actual.workload.table_write_rates)), observed.table_write_rates);
+  assert.deepEqual(JSON.parse(JSON.stringify(actual.workload.table_write_rates_origin)), observed.table_write_rates_origin);
+  assert.equal(ui.run('JSON.stringify(state.workload.profiles)'), profiles);
+  assert.equal(ui.run('JSON.stringify(state.workload.queries)'), queries);
+  assert.equal(actual.write_source, 'observed');
+  assert.match(ui.element('write-rates').innerHTML, /0.000125/);
+  assert.doesNotMatch(ui.element('write-rates').innerHTML, /data-rate=/);
+  assert.match(ui.element('write-origin').innerHTML, /&lt;script&gt;/);
+  const draft = JSON.parse(ui.stored.values().next().value);
+  ui.set('draft', draft);
+  assert.equal(ui.run('state = restoreDraft(draft, templates).state; writeSource()'), 'observed');
+});
+
+test('неполное окно можно изучить, но нельзя использовать с лимитом или write-серией', () => {
+  const ui = app(), observed = observedWorkload();
+  observed.table_write_rates_origin.complete = false;
+  observed.table_write_rates_origin.reasons = ['INCOMPLETE_SNAPSHOT'];
+  ui.set('observed', observed);
+  ui.run('importWriteProfile(observed); state.workload.constraints.write_budget_units_per_hour = 0;');
+  assert.throws(() => ui.run('requestSnapshot()'), /Наблюдение неполное/);
+  ui.run('state.workload.constraints.write_budget_units_per_hour = null;');
+  assert.doesNotThrow(() => ui.run('requestSnapshot()'));
+  ui.element('launch-mode').value = 'series';
+  ui.element('series-budget').value = 'write_budget_units_per_hour';
+  ui.element('series-values').value = '0, 1, 2';
+  ui.element('series-timeout').value = '600';
+  assert.throws(() => ui.run('requestSnapshot()'), /Наблюдение неполное/);
+});
+
+test('смена источника не превращает observed в manual и сохраняет незаполненный выбор', () => {
+  const ui = app();
+  ui.run('changed = () => {};');
+  ui.listeners.get('input')[0]({target: {id: 'write-source', value: 'observed', dataset: {}}});
+  assert.equal(ui.run('state.workload.table_write_rates'), undefined);
+  assert.throws(() => ui.run('requestSnapshot()'), /Профиль записи не задан/);
+  ui.run('persist()');
+  ui.set('draft', JSON.parse(ui.stored.values().next().value));
+  assert.equal(ui.run('state = restoreDraft(draft, templates).state; writeSource()'), 'observed');
+  ui.listeners.get('input')[0]({target: {id: 'write-source', value: 'manual', dataset: {}}});
+  assert.equal(ui.run('state.workload.table_write_rates_origin'), undefined);
+});

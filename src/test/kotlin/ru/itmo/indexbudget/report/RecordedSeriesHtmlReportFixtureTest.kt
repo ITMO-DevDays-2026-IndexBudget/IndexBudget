@@ -51,7 +51,7 @@ class RecordedSeriesHtmlReportFixtureTest {
             val html = HtmlReportRenderer().render(report)
             assertFalse(html.contains("95,1"))
             assertFalse(html.contains("Оба критерия выбрали один набор"))
-            assertTrue(html.contains("Источник, период и охват неизвестны"))
+            assertTrue(html.contains("Для SQL и частот вызовов источник, период и охват неизвестны"))
             assertTrue(html.contains("репрезентативность не подтверждена"))
             assertEquals(true, report.incumbentsCoincide)
         }

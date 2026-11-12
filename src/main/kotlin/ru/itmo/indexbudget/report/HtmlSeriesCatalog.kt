@@ -19,6 +19,9 @@ internal class HtmlSeriesCatalog(reports: Map<Int, AnalysisReport>, summary: Jso
     private val summaryQueries = summary?.path("settings")?.path("queries")?.mapNotNull { query ->
         string(query.path("id"))?.let { QueryKey(it, string(query.path("sql"))) }
     }.orEmpty()
+    private val summaryKinds = summary?.path("settings")?.path("queries")?.toList().orEmpty().associate {
+        string(it.path("id")) to string(it.path("statement_kind"))?.uppercase(Locale.ROOT)
+    }
     private val summaryCandidates = summary?.path("preparation")?.path("candidates")?.toList().orEmpty().distinct()
     private val summaryPoints = summary?.path("points")?.toList().orEmpty()
 
@@ -58,11 +61,13 @@ internal class HtmlSeriesCatalog(reports: Map<Int, AnalysisReport>, summary: Jso
         append("<section id=\"series-query-catalog\"><h2>SQL и планы</h2>")
         if (queryGroups.isEmpty()) append("<p>Исходные SQL не сохранены.</p>")
         queryGroups.entries.forEachIndexed { index, (query, occurrences) ->
+            val kind = occurrences.firstNotNullOfOrNull { it.report?.statementKinds?.get(query.id)?.name } ?: summaryKinds[query.id]
             append("<details class=\"query-detail\" id=\"series-query-$index\"><summary><code>")
-                .append(h(query.id)).append("</code> · SQL, оценки и планы</summary>")
+                .append(h(query.id)).append("</code> · ").append(h(kind ?: "Тип не сохранён")).append(" · SQL, оценки и планы</summary>")
             for (occurrence in occurrences) {
                 append("<span class=\"catalog-anchor\" id=\"variant-${occurrence.ordinal}-query-${occurrence.position}\"></span>")
             }
+            if (kind in setOf("UPDATE", "DELETE")) append("<p>Cost оценивает поиск и подготовку строк. Фактическая модификация таблицы и сопровождение индексов не включены.</p>")
             if (query.sql == null) append("<p>Исходный SQL отсутствует в модели.</p>")
             else copyable(query.sql, "series-sql-$index", "Скопировать SQL", "data-query-sql")
             if (occurrences.isEmpty()) append("<p>SQL сохранён в исходных данных серии. Оценки выполнения отсутствуют.</p>")

@@ -10,10 +10,11 @@ import java.nio.file.Path
 
 /** Real series orchestration/export with synthetic saved evaluations; no database or timing measurements. */
 object BudgetSeriesFixtures {
-    val variants = listOf("mixed", "same", "nonmonotonic", "zero-baseline", "no-write", "write", "regression")
+    val variants = listOf("mixed", "same", "nonmonotonic", "zero-baseline", "no-write", "write", "regression", "observed-write")
 
     fun generate(directory: Path, variant: String) {
         val source = when (variant) {
+            "observed-write" -> HtmlReportFixtures.observedWrite()
             "zero-baseline" -> HtmlReportFixtures.zeroBaseline()
             "regression" -> HtmlReportFixtures.regression()
             "no-write" -> ContractFixtures.report(withWriteProfile = false)
@@ -24,18 +25,21 @@ object BudgetSeriesFixtures {
             "synthetic-plans", DatabaseVersions("16 synthetic", "1.4 synthetic"), "synthetic-source")
         val parent = RunContext(runId = "synthetic-series-$variant", clock = NanoClock { 0L })
             .also { it.recordInputHash("f".repeat(64)) }
-        val request = BudgetSeriesRequest(if (variant == "write") SeriesBudget.WRITE else SeriesBudget.STORAGE,
+        val request = BudgetSeriesRequest(if (variant in setOf("write", "observed-write")) SeriesBudget.WRITE else SeriesBudget.STORAGE,
             (if (variant == "mixed") listOf("0", "1048576", "2097152", "3145728", "4194304")
-            else if (variant == "write") listOf("10000.5", "20000.75", "30000.125")
+            else if (variant in setOf("write", "observed-write")) listOf("10000.5", "20000.75", "30000.125")
             else listOf("3145728", "1048576", "2097152")).map(::BigDecimal))
         var ordinal = 0
         val runner = object : SeriesAnalysisRunner {
-            override fun prepareSeriesPool(input: WorkloadInput, context: RunContext) =
-                SeriesPreparation(PreparedCandidatePool(input, source.candidates, source.candidates.candidates), reference)
+            override fun prepareSeriesPool(input: WorkloadInput, context: RunContext): SeriesPreparation {
+                source.statementKinds.forEach { (id, kind) -> context.recordStatementKind(id, kind) }
+                return SeriesPreparation(PreparedCandidatePool(input, source.candidates, source.candidates.candidates), reference)
+            }
 
             override fun runSeriesPoint(input: WorkloadInput, outputDirectory: Path, context: RunContext,
                 pool: PreparedCandidatePool): SeriesPointRun {
                 ordinal++
+                source.statementKinds.forEach { (id, kind) -> context.recordStatementKind(id, kind) }
                 val base = source.result as SearchResult.Completed
                 val result = when {
                     variant == "mixed" && ordinal == 1 -> {

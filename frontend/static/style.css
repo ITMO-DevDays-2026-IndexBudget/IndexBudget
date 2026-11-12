@@ -42,3 +42,6 @@
 
 /* Схема доступна только для чтения; длинный DDL прокручивается внутри блока. */
 .schema-content pre.code{padding:15px;border:1px solid var(--line);border-radius:7px;max-height:360px;margin:12px 0 0}
+
+#write-origin, .observed-rate { overflow-wrap: anywhere; min-width: 0; }
+#write-profile-file { max-width: 100%; }
