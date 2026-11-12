@@ -80,7 +80,10 @@ class JdbcCatalogReader(
                         nullable = !getBoolean("attnotnull"), collation = getString("collation"),
                         defaultOperatorClass = getString("opclass"), isBuiltinType = getBoolean("builtin"),
                         typeOid = getLong("type_oid"),
-                        defaultOperatorClasses = getString("brin_opclass")?.let { mapOf("brin" to it) }.orEmpty(),
+                        defaultOperatorClasses = listOfNotNull(
+                            getString("brin_opclass")?.let { "brin" to it },
+                            getString("hash_opclass")?.let { "hash" to it },
+                        ).toMap(),
                     )
                 }
                 val indexes = readIndexes(relation, context)
@@ -250,7 +253,7 @@ class JdbcCatalogReader(
             SELECT a.attname, a.atttypid AS type_oid, pg_catalog.format_type(a.atttypid, a.atttypmod) AS type_name, a.attnotnull,
                    tn.nspname = 'pg_catalog' AND t.oid < 16384 AS builtin,
                    CASE WHEN co.oid IS NOT NULL THEN pg_catalog.format('%I.%I', cn.nspname, co.collname) END AS collation,
-                   defaults.opclass, brin_defaults.opclass AS brin_opclass
+                   defaults.opclass, brin_defaults.opclass AS brin_opclass, hash_defaults.opclass AS hash_opclass
             FROM pg_catalog.pg_attribute a
             JOIN pg_catalog.pg_type t ON t.oid = a.atttypid
             JOIN pg_catalog.pg_namespace tn ON tn.oid = t.typnamespace
@@ -262,6 +265,9 @@ class JdbcCatalogReader(
             LEFT JOIN LATERAL (
                 ${defaultOperatorClassSql("brin")}
             ) brin_defaults ON true
+            LEFT JOIN LATERAL (
+                ${defaultOperatorClassSql("hash")}
+            ) hash_defaults ON true
             WHERE a.attrelid = ? AND a.attnum > 0 AND NOT a.attisdropped
             ORDER BY a.attnum
         """.trimIndent()

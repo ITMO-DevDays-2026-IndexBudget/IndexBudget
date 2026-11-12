@@ -110,7 +110,7 @@ class WorkloadReader {
             val values = array(node, Location("index_methods"), IndexMethod.entries.size).map { entry ->
                 val name = string(entry, Location("index_methods"))
                 IndexMethod.entries.firstOrNull { it.wireName == name }
-                    ?: invalid(Location("index_methods"), "Expected btree or brin.")
+                    ?: invalid(Location("index_methods"), "Expected btree, brin or hash.")
             }
             if (values.distinct().size != values.size) invalid(Location("index_methods"), "Repeated index method.")
             values.toSet()
@@ -142,11 +142,11 @@ class WorkloadReader {
             val at = location.child(index.toString())
             objectNode(value, at, setOf("schema", "table", "keys", "method"))
             val method = value.get("method")?.let { string(it, at.child("method")) } ?: "btree"
-            if (IndexMethod.entries.none { it.wireName == method }) invalid(at.child("method"), "Expected btree or brin.")
+            if (IndexMethod.entries.none { it.wireName == method }) invalid(at.child("method"), "Expected btree, brin or hash.")
             val table = TableRef(identifier(value.get("schema"), at.child("schema")), identifier(value.get("table"), at.child("table")))
             val keys = array(value.get("keys"), at.child("keys"), 2).mapIndexed { position, key ->
                 val keyAt = at.child("keys").child(position.toString())
-                objectNode(key, keyAt, if (method == "brin") setOf("column") else setOf("column", "direction", "nulls"))
+                objectNode(key, keyAt, if (method != "btree") setOf("column") else setOf("column", "direction", "nulls"))
                 val column = identifier(key.get("column"), keyAt.child("column"))
                 val direction = when (key.get("direction")?.let { string(it, keyAt.child("direction")) } ?: "asc") {
                     "asc" -> SortDirection.ASC
@@ -162,7 +162,7 @@ class WorkloadReader {
                 IndexKey(ColumnRef(table, column), direction, nulls)
             }
             if (keys.map { it.column }.distinct().size != keys.size) invalid(at, "Repeated index key.")
-            if (method == "brin" && keys.size != 1) invalid(at.child("keys"), "BRIN requires exactly one column.")
+            if (method != "btree" && keys.size != 1) invalid(at.child("keys"), "BRIN/hash require exactly one column.")
             IndexDefinition(table, keys, method = method)
         }
     }

@@ -3,6 +3,7 @@ package ru.itmo.indexbudget.domain
 enum class GenerationReason(val pairPriority: Int? = null) {
     SINGLE_COLUMN,
     BRIN_RANGE,
+    HASH_EQUALITY,
     COVERING_PROJECTION,
     ORDER_BY_PAIR(0),
     EQUALITY_AND_ORDER(1),
@@ -32,6 +33,7 @@ data class IndexCandidate(
 enum class CandidateReason {
     NO_BTREE_OPERATOR_CLASS,
     NO_BRIN_OPERATOR_CLASS,
+    NO_HASH_OPERATOR_CLASS,
     METHOD_VARIANT_LIMIT,
     EXACT_EXISTING_DUPLICATE,
     COLUMN_SHORTLIST_TRUNCATED,

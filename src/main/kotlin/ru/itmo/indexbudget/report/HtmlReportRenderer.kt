@@ -751,7 +751,7 @@ class HtmlReportRenderer : ReportRenderer {
 
     private fun StringBuilder.method(report: AnalysisReport, includeComparison: Boolean = false) {
         section("method", "Как получена оценка и где её границы", "")
-        append("<p>Write proxy — условная модель по числу колонок: одинаковое число колонок B-tree и BRIN не означает одинаковую реальную цену записи.</p>")
+        append("<p>Write proxy — условная модель по числу колонок: одинаковое число колонок B-tree, BRIN и hash не означает одинаковую реальную цену записи.</p>")
         append("<p><strong>Baseline</strong> — оценка с существующими индексами. Новые наборы оценены целиком через HypoPG, без физического построения. Поиск ограничен и не гарантирует лучший возможный набор.</p>")
         append("<details><summary>Ограничения методики</summary><p>Вывод относится только к переданным SQL и параметрам. Время запросов и записи, фактический размер индексов и конкуренция запросов не измерены. Planner cost не обещает SLA.</p></details>")
         append("<details><summary>Точные метрики выбранного набора</summary><p>Baseline — существующие реальные индексы. Selected — весь добавленный гипотетический набор. Planner cost не переводится во время выполнения.</p><dl class=\"values\">")
@@ -954,6 +954,7 @@ class HtmlReportRenderer : ReportRenderer {
     private fun candidateReason(reason: CandidateReason): String = when (reason) {
         CandidateReason.EXACT_EXISTING_DUPLICATE -> "Точный реальный дубль"
         CandidateReason.NO_BRIN_OPERATOR_CLASS -> "Нет подходящего BRIN opclass"
+        CandidateReason.NO_HASH_OPERATOR_CLASS -> "Нет подходящего hash opclass"
         CandidateReason.METHOD_VARIANT_LIMIT -> "Общий предел вариантов методов"
         CandidateReason.NO_BTREE_OPERATOR_CLASS -> "Нет подходящего B-tree opclass"
         CandidateReason.COLUMN_SHORTLIST_TRUNCATED -> "Отсечение колонок"

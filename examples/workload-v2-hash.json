@@ -1,0 +1,15 @@
+{
+  "schema_version": 2,
+  "index_methods": ["btree", "hash"],
+  "queries": [
+    {"id": "equality", "sql": "SELECT * FROM hash_demo.events WHERE sequence = 42"},
+    {"id": "all_rows", "sql": "SELECT * FROM hash_demo.events WHERE sequence >= 0"}
+  ],
+  "profiles": [{"id": "normal", "weight": 1, "calls_per_hour": {"equality": 100, "all_rows": 1}}],
+  "constraints": {"storage_budget_bytes": 100000000, "write_budget_units_per_hour": 1000, "max_indexes": 5},
+  "table_write_rates": {"hash_demo.events": {"inserts_per_hour": 100, "updates_per_hour": 10, "deletes_per_hour": 5, "source": "manual"}},
+  "manual_indexes": [
+    {"schema": "hash_demo", "table": "events", "method": "btree", "keys": [{"column": "sequence"}]},
+    {"schema": "hash_demo", "table": "events", "method": "hash", "keys": [{"column": "sequence"}]}
+  ]
+}

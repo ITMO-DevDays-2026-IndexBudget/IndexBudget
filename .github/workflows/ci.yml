@@ -194,6 +194,12 @@ jobs:
           name: brin-verification
           path: build/brin-verification/
           if-no-files-found: warn
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: hash-verification
+          path: build/hash-verification/
+          if-no-files-found: warn
 
   statistics-integration:
     name: postgres-statistics-integration

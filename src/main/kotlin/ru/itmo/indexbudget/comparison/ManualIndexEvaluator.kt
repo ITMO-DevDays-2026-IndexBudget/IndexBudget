@@ -24,7 +24,7 @@ class ManualIndexEvaluator {
                 val field = "manual_indexes.$definitionIndex"
                 if (!definition.hasSupportedShape() ||
                     definition.includedColumns.isNotEmpty())
-                    invalid(ErrorCode.INVALID_INPUT, "Expected B-tree with one or two columns or single-column BRIN.")
+                    invalid(ErrorCode.INVALID_INPUT, "Expected B-tree with one or two columns or single-column BRIN/hash.")
                 for ((keyIndex, key) in definition.keys.withIndex()) {
                     val keyField = "$field.keys.$keyIndex"
                     if (key.column.table != tableRef || table.columns.none { it.name == key.column.name })

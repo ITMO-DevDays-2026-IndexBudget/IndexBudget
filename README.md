@@ -55,6 +55,13 @@ bash demo/check-brin.sh
 `build/brin-verification/run-*/`. При BRIN используются report v4 / сводка серии v2;
 прежние B-tree-only запуски сохраняют v3/v1.
 
+## Hash для простого равенства
+
+Явный `"index_methods": ["btree", "hash"]` добавляет одноколоночный hash для
+скалярного WHERE `=`. Без INCLUDE, пар и сортировки; лимиты и бюджеты общие,
+B-tree остаётся default. [Пример](examples/workload-v2-hash.json),
+[контракт, ограничения и реальная проверка](docs/hash.md).
+
 ## CLI
 
 После `installDist` можно добавить `build/install/indexbudget/bin` в `PATH` и использовать имя `indexbudget`.
