@@ -741,3 +741,11 @@ Report v4 требуется при BRIN (включая только ручно
 collation/opclass кандидата; B-tree-only сохраняет v1, точки — v3/v4 соответственно.
 Формулы метрик, бюджетов и write proxy общие и не меняются. Полные правила,
 версионирование и воспроизводимый пример — [BRIN](brin.md) и §5 спецификации.
+
+## A2 / #105: demo → analyze-series
+
+Demo API сохраняет прежний конверт fixed-dataset v0.2 и принимает optional series v1.
+LocalRunner вызывает существующий CLI один раз на job, с явным mode/ranking workload.
+Jobs подготавливает dataset один раз, публикует единый HTML/JSON и относительные
+артефакты точек; progress — сохранённые point states core, без повторного EXPLAIN.
+Контракт восстановления и API описан в [demo-budget-series.md](demo-budget-series.md).

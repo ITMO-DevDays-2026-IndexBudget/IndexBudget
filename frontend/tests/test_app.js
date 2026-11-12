@@ -149,3 +149,29 @@ test('просмотр схемы не создаёт редакторы DDL/see
   assert.match(markup, /&lt;script&gt;/);
   assert.match(markup, /только просмотр/);
 });
+
+test('серия сохраняет workload и передаёт 3–5 исходных бюджетов в CLI-контракте', () => {
+  const ui = app();
+  ui.element('launch-mode').value = 'series';
+  ui.element('series-budget').value = 'storage_budget_bytes';
+  ui.element('series-values').value = '0, 16777216, 67108864';
+  ui.element('series-timeout').value = '600';
+  const original = ui.run('JSON.stringify(state.workload)');
+  const request = ui.run('requestSnapshot()');
+  assert.deepEqual(Array.from(request.series.values), [0,16777216,67108864]);
+  assert.equal(request.series.budget, 'storage_budget_bytes');
+  assert.equal(ui.run('JSON.stringify(state.workload)'), original);
+  ui.run('persist()');
+  assert.equal(JSON.parse(ui.stored.values().next().value).seriesUI['launch-mode'], 'series');
+});
+
+test('повторы, неверное число и отрицательные бюджеты серии отклоняются', () => {
+  const ui = app();
+  ui.element('launch-mode').value = 'series';
+  ui.element('series-budget').value = 'storage_budget_bytes';
+  ui.element('series-timeout').value = '600';
+  for (const input of ['1,2', '1,1,2', '0,-1,2', '0,,2', '0,1,2,3,4,5', '0,1.5,2']) {
+    ui.element('series-values').value = input;
+    assert.throws(() => ui.run('seriesRequest()'));
+  }
+});
