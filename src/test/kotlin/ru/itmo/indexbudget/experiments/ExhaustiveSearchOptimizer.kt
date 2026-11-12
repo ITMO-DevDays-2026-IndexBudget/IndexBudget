@@ -123,7 +123,7 @@ class ExhaustiveSearchOptimizer(
             ),
             clock = clock,
             analysisMode = context.analysisMode,
-            parent = context,
+            cancellationRequested = { context.isCancelled },
         )
         fun result(complete: Boolean, stop: String?) = ExhaustiveSearchResult(
             objective = input.objective,

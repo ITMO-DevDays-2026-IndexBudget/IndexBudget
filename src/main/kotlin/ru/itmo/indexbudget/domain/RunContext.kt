@@ -68,6 +68,8 @@ class RunContext(
     private val parent: RunContext? = null,
     private val scope: RunScope? = null,
     private val ordinal: Int? = null,
+    // Offline verification may share cancellation without inheriting a production deadline.
+    private val cancellationRequested: () -> Boolean = { false },
 ) {
     // Explicit limits support deterministic tests and offline tools; always report effective values.
     private val limitsOverride = limits
@@ -86,7 +88,7 @@ class RunContext(
     private val completed = linkedSetOf<AnalysisPhase>()
     private val cancelled = AtomicBoolean()
 
-    val isCancelled: Boolean get() = cancelled.get() || parent?.isCancelled == true
+    val isCancelled: Boolean get() = cancelled.get() || parent?.isCancelled == true || cancellationRequested()
 
     /** Series control has its own budget; children retain independent clocks and counters. */
     fun selectSeriesTimeout(timeout: Duration) {
