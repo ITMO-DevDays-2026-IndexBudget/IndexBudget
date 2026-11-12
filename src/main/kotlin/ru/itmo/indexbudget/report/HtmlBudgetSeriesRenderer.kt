@@ -20,7 +20,7 @@ class HtmlBudgetSeriesRenderer {
         MessageDigest.getInstance("SHA-256").digest(script.toByteArray(Charsets.UTF_8)))
 
     fun render(summary: JsonNode, reports: Map<Int, AnalysisReport>? = null): String = buildString {
-        require(summary.path("schema_version").intValue() == 1)
+        require(summary.path("schema_version").intValue() in 1..2)
         val points = summary.path("points").toList()
         val storage = summary.path("budget").stringValue() == "storage_budget_bytes"
         val candidates = summary.path("preparation").path("candidates").associateBy { it.path("id").stringValue() }
@@ -118,8 +118,8 @@ class HtmlBudgetSeriesRenderer {
         }
         append("<details><summary>Идентификатор и параметры серии</summary><p>По умолчанию показан пригодный вариант с наибольшим бюджетом; если его нет — доступная диагностика. Это выбор для просмотра.</p><dl class=\"values\">")
         entry("Значения бюджета", summary.path("values").joinToString(" · ") { number(it) + " " + if (storage) "байт" else "условных ед./ч" })
-        for ((label, value) in listOf("Серия" to summary.path("series_id"), "Hash workload" to summary.path("source").path("workload_input_hash"), "Источник" to summary.path("source").path("workload_source"), "Цель" to summary.path("settings").path("selected_objective"), "Режим" to summary.path("settings").path("analysis_mode"), "Рейтинг" to summary.path("settings").path("candidate_ranking"), "Длительность, мс" to summary.path("duration_millis"), "Общий лимит, с" to summary.path("timeout_seconds")))
-            entry(label, if (value.isString) value.stringValue() else number(value))
+        for ((label, value) in listOf("Серия" to summary.path("series_id"), "Hash workload" to summary.path("source").path("workload_input_hash"), "Источник" to summary.path("source").path("workload_source"), "Цель" to summary.path("settings").path("selected_objective"), "Режим" to summary.path("settings").path("analysis_mode"), "Рейтинг" to summary.path("settings").path("candidate_ranking"), "Методы индексов" to summary.path("settings").path("index_methods"), "Длительность, мс" to summary.path("duration_millis"), "Общий лимит, с" to summary.path("timeout_seconds")))
+            entry(label, if (value.isArray) value.joinToString { it.stringValue() } else if (value.isString) value.stringValue() else number(value))
         append("</dl><p><a href=\"series.json\">Сводка JSON</a></p></details></section><section id=\"next\"><h2>Что делать дальше</h2><ol><li>Уточнить период, охват, частоты и параметры SQL.</li><li>Выбрать допустимый бюджет по таблице сравнения.</li><li>Проверить весь набор на тестовой БД: время запросов, нагрузку записи и фактический размер индексов.</li></ol></section><footer>IndexBudget · Спецификация 0.2 · Оценка для отдельной физической проверки</footer></main></div>")
         if (reports != null) append("<script>").append(script).append("</script>")
         append("</body></html>")
@@ -294,7 +294,8 @@ class HtmlBudgetSeriesRenderer {
         val keys = candidate.path("keys").joinToString(", ") { it.path("column").stringValue() }
         val include = candidate.path("included_columns").takeIf { it.isArray && !it.isEmpty }
             ?.joinToString(", ", " INCLUDE (", ")") { it.stringValue() }.orEmpty()
-        return "$label($keys)$include"
+        val method = candidate.path("method").takeIf { it.isString }?.stringValue() ?: "btree"
+        return label + (if (method == "btree") "" else " · $method ") + "($keys)$include"
     }
     private fun StringBuilder.entry(label: String, value: String) {
         append("<div><dt>").append(h(label)).append("</dt><dd>").append(h(value)).append("</dd></div>")

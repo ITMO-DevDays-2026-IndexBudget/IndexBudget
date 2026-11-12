@@ -29,8 +29,19 @@ class BtreeCandidateEnumerator : CandidateEnumerator {
                 val features = featuresByQuery.getValue(query.id).filterKeys { it.table == table }
                 val shortlist = shortlistColumns(query, table, features, support)
                 val contexts = contextsByQuery.getValue(query.id)
-                val variants = variants(query, table, shortlist.retainedColumns, features, contexts, context)
-                val covering = coveringVariants(query, table, variants, context)
+                val brin = if (IndexMethod.BRIN in workload.input.indexMethods)
+                    brinVariants(query, table, shortlist.retainedColumns, contexts, context) else emptyList()
+                val ordinary = if (IndexMethod.BTREE in workload.input.indexMethods)
+                    variants(query, table, shortlist.retainedColumns, features, contexts, context, 976 - brin.size)
+                    else BoundedVariants(emptyList(), 0)
+                val variants = ordinary.variants
+                val covering = coveringVariants(query, table, variants, context, brin.size)
+                val methodDecisions = if (ordinary.omitted == 0) emptyList() else listOf(CandidateDecision(
+                    CandidateReason.METHOD_VARIANT_LIMIT, queryId = query.id, table = table, phase = AnalysisPhase.CANDIDATES,
+                    details = mapOf("omitted_btree_variants" to ordinary.omitted.toString(), "limit" to "976")))
+                val methodWarnings = methodDecisions.map { decision -> AnalysisWarning(
+                    WarningCode.CANDIDATE_REJECTED, "Общий предел вариантов методов достигнут до канонизации.",
+                    queryId = query.id, details = decision.details + ("reason" to decision.reason.name)) }
                 context.checkDeadline()
                 consume(CandidateScope(
                     queryId = query.id,
@@ -38,9 +49,9 @@ class BtreeCandidateEnumerator : CandidateEnumerator {
                     discoveredColumns = features.size,
                     retainedColumns = shortlist.retainedColumns,
                     excludedColumns = shortlist.excludedColumns,
-                    variants = variants + covering.variants,
-                    decisions = shortlist.decisions + covering.decisions,
-                    warnings = shortlist.warnings + covering.warnings + if (tableIndex == 0) contexts.warnings() else emptyList(),
+                    variants = variants + brin + covering.variants,
+                    decisions = shortlist.decisions + methodDecisions + covering.decisions,
+                    warnings = shortlist.warnings + covering.warnings + methodWarnings + if (tableIndex == 0) contexts.warnings() else emptyList(),
                 ))
                 // The synchronous consumer may also spend the remaining analysis budget.
                 context.checkDeadline()
@@ -161,6 +172,8 @@ class BtreeCandidateEnumerator : CandidateEnumerator {
         return support
     }
 
+    private data class BoundedVariants(val variants: List<CandidateVariant>, val omitted: Int)
+
     private fun variants(
         query: ResolvedQuery,
         table: TableRef,
@@ -168,11 +181,14 @@ class BtreeCandidateEnumerator : CandidateEnumerator {
         features: Map<ColumnRef, Features>,
         contexts: PredicateContexts,
         context: RunContext,
-    ): List<CandidateVariant> {
+        limit: Int,
+    ): BoundedVariants {
         val result = mutableListOf<CandidateVariant>()
+        var omitted = 0
         val columns = retained.sortedWith(columnOrder)
         fun emit(keys: List<IndexKey>, reasons: Set<GenerationReason>, branches: Set<CandidateSourceBranch>) {
             context.checkDeadline()
+            if (result.size == limit) { omitted++; return }
             result += CandidateVariant(IndexDefinition(table, keys), setOf(query.id), reasons, branches)
         }
         for (column in columns) {
@@ -199,7 +215,23 @@ class BtreeCandidateEnumerator : CandidateEnumerator {
                 }
             }
         }
-        return result
+        return BoundedVariants(result, omitted)
+    }
+
+    private fun brinVariants(query: ResolvedQuery, table: TableRef, retained: List<ColumnRef>,
+        contexts: PredicateContexts, context: RunContext): List<CandidateVariant> = retained.sortedWith(columnOrder).mapNotNull { column ->
+        context.checkDeadline()
+        val leaves = BitSet()
+        query.predicates.forEachIndexed { index, predicate ->
+            context.checkDeadline()
+            if (predicate.leftColumn == column && predicate.rightColumn == null && predicate.source == PredicateSource.WHERE &&
+                predicate.operator in setOf(ComparisonOperator.LESS_THAN, ComparisonOperator.LESS_THAN_OR_EQUAL,
+                    ComparisonOperator.GREATER_THAN, ComparisonOperator.GREATER_THAN_OR_EQUAL, ComparisonOperator.BETWEEN)) {
+                leaves.set(index)
+            }
+        }
+        if (leaves.isEmpty) null else CandidateVariant(IndexDefinition(table, listOf(IndexKey(column)), method = "brin"),
+            setOf(query.id), setOf(GenerationReason.BRIN_RANGE), contexts.branches(leaves, false))
     }
 
     private data class CoveringVariants(
@@ -213,6 +245,7 @@ class BtreeCandidateEnumerator : CandidateEnumerator {
         table: TableRef,
         plain: List<CandidateVariant>,
         context: RunContext,
+        additionalVariants: Int = 0,
     ): CoveringVariants {
         // Never expand a wildcard, including mixed explicit/wildcard projections.
         if (query.statementKind != StatementKind.SELECT || query.selectsAllColumns) return CoveringVariants()
@@ -222,7 +255,7 @@ class BtreeCandidateEnumerator : CandidateEnumerator {
         val result = mutableListOf<CandidateVariant>()
         var payloadLimited = 0
         var variantLimited = 0
-        val limit = minOf(16, 976 - plain.size)
+        val limit = minOf(16, 976 - plain.size - additionalVariants)
         // The ordinary bounded enumeration is deterministic; never enumerate payload subsets.
         for (base in plain) {
             context.checkDeadline()

@@ -1,0 +1,47 @@
+{
+  "schema_version" : 2,
+  "index_methods" : [ "btree", "brin" ],
+  "queries" : [ {
+    "id" : "range",
+    "sql" : "SELECT * FROM brin_demo.events WHERE sequence BETWEEN 500000 AND 510000"
+  }, {
+    "id" : "all_rows",
+    "sql" : "SELECT * FROM brin_demo.events WHERE sequence > 0"
+  } ],
+  "profiles" : [ {
+    "id" : "day",
+    "weight" : 1,
+    "calls_per_hour" : {
+      "range" : 100,
+      "all_rows" : 1
+    }
+  } ],
+  "constraints" : {
+    "storage_budget_bytes" : 49152,
+    "write_budget_units_per_hour" : 100000,
+    "max_indexes" : 2
+  },
+  "table_write_rates" : {
+    "brin_demo.events" : {
+      "inserts_per_hour" : 100,
+      "updates_per_hour" : 10,
+      "deletes_per_hour" : 5,
+      "source" : "manual"
+    }
+  },
+  "manual_indexes" : [ {
+    "schema" : "brin_demo",
+    "table" : "events",
+    "method" : "btree",
+    "keys" : [ {
+      "column" : "sequence"
+    } ]
+  }, {
+    "schema" : "brin_demo",
+    "table" : "events",
+    "method" : "brin",
+    "keys" : [ {
+      "column" : "sequence"
+    } ]
+  } ]
+}

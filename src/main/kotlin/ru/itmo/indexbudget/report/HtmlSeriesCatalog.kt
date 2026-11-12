@@ -218,9 +218,11 @@ internal class HtmlSeriesCatalog(reports: Map<Int, AnalysisReport>, summary: Jso
     private fun sameCandidate(value: JsonNode, key: CandidateKey): Boolean {
         val definition = key.definition
         return string(value.path("id")) == key.id && string(value.path("ddl")) == key.ddl &&
+            (string(value.path("method")) ?: "btree") == definition.method &&
             string(value.path("schema")) == definition.table.schema && string(value.path("table")) == definition.table.name &&
             value.path("keys").toList().map { listOf(string(it.path("column")), string(it.path("direction")), string(it.path("nulls"))) } ==
-            definition.keys.map { listOf(it.column.name, it.direction.name.lowercase(Locale.ROOT), it.nulls.name.lowercase(Locale.ROOT)) } &&
+            definition.keys.map { listOf(it.column.name, it.direction.name.lowercase(Locale.ROOT).takeIf { definition.method == "btree" },
+                it.nulls.name.lowercase(Locale.ROOT).takeIf { definition.method == "btree" }) } &&
             value.path("included_columns").toList().map(::string) == definition.includedColumns.map { it.name }
     }
 
@@ -240,7 +242,8 @@ internal class HtmlSeriesCatalog(reports: Map<Int, AnalysisReport>, summary: Jso
         }
         val include = value.path("included_columns").takeIf { it.isArray && !it.isEmpty }
             ?.joinToString(", ", " INCLUDE (", ")") { string(it) ?: "Нет данных" }.orEmpty()
-        return "$name($keys)$include"
+        val method = string(value.path("method")) ?: "btree"
+        return name + (if (method == "btree" && short) "" else " · $method ") + "($keys)$include"
     }
 
     private fun ambiguousTable(schema: String, table: String): Boolean =
@@ -266,7 +269,7 @@ internal class HtmlSeriesCatalog(reports: Map<Int, AnalysisReport>, summary: Jso
         val table = definition.table
         val ambiguous = ambiguousTable(table.schema, table.name)
         val name = if (ambiguous) "${table.schema}.${table.name}" else table.name
-        return name + definition.keys.joinToString(", ", "(", ")") { it.column.name } +
+        return name + (if (definition.method == "btree") "" else " · ${definition.method} ") + definition.keys.joinToString(", ", "(", ")") { it.column.name } +
             definition.includedColumns.takeIf { it.isNotEmpty() }?.joinToString(", ", " INCLUDE (", ")") { it.name }.orEmpty()
     }
 
@@ -276,7 +279,8 @@ internal class HtmlSeriesCatalog(reports: Map<Int, AnalysisReport>, summary: Jso
         append(value.method).append(" (")
         append(value.keys.joinToString { key ->
             buildString {
-                append(key.column.name).append(' ').append(key.direction.name).append(" NULLS ").append(key.nulls.name)
+                append(key.column.name)
+                if (value.method == "btree") append(' ').append(key.direction.name).append(" NULLS ").append(key.nulls.name)
                 key.collation?.let { append(" COLLATE ").append(it) }
                 key.operatorClass?.let { append(' ').append(it) }
             }

@@ -125,7 +125,8 @@ data class AnalysisReport(
     val candidates: CandidateBatch = CandidateBatch(emptyList()),
     /** Готовый результат [PriceOfRobustness.calculate] для [result]; null при отсутствии сравнения. */
     val priceOfRobustness: Double? = null,
-    val schemaVersion: Int = 3,
+    val schemaVersion: Int = if (input?.requiresMethodAwareReport() == true ||
+        candidates.candidates.any { it.definition.method != "btree" }) 4 else 3,
     val specVersion: String = "0.2",
     val comparisonScope: ComparisonScope = ComparisonScope.EVALUATED_SETS,
     val baselineMetrics: SetMetrics? = null,
@@ -138,6 +139,7 @@ data class AnalysisReport(
     val analysisMode: AnalysisMode = AnalysisMode.NORMAL,
     /** Effective shortlist strategy, including baseline-only and interrupted runs. */
     val candidateRanking: CandidateRanking = input?.candidateRanking ?: CandidateRanking.FREQUENCY,
+    val indexMethods: Set<IndexMethod> = input?.indexMethods ?: setOf(IndexMethod.BTREE),
     /** Critical-query planner-cost guard outcomes for the selected set; empty without guards or a selected set. */
     val costGuards: List<CostGuardOutcome> = emptyList(),
     val statementKinds: Map<String, StatementKind> = emptyMap(),
