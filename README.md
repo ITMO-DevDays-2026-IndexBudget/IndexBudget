@@ -136,3 +136,4 @@ Kotlin/JVM · JDK 25 · Spring Boot в режиме CLI · Gradle Wrapper · Pos
 - [Эксперимент с наблюдаемыми бюджетами](docs/experiments/observed-budgets-2026-11-12/README.md) — подробные результаты сравнения.
 - [Общий стенд](deploy/db/README.md) — обновления БД и сохранение данных.
 - [Разработка и ревью](ai/README.md), [AGENTS.md](AGENTS.md) — контекст для участников и агентов.
+- [Презентация](https://docs.google.com/presentation/d/1unqj-g8eLOVvheZ9P7w41Rto1fYL-PbOnv1PCFhgLuE/edit?slide=id.p12#slide=id.p12)
