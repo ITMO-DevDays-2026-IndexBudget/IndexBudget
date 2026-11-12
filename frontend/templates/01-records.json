@@ -58,7 +58,12 @@
       "write_budget_units_per_hour": 10000,
       "max_indexes": 5
     },
-    "candidate_ranking": "frequency"
+    "candidate_ranking": "frequency",
+    "index_methods": [
+      "btree",
+      "brin",
+      "hash"
+    ]
   },
   "catalog": {
     "tables": [

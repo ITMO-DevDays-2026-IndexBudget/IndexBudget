@@ -58,7 +58,7 @@ class HtmlReportReadabilityTest {
         val visibleOverview = overview.substringBefore("<details")
         for (candidate in report.candidates.candidates) {
             val table = candidate.definition.table
-            assertTrue(overview.contains("${table.schema}.${table.name}(value)"))
+            assertTrue(overview.contains("${table.schema}.${table.name} · btree (value)"))
             assertFalse(visibleOverview.contains(candidate.id))
             assertTrue(html.contains(candidate.id))
         }

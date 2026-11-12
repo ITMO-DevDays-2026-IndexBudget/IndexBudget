@@ -30,11 +30,13 @@ const output = path.resolve('build/frontend-ui-verification');
     await page.keyboard.press('Home');
     assert.equal(await page.locator('#tab-queries').evaluate(el => el === document.activeElement), true);
     assert.equal(await page.locator('.query-library-link button').getAttribute('role'), null);
+    assert.equal(await page.locator('#templates > button').count(), 6);
     const sql = '\nSELECT id FROM public.records WHERE group_id = 42;  \n';
     const draft = { state: { template_id: templates[0].id, template_version: templates[0].version,
       workload: structuredClone(templates[0].workload), schema_sql: 'CREATE TABLE injected(id int)',
       seed_sql: 'SELECT injected()', catalog: { tables: [{ name: 'injected' }] }, catalogSource: 'database' } };
     draft.state.workload.queries[0].sql = sql;
+    delete draft.state.workload.index_methods;
     // Старый черновик должен быть на диске до bootstrap; beforeunload текущего UI сохраняет свою форму.
     await page.addInitScript(draft => {
       if (!sessionStorage.getItem('legacy-draft-test')) {
@@ -48,6 +50,7 @@ const output = path.resolve('build/frontend-ui-verification');
     assert.doesNotMatch(await page.locator('#diagram').innerText(), /injected/);
     const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('indexbudget.frontend.v1')));
     assert.deepEqual(Object.keys(saved.state).sort(), ['template_id', 'template_version', 'workload']);
+    assert.deepEqual(saved.state.workload.index_methods, ['btree', 'brin', 'hash']);
     await page.locator('#tab-schema').click();
     assert.equal(await page.locator('#schema-sql, #seed-sql, .schema-content textarea').count(), 0);
     assert.equal(await page.locator('#preview-schema').count(), 0);
@@ -81,6 +84,7 @@ const output = path.resolve('build/frontend-ui-verification');
     const download = await downloadPromise;
     const downloaded = JSON.parse(await fs.readFile(await download.path(), 'utf8'));
     assert.equal(downloaded.queries[0].sql, sql);
+    assert.deepEqual(downloaded.index_methods, ['btree', 'brin', 'hash']);
     assert.equal(downloaded.profiles[0].calls_per_hour[downloaded.queries[0].id], 1000000);
     await page.locator('#reset').click();
     await page.locator('#tab-queries').click();
@@ -138,8 +142,50 @@ const output = path.resolve('build/frontend-ui-verification');
     assert.equal(submitted.workload.queries.length, 9);
     await page.waitForURL('**/reports/*/report.html', { timeout: 120000 });
     assert.match(await page.title(), /IndexBudget/);
+    const firstReport = await (await page.request.get(page.url().replace(/report\.html$/, 'report.json'))).json();
+    assert.ok(firstReport.selected_indexes.some(index => index.definition.method === 'btree'));
+    for (const index of firstReport.selected_indexes) {
+      assert.match(await page.locator(`[data-selected-index="${index.id}"] h3`).innerText(),
+        new RegExp(` · ${index.definition.method} \\(`));
+    }
+    assert.match(await page.locator('.recommended-indexes').innerText(), / · btree \(/);
+    await page.goto(base);
+    await page.locator('#workspace:not([disabled])').waitFor();
+    // После редактирования SQL-библиотеки подтверждаем смену датасета.
+    page.once('dialog', dialog => dialog.accept());
+    await page.locator('[data-template="04-events-brin"]').click();
+    assert.equal(await page.locator('#storage').inputValue(), '0.0625');
+    assert.match(await page.locator('#summary').innerText(), /B-tree, BRIN, Hash/);
+    for (const width of [1440, 390, 320]) {
+      await page.setViewportSize({ width, height: 1000 });
+      await page.screenshot({ path: path.join(output, `events-${width}.png`), fullPage: true });
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    }
+    await page.locator('#analyze').click();
+    await page.waitForURL('**/reports/*/report.html', { timeout: 120000 });
+    const report = await (await page.request.get(page.url().replace(/report\.html$/, 'report.json'))).json();
+    assert.deepEqual(report.index_methods, ['btree', 'brin', 'hash']);
+    assert.deepEqual(report.selected_indexes.map(index => index.definition.method), ['brin']);
+    await page.goto(base);
+    await page.locator('#workspace:not([disabled])').waitFor();
+    await page.locator('[data-template="05-lookup-hash"]').click();
+    assert.equal(await page.locator('#storage').inputValue(), '16');
+    assert.equal(await page.locator('#max-indexes').inputValue(), '2');
+    for (const width of [1440, 390, 320]) {
+      await page.setViewportSize({ width, height: 1000 });
+      await page.screenshot({ path: path.join(output, `hash-${width}.png`), fullPage: true });
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    }
+    await page.locator('#analyze').click();
+    await page.waitForURL('**/reports/*/report.html', { timeout: 120000 });
+    const hashReport = await (await page.request.get(page.url().replace(/report\.html$/, 'report.json'))).json();
+    assert.deepEqual(hashReport.index_methods, ['btree', 'brin', 'hash']);
+    assert.deepEqual(hashReport.selected_indexes.map(index => index.definition.method).sort(), ['btree', 'hash']);
+    assert.equal(await page.locator('[data-selected-index]').count(), 2);
+    assert.match(await page.locator('.recommended-indexes').innerText(), / · btree \(created_at\)/);
+    assert.match(await page.locator('.recommended-indexes').innerText(), / · hash \(external_key\)/);
     assert.deepEqual(errors, []);
-    console.log('PASS browser: legacy draft, fixed schema without action, named examples, add/collision, full DML workload, frequencies, JSON, real report; 1440/390/320px');
+    console.log('PASS browser: legacy methods, fixed schema, named SQL/DML examples, frequencies, JSON, reset, real reports, BRIN/Hash datasets; 1440/390/320px');
   } finally {
     await browser.close();
   }

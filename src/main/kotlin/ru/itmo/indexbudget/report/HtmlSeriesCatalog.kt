@@ -248,7 +248,7 @@ internal class HtmlSeriesCatalog(reports: Map<Int, AnalysisReport>, summary: Jso
         val include = value.path("included_columns").takeIf { it.isArray && !it.isEmpty }
             ?.joinToString(", ", " INCLUDE (", ")") { string(it) ?: "Нет данных" }.orEmpty()
         val method = string(value.path("method")) ?: "btree"
-        return name + (if (method == "btree" && short) "" else " · $method ") + "($keys)$include"
+        return name + " · $method " + "($keys)$include"
     }
 
     private fun ambiguousTable(schema: String, table: String): Boolean =
@@ -274,7 +274,7 @@ internal class HtmlSeriesCatalog(reports: Map<Int, AnalysisReport>, summary: Jso
         val table = definition.table
         val ambiguous = ambiguousTable(table.schema, table.name)
         val name = if (ambiguous) "${table.schema}.${table.name}" else table.name
-        return name + (if (definition.method == "btree") "" else " · ${definition.method} ") + definition.keys.joinToString(", ", "(", ")") { it.column.name } +
+        return name + " · ${definition.method} " + definition.keys.joinToString(", ", "(", ")") { it.column.name } +
             definition.includedColumns.takeIf { it.isNotEmpty() }?.joinToString(", ", " INCLUDE (", ")") { it.name }.orEmpty()
     }
 
