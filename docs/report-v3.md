@@ -41,7 +41,8 @@ JSON записывается в UTF-8. Все перечисленные пол
 | `budgets` | `storage_budget_bytes`, `write_budget_units_per_hour`, `max_indexes`, `query_cost_guards` (эхо заданных пределов) |
 | `cost_guards` | Ограничения критических SQL (#78): `basis: "planner_cost_ratio"`, подпись «не latency и не SLA», `max_ratio_by_query_id` и `outcomes` для выбранного набора: `query_id`, `max_ratio`, `baseline_cost`, `selected_cost`, `observed_ratio` (`null` при нулевом baseline), `zero_baseline`, `violated`. Пусто без guards; при failed без выбранного набора `outcomes` пуст |
 | `write_proxy_model` | Всегда `row_changes_times_key_and_include_columns`; payload оплачивается как ключ |
-| `table_write_rates` | Объект по физическим `schema.table` либо `null`; значения содержат `inserts_per_hour`, `updates_per_hour`, `deletes_per_hour`, `source` |
+| `table_write_rates` | Объект по физическим `schema.table` либо `null`; значения содержат `inserts_per_hour`, `updates_per_hour`, `deletes_per_hour`, `source` (`manual` или `observed`) |
+| `table_write_rates_origin` | Происхождение наблюдаемого окна записи (`window`, `complete`, `reasons`) либо `null` для ручного ввода |
 | `queries` | Общий список SQL в исходном порядке; поля `id`, `sql`, `baseline_cost`, `selected_cost`, `regression` |
 | `baseline` | Сохранённая полная оценка пустого гипотетического набора; `null`, если полного baseline нет |
 | `selected` | Та же конфигурация, что `best_robust` или `best_mean` по выбранному objective; `null` для failed |

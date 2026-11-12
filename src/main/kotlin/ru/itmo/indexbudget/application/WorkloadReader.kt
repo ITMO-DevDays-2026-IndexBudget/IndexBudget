@@ -66,7 +66,7 @@ class WorkloadReader {
         }
         objectNode(root, Location("workload"), setOf(
             "schema_version", "objective", "queries", "profiles", "constraints", "table_write_rates",
-            "analysis_mode", "candidate_ranking", "manual_indexes", "provenance",
+            "table_write_rates_origin", "analysis_mode", "candidate_ranking", "manual_indexes", "provenance",
         ))
         // query_cost_guards keys are cross-checked against queries below, after queries are parsed.
         val requestedMode = when (val value = root.get("analysis_mode")) {
@@ -106,6 +106,7 @@ class WorkloadReader {
         ProfileWeights.normalize(profiles)
         context?.checkDeadline()
         val writeRates = writeRates(root.get("table_write_rates"))
+        val writeRatesOrigin = writeRatesOrigin(root.get("table_write_rates_origin"), writeRates, constraints)
         val manual = manualIndexes(root.get("manual_indexes"))
         if (constraints.writeBudgetUnitsPerHour != null && writeRates == null) {
             invalid(Location("table_write_rates"), "An enabled write budget requires a complete write profile.",
@@ -122,6 +123,7 @@ class WorkloadReader {
             context.recordInputHash(HexFormat.of().formatHex(digest))
         }
         return WorkloadInput(queries, profiles, constraints, objective = objective, tableWriteRates = writeRates,
+            tableWriteRatesOrigin = writeRatesOrigin,
             manualIndexes = manual, analysisMode = analysisMode, candidateRanking = candidateRankingOverride ?: requestedRanking,
             provenance = provenance)
     }
@@ -319,15 +321,90 @@ class WorkloadReader {
             val value = objectNode(entry.value, tableLocation, setOf(
                 "inserts_per_hour", "updates_per_hour", "deletes_per_hour", "source",
             ))
-            if (value.has("source") && string(value.get("source"), tableLocation.child("source")) != "manual") {
-                invalid(tableLocation.child("source"), "Only manual write rates are supported.")
+            val source = when (val sourceNode = value.get("source")) {
+                null -> WriteRateSource.MANUAL
+                else -> when (string(sourceNode, tableLocation.child("source"))) {
+                    "manual" -> WriteRateSource.MANUAL
+                    "observed" -> WriteRateSource.OBSERVED
+                    else -> invalid(tableLocation.child("source"),
+                        "Expected manual or observed write rates.")
+                }
             }
             entry.key to TableWriteRates(
                 insertsPerHour = number(value.get("inserts_per_hour"), tableLocation.child("inserts_per_hour")),
                 updatesPerHour = number(value.get("updates_per_hour"), tableLocation.child("updates_per_hour")),
                 deletesPerHour = number(value.get("deletes_per_hour"), tableLocation.child("deletes_per_hour")),
+                source = source,
             )
         }.toMap()
+    }
+
+    /**
+     * Observed origin of the write profile: one explicitly chosen window with its period,
+     * completeness and limitation reasons. Manual input simply omits it; observed rates without
+     * an origin, or a mix of sources, are rejected instead of being guessed. An incomplete
+     * observation never silently disables an enabled write budget.
+     */
+    private fun writeRatesOrigin(
+        node: JsonNode?,
+        rates: Map<String, TableWriteRates>?,
+        constraints: Constraints,
+    ): WriteRatesOrigin? {
+        if (node == null || node.isNull) {
+            if (rates != null && rates.values.any { it.source == WriteRateSource.OBSERVED }) {
+                invalid(Location("table_write_rates"), "Observed write rates require table_write_rates_origin.",
+                    ErrorCode.INVALID_WRITE_PROFILE)
+            }
+            return null
+        }
+        val location = Location("table_write_rates_origin", code = ErrorCode.INVALID_WRITE_PROFILE)
+        val value = objectNode(node, location, setOf(
+            "kind", "window", "complete", "reasons", "source",
+        ))
+        if (string(value.get("kind"), location.child("kind")) != "observed") {
+            invalid(location.child("kind"), "Manual write rates do not carry an observed origin.")
+        }
+        if (rates == null) {
+            invalid(location, "table_write_rates_origin requires table_write_rates.")
+        }
+        if (rates!!.values.any { it.source != WriteRateSource.OBSERVED }) {
+            invalid(location, "An observed origin cannot label manual write rates.")
+        }
+        val window = objectNode(value.get("window"), location.child("window"),
+            setOf("from", "to", "period_seconds"))
+        val origin = WriteRatesOrigin(
+            from = string(window.get("from"), location.child("window").child("from")),
+            to = string(window.get("to"), location.child("window").child("to")),
+            periodSeconds = number(window.get("period_seconds"), location.child("window").child("period_seconds")),
+            complete = boolean(value.get("complete"), location.child("complete")),
+            // An empty reasons array is legitimate for a complete window.
+            reasons = value.get("reasons")?.let { reasonsNode ->
+                if (!reasonsNode.isArray) invalid(location.child("reasons"), "Expected an array.")
+                if (reasonsNode.size() > 8) {
+                    invalid(location.child("reasons"), "Array must contain at most 8 entries.",
+                        ErrorCode.INPUT_LIMIT_EXCEEDED)
+                }
+                reasonsNode.toList().map { string(it, location.child("reasons")) }
+            } ?: emptyList(),
+            databaseOid = value.get("source")?.let { source ->
+                integer(objectNode(source, location.child("source"),
+                    setOf("database_oid", "postgres_version")).get("database_oid"),
+                    location.child("source").child("database_oid"))
+            },
+            postgresVersion = value.get("source")?.let { source ->
+                string(objectNode(source, location.child("source"),
+                    setOf("database_oid", "postgres_version")).get("postgres_version"),
+                    location.child("source").child("postgres_version"))
+            },
+        )
+        if (origin.periodSeconds <= 0.0 || !origin.periodSeconds.isFinite()) {
+            invalid(location.child("window").child("period_seconds"), "Window period must be positive and finite.")
+        }
+        if (constraints.writeBudgetUnitsPerHour != null && !origin.complete) {
+            invalid(location, "An enabled write budget requires a complete observed write profile.",
+                ErrorCode.INVALID_WRITE_PROFILE)
+        }
+        return origin
     }
 
     private fun provenance(node: JsonNode?, queries: List<QueryInput>, profiles: List<Profile>): WorkloadProvenance? {
@@ -435,6 +512,9 @@ class WorkloadReader {
         if (value.isEmpty() || '\u0000' in value) invalid(location, "Expected a nonempty identifier without NUL.")
         return value
     }
+
+    private fun boolean(node: JsonNode?, location: Location): Boolean =
+        node?.takeIf { it.isBoolean }?.asBoolean() ?: invalid(location, "Expected a boolean.")
 
     private fun string(node: JsonNode?, location: Location, allowBlank: Boolean = false): String {
         if (node == null || !node.isString) invalid(location, "Expected a nonblank string.")

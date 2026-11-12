@@ -2,7 +2,20 @@ package ru.itmo.indexbudget.domain
 
 enum class Objective { ROBUST, MEAN }
 
-enum class WriteRateSource { MANUAL }
+enum class WriteRateSource { MANUAL, OBSERVED }
+
+/** Origin of a supplied write profile: one explicitly chosen observation window, never a silent mix.
+ * [complete] is false whenever any fault was detected; an incomplete observation never silently
+ * disables an enabled write budget. Rates themselves live in [WorkloadInput.tableWriteRates]. */
+data class WriteRatesOrigin(
+    val from: String,
+    val to: String,
+    val periodSeconds: Double,
+    val complete: Boolean,
+    val reasons: List<String>,
+    val databaseOid: Long? = null,
+    val postgresVersion: String? = null,
+)
 
 /** Input v2. Boundary validation belongs to the CLI; cross-table validation follows SQL resolution. */
 data class WorkloadInput(
@@ -12,6 +25,8 @@ data class WorkloadInput(
     val schemaVersion: Int = 2,
     val objective: Objective = Objective.ROBUST,
     val tableWriteRates: Map<String, TableWriteRates>? = null,
+    /** Present exactly when the rates were observed from a snapshot window; null keeps manual input. */
+    val tableWriteRatesOrigin: WriteRatesOrigin? = null,
     /** Optional separate evaluation; never contributes candidates or incumbents to ordinary search. */
     val manualIndexes: List<IndexDefinition>? = null,
     val analysisMode: AnalysisMode = AnalysisMode.NORMAL,

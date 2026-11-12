@@ -18,7 +18,7 @@ class ObservedWorkloadImporter(private val catalog: ImportCatalog) {
     fun build(frequencies: FrequencyProfiles, examples: List<SqlExample>, options: Map<String, Any?>,
         context: RunContext = RunContext()): ImportedWorkload {
         context.checkDeadline()
-        if (options.keys.any { it !in setOf("constraints", "objective", "table_write_rates", "analysis_mode", "candidate_ranking") })
+        if (options.keys.any { it !in setOf("constraints", "objective", "table_write_rates", "table_write_rates_origin", "analysis_mode", "candidate_ranking") })
             ImportJson.fail("Import options may only specify budgets, objective, write rates and analysis presets.")
         val profiles = frequencies.profiles
         if (profiles.size !in 1..3 || profiles.map { it.id }.distinct().size != profiles.size)

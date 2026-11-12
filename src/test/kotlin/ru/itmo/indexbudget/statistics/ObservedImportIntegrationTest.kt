@@ -18,6 +18,8 @@ import java.io.StringWriter
 import java.nio.file.Files
 import java.nio.file.Path
 import java.sql.Connection
+import java.time.Duration
+import java.time.Instant
 import java.sql.DriverManager
 import java.util.UUID
 
@@ -46,6 +48,138 @@ class ObservedImportIntegrationTest {
         val json = ImportJson.mapper.readTree(Files.readAllBytes(manifest))
         assertEquals("failed", json["status"].asString())
         assertTrue(json["entries"].any { it["reason"].asString() == "SQL_REJECTED" })
+    }
+
+    @Test
+    fun `an observed table write window yields one write profile and refuses silent fallbacks`() {
+        val source = UUID.randomUUID()
+        val schema = "write_probe_" + UUID.randomUUID().toString().replace("-", "")
+        connection().use { c -> c.createStatement().use { statement ->
+            statement.execute("CREATE EXTENSION IF NOT EXISTS pg_stat_statements")
+            statement.execute("CREATE SCHEMA $schema")
+            statement.execute("CREATE TABLE $schema.records(id integer PRIMARY KEY, value integer)")
+            statement.execute("INSERT INTO $schema.records SELECT i, i FROM generate_series(1, 100) i")
+            statement.execute("ANALYZE $schema.records")
+        } }
+
+        data class Counters(val inserts: Long, val updates: Long, val deletes: Long, val hot: Long, val oid: Long,
+            val databaseOid: Long, val at: Instant)
+        fun counters(): Counters = connection().use { c -> c.createStatement().use { statement ->
+            statement.executeQuery(
+                "SELECT t.n_tup_ins, t.n_tup_upd, t.n_tup_del, t.n_tup_hot_upd, t.relid, d.oid, now() " +
+                    "FROM pg_catalog.pg_stat_user_tables t, pg_catalog.pg_database d " +
+                    "WHERE t.schemaname OPERATOR(pg_catalog.=) '$schema' AND t.relname OPERATOR(pg_catalog.=) 'records' " +
+                    "AND d.datname OPERATOR(pg_catalog.=) pg_catalog.current_database()"
+            ).use { rows ->
+                check(rows.next())
+                Counters(rows.getLong(1), rows.getLong(2), rows.getLong(3), rows.getLong(4), rows.getLong(5),
+                    rows.getLong(6), rows.getTimestamp(7).toInstant())
+            }
+        } }
+
+        val before = counters()
+        connection().use { c -> c.createStatement().use { statement ->
+            repeat(10) { statement.execute("INSERT INTO $schema.records VALUES (1000 + $it, $it)") }
+            repeat(5) { statement.execute("UPDATE $schema.records SET value = -value WHERE id OPERATOR(pg_catalog.=) ${it + 1}") }
+            repeat(2) { statement.execute("DELETE FROM $schema.records WHERE id OPERATOR(pg_catalog.=) ${50 + it}") }
+        } }
+        val after = counters()
+        // Statements window for the read side: one stable query executed between two real collections.
+        val collector = JdbcStatisticsCollector({ connection() })
+        // Stable initial counter: never invent a missing starting observation.
+        connection().use { c -> c.createStatement().use { statement ->
+            statement.executeQuery("SELECT value FROM $schema.records WHERE value = 7").close()
+        } }
+        val statementBefore = collector.collect(source, SnapshotLimits(), RunContext())
+        connection().use { c -> c.createStatement().use { statement ->
+            repeat(3) { statement.executeQuery("SELECT value FROM $schema.records WHERE value = 7").close() }
+        } }
+        val statementAfter = collector.collect(source, SnapshotLimits(), RunContext())
+        // pg_stat_statements normalizes literals, so the saved text keeps the normalized form.
+        val statementRow = statementAfter.entries.single {
+            it.query?.startsWith("SELECT value FROM $schema.records") == true
+        }
+        val exampleKey = StatisticsKey(source, statementRow.dbid, statementRow.userid,
+            requireNotNull(statementRow.queryid), statementRow.toplevel)
+
+        fun tableSnapshot(at: Instant, count: Counters) = TableWriteSnapshot(
+            snapshotId = UUID.nameUUIDFromBytes((source.toString() + at).toByteArray()),
+            source = TableWriteSource(source, count.databaseOid, statementRow.userid, trackCounts = true,
+                postgresVersion = "16.8", statsReset = null),
+            startedAt = at.toString(), finishedAt = at.toString(),
+            entries = listOf(TableWriteEntry(count.oid, schema, "records",
+                count.inserts, count.updates, count.deletes, count.hot)))
+        Files.write(directory.resolve("write-before.json"), TableWriteSnapshotJson.render(tableSnapshot(before.at, before)))
+        Files.write(directory.resolve("write-after.json"), TableWriteSnapshotJson.render(tableSnapshot(after.at, after)))
+        Files.write(directory.resolve("write-examples.json"), ImportJson.mapper.writeValueAsBytes(mapOf(
+            "schema_version" to 1, "kind" to "pg_stat_statements_examples",
+            "examples" to listOf(mapOf("key" to ImportJson.key(exampleKey),
+                "sql" to "SELECT value FROM $schema.records WHERE value = 7",
+                "search_path" to listOf("pg_catalog", schema))))))
+        Files.write(directory.resolve("stmt-before.json"), SnapshotJson().render(statementBefore))
+        Files.write(directory.resolve("stmt-after.json"), SnapshotJson().render(statementAfter))
+
+        fun config(name: String, vararg extra: Pair<String, Any?>, writeBudget: Int? = null): Path {
+            val path = directory.resolve(name)
+            Files.write(path, ImportJson.mapper.writeValueAsBytes(mapOf(
+                "schema_version" to 1, "kind" to "pg_stat_statements_import_config",
+                "windows" to listOf(mapOf("id" to "observed", "weight" to 1,
+                    "before" to "stmt-before.json", "after" to "stmt-after.json")),
+                "examples" to "write-examples.json",
+                "constraints" to mapOf("storage_budget_bytes" to 10_000_000,
+                    "write_budget_units_per_hour" to writeBudget)) + extra.toMap()))
+            return path
+        }
+        fun run(path: Path, output: String): Pair<Int, String> {
+            val err = StringWriter()
+            val status = ImportWorkloadCommand { connection() }.execute(arrayOf("import-workload",
+                "--config", path.toString(), "--output-dir", directory.resolve(output).toString()),
+                PrintWriter(StringWriter(), true), PrintWriter(err, true))
+            return status to err.toString()
+        }
+
+        // One explicit observed window produces the shared write profile with its origin.
+        val windowConfig = config("write-config.json", "table_write_window" to
+            mapOf("before" to "write-before.json", "after" to "write-after.json"))
+        val (status, err) = run(windowConfig, "write-imported")
+        assertEquals(0, status, err)
+        val input = WorkloadReader().read(directory.resolve("write-imported/workload.json"))
+        val rates = requireNotNull(input.tableWriteRates).getValue("$schema.records")
+        assertEquals(WriteRateSource.OBSERVED, rates.source)
+        val elapsedSeconds = Duration.between(before.at, after.at).toNanos() / 1.0e9
+        assertEquals(10.0 * 3600.0 / elapsedSeconds, rates.insertsPerHour, 0.5)
+        assertEquals(5.0 * 3600.0 / elapsedSeconds, rates.updatesPerHour, 0.5)
+        assertEquals(2.0 * 3600.0 / elapsedSeconds, rates.deletesPerHour, 0.5)
+        val origin = requireNotNull(input.tableWriteRatesOrigin)
+        assertEquals(true, origin.complete)
+        val manifest = ImportJson.mapper.readTree(
+            Files.readAllBytes(directory.resolve("write-imported/import-manifest.json")))
+        assertEquals("pg_stat_user_tables", manifest["write_profile"]["source"].asString())
+        assertTrue(manifest["write_profile"]["limitations"].toList().map { it.asString() }
+            .contains("observed_rows_never_mixed_with_pg_stat_statements"))
+
+        // A counter decrease with an enabled budget fails honestly; it never falls back to manual values.
+        val decreased = Files.readString(directory.resolve("write-after.json"))
+            .replaceFirst(Regex("\"n_tup_ins\":(\\d+)"), "\"n_tup_ins\":1")
+        Files.write(directory.resolve("write-decreased.json"), decreased.toByteArray())
+        val incompleteConfig = config("write-incomplete.json", "table_write_window" to
+            mapOf("before" to "write-before.json", "after" to "write-decreased.json"),
+            writeBudget = 100)
+        val (incompleteStatus, incompleteErr) = run(incompleteConfig, "write-incomplete-imported")
+        assertEquals(2, incompleteStatus)
+        assertTrue(incompleteErr.contains("INVALID_WRITE_PROFILE"), incompleteErr)
+        assertFalse(Files.exists(directory.resolve("write-incomplete-imported/workload.json")))
+
+        // Manual and observed write sources are mutually exclusive; the choice stays explicit.
+        val bothConfig = config("write-both.json",
+            "table_write_window" to mapOf("before" to "write-before.json", "after" to "write-after.json"),
+            "table_write_rates" to mapOf("$schema.records" to
+                mapOf("inserts_per_hour" to 1, "updates_per_hour" to 1, "deletes_per_hour" to 1)))
+        val (bothStatus, bothErr) = run(bothConfig, "write-both-imported")
+        assertEquals(2, bothStatus)
+        assertTrue(bothErr.contains("not both"), bothErr)
+
+        connection().use { c -> c.createStatement().use { it.execute("DROP SCHEMA IF EXISTS $schema CASCADE") } }
     }
 
     @Test

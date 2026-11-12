@@ -21,7 +21,12 @@ indexbudget analyze --workload imported/workload.json --output-dir analysis
 
 Конфигурация v1: `kind: pg_stat_statements_import_config`, `windows` (1–3 записи
 `id, weight, before, after`), путь `examples`, обычные `constraints` и необязательные
-`objective`, `table_write_rates`, `analysis_mode`, `candidate_ranking`.
+`objective`, `analysis_mode`, `candidate_ranking` и ровно один источник профиля записи:
+ручной `table_write_rates` или `table_write_window {before, after}` — пара снимков
+`pg_stat_user_tables_snapshot` v1, из которой считается наблюдаемый write profile
+(изменённые строки в час, [формат и причины неполноты](table-write-profile.md)).
+Одновременное указание обоих источников — ошибка; неполное окно при включённом
+write budget — `INVALID_WRITE_PROFILE` без молчаливого отключения лимита.
 Пути снимков и примеров отсчитываются от каталога конфигурации. Повтор той же пары
 снимков отклоняется расчётчиком #66; разные профили не суммируются в общий трафик.
 Окончательная проверка бюджетов/write profile выполняется существующими input/resolution
