@@ -95,7 +95,7 @@ function installTour() {
     {target:'.editor-panel', tab:'examples', title:'Добавь пример запроса', text:'Во вкладке «Примеры» есть поиск по группе, диапазон дат и JOIN. Выбери запрос по описанию. После добавления его SQL и частоты можно изменить.'},
     {target:'.editor-panel', tab:'queries', title:'Проверь SQL', text:'Добавь свой SQL или измени готовый. Во вкладке JSON можно посмотреть и скачать точный вход анализа.'},
     {target:'.editor-panel', tab:'profiles', title:'Задай частоты и веса', text:'Для каждого сценария укажи частоты SQL в час и его вес. Частоты принимаются целыми числами от 0 до 1 000 000. Анализ использует их в расчёте, а не выполняет столько запросов.'},
-    {target:'.schema-panel', title:'Посмотри схему', text:'На карте видны таблицы, колонки, внешние ключи и существующие индексы датасета. Подпись показывает источник схемы: шаблон или PostgreSQL.'},
+    {target:'.editor-panel', tab:'schema', title:'Посмотри схему', text:'Во вкладке «Схема» доступны DDL и индексы. Кнопка «Показать диаграмму» открывает горизонтальную схему базы в отдельном окне.'},
     {target:'.budget-panel', title:'Один запуск или серия бюджетов', text:'Запусти один анализ или сравни 3–5 бюджетов. В серии SQL, частоты и исходный пул индексов общие. Место задаётся в байтах, запись в условных ед./ч. Результаты попадут в один отчёт.'},
     {target:'.strategy-grid', title:'Выбери цель и глубину', text:'Robust учитывает худший сценарий, mean — средний с учётом весов. Глубина задаёт ресурсы поиска; больше времени не гарантирует лучший результат.'},
     {target:'.advanced', advanced:true, title:'Дополнительные настройки', text:'Здесь можно загрузить профиль записи из CLI, задать предел ухудшения запросов и сравнить ручной набор индексов. Для первого запуска подойдут настройки датасета.'},
@@ -284,7 +284,7 @@ function switchTemplate(id) {
 }
 
 function examplesTemplate() {
-  return templates.find(t => Array.isArray(t.examples) && t.examples.length);
+  return templates.find(t => t.id === '04-scenarios');
 }
 
 function templateExamples(template) {
@@ -370,7 +370,7 @@ function tableCountLabel(count) {
 }
 
 function renderAll() {
-  renderTemplates(); renderEditor(); renderControls(); renderDiagram(); renderSummary();
+  renderTemplates(); renderEditor(); renderControls(); renderSummary();
 }
 
 function renderControls() {
@@ -464,7 +464,7 @@ function renderExamples() {
   const template = templates.find(t => t.id === state.template_id);
   const examples = templateExamples(template);
   const limit = state.workload.queries.length >= 20;
-  const profileNames = {normal: 'Обычный день', peak: 'Пик'};
+  const profileNames = Object.fromEntries(Object.entries(template.example_profiles || {}).map(([id, text]) => [id, text.split(':')[0]]));
   $('editor-content').innerHTML = `<div class="examples-content"><h3>Примеры запросов · ${escape(template.name)}</h3>
     <p class="examples-frequency-note">Для нового профиля добавляется исходная частота примера; её можно изменить во вкладке «Нагрузка».</p>
     ${limit ? '<p class="examples-limit" role="status">В нагрузке 20 запросов. Удали один, чтобы добавить новый пример.</p>' : ''}
@@ -483,7 +483,8 @@ function lineNumbers() {
 
 function renderProfiles() {
   const {queries, profiles} = state.workload;
-  $('editor-content').innerHTML = `<div class="profile-content"><div class="subheading"><h4>Частоты и веса</h4>${helpButton('profiles')}</div><div class="profile-table-wrap"><table class="profile-table"><thead><tr><th>Запрос / профиль</th>${profiles.map((p,i) => `<th><div class="profile-name"><input value="${escape(p.id)}" data-profile-id="${i}" aria-label="ID профиля ${i+1}" required><button type="button" data-delete-profile="${i}" ${profiles.length===1?'disabled':''} aria-label="Удалить профиль ${escape(p.id)}">×</button></div></th>`).join('')}</tr></thead><tbody>
+  const descriptions = templates.find(t => t.id === state.template_id)?.example_profiles || {};
+  $('editor-content').innerHTML = `<div class="profile-content"><div class="subheading"><h4>Частоты и веса</h4>${helpButton('profiles')}</div><div class="profile-table-wrap"><table class="profile-table"><thead><tr><th>Запрос / профиль</th>${profiles.map((p,i) => `<th><div class="profile-name"><input value="${escape(p.id)}" data-profile-id="${i}" aria-label="ID профиля ${i+1}" required><button type="button" data-delete-profile="${i}" ${profiles.length===1?'disabled':''} aria-label="Удалить профиль ${escape(p.id)}">×</button></div>${descriptions[p.id] ? `<div class="profile-caption">${escape(descriptions[p.id].split(':')[0])}</div>` : ''}</th>`).join('')}</tr></thead><tbody>
     <tr><td>Вес сценария</td>${profiles.map((p,i) => `<td><input type="number" min="0" step="any" value="${escape(p.weight)}" data-weight="${i}" aria-label="Вес ${escape(p.id)}" required><div class="profile-share" data-share="${i}"></div></td>`).join('')}</tr>
     ${queries.map((q,qi) => `<tr><td>${escape(q.id)}</td>${profiles.map((p,pi) => `<td><input type="number" min="0" max="${maxCallsPerHour}" step="1" value="${escape(p.calls_per_hour[q.id])}" data-frequency-profile="${pi}" data-frequency-query="${qi}" aria-label="Частота ${escape(q.id)} в ${escape(p.id)}" required></td>`).join('')}</tr>`).join('')}</tbody><tfoot><tr><td>Всего вызовов/ч</td>${profiles.map((p,i)=>`<td data-total="${i}"></td>`).join('')}</tr></tfoot></table></div><div class="profile-actions"><button type="button" id="add-profile" class="quiet-button" ${profiles.length>=3?'disabled':''}>+ Профиль нагрузки</button></div></div>`;
   updateProfiles();
@@ -501,7 +502,23 @@ function updateProfiles() {
 
 function renderSchema() {
   const template = templates.find(t => t.id === state.template_id);
-  $('editor-content').innerHTML = `<div class="schema-content"><h4 id="schema-sql-label">Схема и существующие индексы</h4><pre class="code" tabindex="0" aria-labelledby="schema-sql-label">${escape(template.schema_sql)}</pre></div>`;
+  const indexes = template.catalog.tables.flatMap(table => table.indexes);
+  $('editor-content').innerHTML = `<div class="schema-content"><div class="schema-toolbar"><h4 id="schema-sql-label">Схема</h4><button type="button" id="show-diagram" class="quiet-button" aria-haspopup="dialog" aria-controls="schema-dialog">Показать диаграмму ↗</button></div><pre class="code" tabindex="0" aria-labelledby="schema-sql-label">${escape(template.schema_sql)}</pre><h4 id="schema-indexes-label">Существующие индексы</h4>${indexes.length ? `<pre class="code" tabindex="0" aria-labelledby="schema-indexes-label">${escape(indexes.join(';\n') + ';')}</pre>` : '<p class="field-note">В исходной базе нет индексов.</p>'}</div>`;
+}
+
+function showSchemaDiagram() {
+  const template = templates.find(t => t.id === state.template_id);
+  const url = `/diagrams/${encodeURIComponent(template.id)}-v${template.version}.svg`;
+  $('diagram-title').textContent = template.name + ' · схема базы';
+  $('schema-diagram-image').src = url;
+  $('schema-diagram-image').alt = `Таблицы и связи базы «${template.name}», версия ${template.version}`;
+  $('diagram-original').href = url;
+  $('diagram-viewport').classList.remove('original-size');
+  $('diagram-zoom').setAttribute('aria-pressed', 'false');
+  $('diagram-zoom').textContent = 'Масштаб 100%';
+  $('schema-dialog').showModal();
+  $('diagram-viewport').scrollTop = 0;
+  $('diagram-viewport').scrollLeft = 0;
 }
 
 function materialize() {
@@ -528,19 +545,6 @@ function renderJson() {
   $('editor-content').innerHTML = `<div class="json-content"><div class="json-toolbar"><button type="button" id="download-json" class="quiet-button" ${valid?'':'disabled'}>↓ Скачать JSON</button><span class="hint">${valid ? format(new TextEncoder().encode(text).length) + ' байт' : 'Исправь дополнительные параметры'}</span></div><pre>${escape(text)}</pre></div>`;
 }
 
-function renderDiagram() {
-  const catalog = state.catalog;
-  $('schema-source').textContent = state.catalogSource === 'database' ? '● Схема из PostgreSQL' : '● Схема выбранного датасета';
-  const column = c => `<div class="column-row"><b>${c.primary?'PK':catalog.relations.some(r=>r.label.includes(`(${c.name})`))?'FK':'·'}</b><span>${escape(c.name)}</span><span class="column-type">${escape(c.type.replace('timestamp without time zone','timestamp'))}</span></div>`;
-  $('diagram').innerHTML = catalog.tables.map((t,i) => `<article class="db-table"><div class="db-table-head"><strong>${escape(t.name.replace(/^public\./,''))}</strong><span>${format(Math.max(0,t.rows))} строк</span></div><div class="db-table-body">${t.columns.slice(0,7).map(column).join('')}</div>${t.columns.length>7?`<details><summary>Ещё ${t.columns.length-7} колонок</summary>${t.columns.slice(7).map(column).join('')}</details>`:''}${t.indexes.length?`<details><summary>${t.indexes.length} существующих инд.</summary>${t.indexes.map(x=>`<p style="overflow-wrap:anywhere;margin-top:8px">${escape(x)}</p>`).join('')}</details>`:''}</article>${i < catalog.tables.length-1 && catalog.relations.length ? '<div class="relation">Связь по внешнему ключу</div>':''}`).join('') + (catalog.tables.length ? '' : '<p class="hint">В схеме пока нет таблиц</p>');
-  $('schema-stats').innerHTML = `<span>${catalog.tables.length} табл. · ${catalog.tables.reduce((n,t)=>n+t.columns.length,0)} колонок</span><span>${catalog.relations.length} связей</span>`;
-  if (catalog.relations.length) {
-    const details = document.createElement('details'); details.className = 'field-note';
-    const summary = document.createElement('summary'); summary.textContent = 'Внешние ключи'; details.append(summary);
-    catalog.relations.forEach(r => { const p = document.createElement('p'); p.textContent = `${r.from} → ${r.to}: ${r.label}`; p.style.overflowWrap = 'anywhere'; details.append(p); });
-    $('diagram').append(details);
-  }
-}
 
 function renderSummary() {
   const w = state.workload, t = templates.find(t=>t.id===state.template_id);
@@ -691,7 +695,8 @@ async function poll(id) {
       history.replaceState(null,'','/');
       if (job.catalog) {
         state.catalog = job.catalog; state.catalogSource = 'database';
-        renderDiagram(); persist();
+        if (tab === 'schema') renderSchema();
+        persist();
       }
       if (job.status === 'failed') error(job.error || 'Не удалось завершить запуск.');
       else if (job.report_url) location.assign(job.report_url);
@@ -724,6 +729,13 @@ document.addEventListener('click', e => {
   if (d.deleteProfile !== undefined) { w.profiles.splice(+d.deleteProfile,1); renderEditor(); changed(); return; }
   if (d.removeRate !== undefined) { delete w.table_write_rates[Object.keys(w.table_write_rates)[+d.removeRate]]; if (!Object.keys(w.table_write_rates).length) delete w.table_write_rates; renderRates(); changed(); return; }
   switch(button.id) {
+    case 'show-diagram': showSchemaDiagram(); break;
+    case 'diagram-zoom': {
+      const original = $('diagram-viewport').classList.toggle('original-size');
+      button.setAttribute('aria-pressed', String(original));
+      button.textContent = original ? 'Вписать в окно' : 'Масштаб 100%';
+      break;
+    }
     case 'reset': loadTemplate(state.template_id); break;
     case 'add-query': {
       let n=w.queries.length+1; while(w.queries.some(q=>q.id===`query_${n}`)) n++;
@@ -845,6 +857,11 @@ async function init() {
   } catch(e) { error(e.message); $('connection').hidden=false; $('connection').textContent='Не удалось подключиться к локальному серверу.'; }
 }
 
+$('schema-dialog').addEventListener('click', event => {
+  const dialog = $('schema-dialog'), rect = dialog.getBoundingClientRect();
+  if (event.target === dialog && (event.clientX < rect.left || event.clientX > rect.right
+      || event.clientY < rect.top || event.clientY > rect.bottom)) dialog.close();
+});
 const closeHelp = installHelp();
 const tour = installTour();
 window.addEventListener('beforeunload',()=>{if(state)persist();});

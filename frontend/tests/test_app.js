@@ -7,27 +7,13 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const source = fs.readFileSync(path.join(__dirname, '../static/app.js'), 'utf8');
-const templates = fs.readdirSync(path.join(__dirname, '../templates')).sort()
-  .map(file => JSON.parse(fs.readFileSync(path.join(__dirname, '../templates', file), 'utf8')));
+const {execFileSync} = require('node:child_process');
+const templates = JSON.parse(execFileSync('python3', ['-c',
+  'import json; from pathlib import Path; from scenarios import load_templates; print(json.dumps(list(load_templates(Path.cwd()).values())))'],
+  {cwd: path.join(__dirname, '..'), encoding: 'utf8'}));
 const copy = value => JSON.parse(JSON.stringify(value));
 const scenarios = JSON.parse(fs.readFileSync(path.join(__dirname, '../../demo/scenarios/workload.json'), 'utf8'));
-const catalog = JSON.parse(fs.readFileSync(path.join(__dirname, '../../demo/scenarios/catalog.json'), 'utf8'));
-const initialIds = ['records_by_group', 'records_by_value', 'category_join'];
-const scenarioTemplate = {...copy(templates[0]), id: '04-scenarios', name: 'Чтение и запись', workload: copy(scenarios),
-  examples: catalog.examples.map(item => {
-    const query = scenarios.queries.find(query => query.id === item.query_id);
-    return {...query, name: item.name, purpose: item.purpose, syntax_hint: item.syntax_hint,
-      statement_kind: query.sql.split(' ')[0].toLowerCase(),
-      calls_per_hour: Object.fromEntries(scenarios.profiles.map(profile => [profile.id, profile.calls_per_hour[query.id]])),
-      cost_guard: scenarios.constraints.query_cost_guards?.[query.id],
-      tables: query.id === 'category_join' ? ['public.records', 'public.groups'] : ['public.records']};
-  })};
-scenarioTemplate.workload.index_methods = ['btree', 'brin', 'hash'];
-scenarioTemplate.workload.queries = scenarioTemplate.workload.queries.filter(query => initialIds.includes(query.id));
-scenarioTemplate.workload.profiles.forEach(profile => {
-  profile.calls_per_hour = Object.fromEntries(Object.entries(profile.calls_per_hour).filter(([id]) => initialIds.includes(id)));
-});
-templates.push(scenarioTemplate);
+const scenarioTemplate = templates.find(t => t.id === '04-scenarios');
 
 function app() {
   const elements = new Map();
@@ -188,7 +174,8 @@ test('сброс шаблона возвращает исходный workload �
   ui.listeners.get('click')[0]({target: {closest: () => ({id: 'reset', dataset: {}, disabled: false})}});
   assert.deepEqual(JSON.parse(ui.run('JSON.stringify(state.workload)')), templates[0].workload);
   assert.deepEqual(JSON.parse(ui.run('JSON.stringify(state.catalog)')), templates[0].catalog);
-  assert.equal(ui.run('guardsText + manualText'), '');
+  assert.deepEqual(JSON.parse(ui.run('guardsText')), templates[0].workload.constraints.query_cost_guards);
+  assert.deepEqual(JSON.parse(ui.run('manualText')), templates[0].workload.manual_indexes);
 });
 
 test('просмотр схемы не создаёт редакторы DDL/seed, вывод экранирован', () => {
@@ -197,9 +184,29 @@ test('просмотр схемы не создаёт редакторы DDL/see
   const markup = ui.element('editor-content').innerHTML;
   assert.doesNotMatch(markup, /<textarea|id="(?:schema-sql|seed-sql)"/);
   assert.match(markup, /&lt;script&gt;/);
-  assert.match(markup, /Схема и существующие индексы/);
+  assert.match(markup, /id="schema-sql-label">Схема<\/h4>/);
   assert.doesNotMatch(markup, /только просмотр|data-help|Схема и данные фиксированы/);
   assert.doesNotMatch(markup, /preview-schema|Проверить схему/);
+});
+
+test('диаграмма открывает статическую схему выбранной базы, не меняя нагрузку', () => {
+  const ui = app();
+  let opened = 0;
+  ui.element('schema-dialog').showModal = () => opened++;
+  ui.element('diagram-viewport').classList.remove = () => {};
+  ui.element('diagram-zoom').setAttribute = () => {};
+  for (const template of templates) {
+    ui.set('currentTemplate', template);
+    ui.run('state = templateState(currentTemplate); renderSchema();');
+    const before = ui.run('JSON.stringify(state.workload)');
+    assert.match(ui.element('editor-content').innerHTML, /id="show-diagram"/);
+    ui.run('showSchemaDiagram()');
+    assert.equal(ui.element('schema-diagram-image').src, `/diagrams/${template.id}-v${template.version}.svg`);
+    assert.equal(ui.element('diagram-original').href, ui.element('schema-diagram-image').src);
+    assert.ok(ui.element('diagram-title').textContent.includes(template.name));
+    assert.equal(ui.run('JSON.stringify(state.workload)'), before);
+  }
+  assert.equal(opened, templates.length);
 });
 
 function scenarioApp() {
@@ -254,6 +261,7 @@ test('новые профили получают явно обозначенну
 
 test('неподходящий датасет, лимит 20 и сломанный guard JSON не изменяют нагрузку', () => {
   const legacy = app();
+  legacy.run('state = templateState(templates.find(t => t.id === "03-wide"));');
   assert.throws(() => legacy.run('addExample("update_payload")'), /датасете/);
   const ui = scenarioApp();
   ui.run('guardsText = "broken";');
@@ -303,17 +311,18 @@ test('библиотека экранирует названия и SQL, пок�
   assert.match(markup, /Уже в нагрузке/);
   assert.match(markup, /исходная частота примера/);
   assert.match(markup, /SQL и условия/);
-  ui.run('state = templateState(templates[0]); renderExamples();');
-  assert.match(ui.element('editor-content').innerHTML, /records_by_group/);
+  ui.run('state = templateState(templates.find(t => t.id === "03-wide")); renderExamples();');
+  assert.match(ui.element('editor-content').innerHTML, /wide/);
   assert.doesNotMatch(ui.element('editor-content').innerHTML, /examples-switch|update_payload/);
 });
 
-test('новый датасет виден первым, но рендер не переключает прежний черновик', () => {
+test('объединённый датасет виден первым и карточка каталога удалена', () => {
   const ui = app();
-  ui.run('renderTemplates()');
+  ui.run('state = templateState(templates.find(t => t.id === "02-shop")); renderTemplates()');
   const markup = ui.element('templates').innerHTML;
-  assert.ok(markup.indexOf('data-template="04-scenarios"') < markup.indexOf('data-template="01-records"'));
-  assert.equal(ui.run('state.template_id'), '01-records');
+  assert.doesNotMatch(markup, /01-records|Каталог записей/);
+  assert.ok(markup.indexOf('data-template="04-scenarios"') < markup.indexOf('data-template="02-shop"'));
+  assert.equal(ui.run('state.template_id'), '02-shop');
 });
 
 test('каждый датасет показывает свои примеры и восстанавливает SQL с частотами', () => {
@@ -367,13 +376,13 @@ test('переключение датасета требует явного по
   const before = ui.run('JSON.stringify(state.workload)');
   let confirmations = 0;
   ui.set('confirm', () => { confirmations++; return false; });
-  ui.run('switchTemplate("01-records")');
+  ui.run('switchTemplate("02-shop")');
   assert.equal(confirmations, 1);
   assert.equal(ui.run('state.template_id'), '04-scenarios');
   assert.equal(ui.run('JSON.stringify(state.workload)'), before);
   ui.set('confirm', () => true);
-  ui.run('switchTemplate("01-records")');
-  assert.equal(ui.run('state.template_id'), '01-records');
+  ui.run('switchTemplate("02-shop")');
+  assert.equal(ui.run('state.template_id'), '02-shop');
 });
 
 test('серия сохраняет workload и передаёт 3–5 исходных бюджетов в CLI-контракте', () => {

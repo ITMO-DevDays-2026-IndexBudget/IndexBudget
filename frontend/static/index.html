@@ -43,7 +43,6 @@
           </section>
         </div>
         <aside class="right-column">
-          <section class="schema-panel"><div class="schema-title"><div><span class="eyebrow">ТАБЛИЦЫ И СВЯЗИ</span><h3>Схема базы</h3></div><span class="database-icon" aria-hidden="true">▤</span></div><div id="schema-source" class="schema-source"></div><div id="diagram" class="diagram"></div><div id="schema-stats" class="schema-stats"></div></section>
           <section class="summary-panel"><div class="eyebrow">ТВОЯ НАГРУЗКА</div><h3 id="summary-title"></h3><dl id="summary"></dl><p class="disclaimer">Оцениваем стоимость планов PostgreSQL. Реальное время выполнения и скорость записи здесь не измеряются.</p></section>
           <p id="saved" class="saved" aria-live="polite">Черновик сохраняется в этом браузере</p>
         </aside>
@@ -53,5 +52,10 @@
     <div id="run-progress" class="run-progress" role="status" aria-live="polite" hidden></div>
     <footer><span>IndexBudget</span></footer>
   </main>
+  <dialog id="schema-dialog" class="schema-dialog" aria-labelledby="diagram-title">
+    <header class="diagram-header"><div><h2 id="diagram-title">Схема базы</h2></div><form method="dialog"><button class="quiet-button" aria-label="Закрыть диаграмму" autofocus>Закрыть ×</button></form></header>
+    <div class="diagram-tools"><button type="button" id="diagram-zoom" class="quiet-button" aria-pressed="false">Масштаб 100%</button><a id="diagram-original" class="text-button" target="_blank" rel="noopener">Открыть SVG ↗</a></div>
+    <div id="diagram-viewport" class="diagram-viewport" tabindex="0" aria-label="Диаграмма базы с прокруткой"><img id="schema-diagram-image" alt=""></div>
+  </dialog>
 </body>
 </html>

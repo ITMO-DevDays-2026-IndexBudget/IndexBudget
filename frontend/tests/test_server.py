@@ -22,7 +22,7 @@ from scenarios import INITIAL_QUERY_IDS, scenario_template, seed_statements
 TEMPLATES = load_templates(ROOT)
 
 
-def request(template_id='01-records'):
+def request(template_id='04-scenarios'):
     t = TEMPLATES[template_id]
     return dict(template_id=t['id'], template_version=t['version'],
                 workload=copy.deepcopy(t['workload']))
@@ -74,12 +74,12 @@ class ValidationTests(unittest.TestCase):
             data = request()
             profiles = data['workload']['profiles']
             if mutation == 'missing':
-                del profiles[0]['calls_per_hour']['records_recent']
+                del profiles[0]['calls_per_hour']['category_join']
             elif mutation == 'negative':
-                profiles[0]['calls_per_hour']['records_recent'] = -1
+                profiles[0]['calls_per_hour']['category_join'] = -1
             elif mutation == 'unused':
                 for p in profiles:
-                    p['calls_per_hour']['records_recent'] = 0
+                    p['calls_per_hour']['category_join'] = 0
             else:
                 profiles[0]['calls_per_hour'] = {k: 0 for k in profiles[0]['calls_per_hour']}
             with self.subTest(mutation=mutation), self.assertRaises(ValueError):
@@ -88,14 +88,14 @@ class ValidationTests(unittest.TestCase):
     def test_frequency_boundaries_and_types(self):
         for value in (0, 1, 1_000_000, 1_000_000.0):
             data = request()
-            data['workload']['profiles'][0]['calls_per_hour']['records_recent'] = value
+            data['workload']['profiles'][0]['calls_per_hour']['category_join'] = value
             with self.subTest(value=value):
                 result = validate_request(data, TEMPLATES)
-                self.assertEqual(result['workload']['profiles'][0]['calls_per_hour']['records_recent'], value)
+                self.assertEqual(result['workload']['profiles'][0]['calls_per_hour']['category_join'], value)
         for value in (-1, .5, 1_000_001, 10**400, True, False, '1', None, float('nan'), float('inf')):
             data = request()
-            data['workload']['profiles'][0]['calls_per_hour']['records_recent'] = value
-            with self.subTest(value=value), self.assertRaisesRegex(ValueError, 'records_recent.*целым числом'):
+            data['workload']['profiles'][0]['calls_per_hour']['category_join'] = value
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, 'category_join.*целым числом'):
                 validate_request(data, TEMPLATES)
 
     def test_frequency_rule_does_not_restrict_write_rates_or_weights(self):
@@ -130,7 +130,7 @@ class ValidationTests(unittest.TestCase):
 
     def test_client_dataset_and_unknown_template_are_rejected(self):
         for key in ('schema_sql', 'seed_sql'):
-            for value in ('DROP TABLE public.records;', '', None, TEMPLATES['01-records'][key]):
+            for value in ('DROP TABLE public.records;', '', None, TEMPLATES['04-scenarios'][key]):
                 data = request()
                 data[key] = value
                 with self.subTest(key=key, value=value), self.assertRaisesRegex(ValueError, 'серверным шаблоном'):
@@ -160,7 +160,7 @@ class ScenarioLibraryTests(unittest.TestCase):
         workload = read_json(ROOT.parent / 'demo/scenarios/workload.json')
         metadata = read_json(ROOT.parent / 'demo/scenarios/catalog.json')
         template = TEMPLATES['04-scenarios']
-        self.assertEqual(set(TEMPLATES), {'01-records', '02-shop', '03-wide', '04-scenarios', '04-events-brin', '05-lookup-hash'})
+        self.assertEqual(set(TEMPLATES), {'02-shop', '03-wide', '04-scenarios', '04-events-brin', '05-lookup-hash'})
         self.assertEqual([example['id'] for example in template['examples']],
                          [query['id'] for query in workload['queries']])
         self.assertEqual(len(template['examples']), 9)
@@ -215,7 +215,7 @@ class ScenarioLibraryTests(unittest.TestCase):
             write_json(directory / 'catalog.json', {'schema_version': 2})
             write_json(directory / 'workload.json', {})
             with self.assertRaisesRegex(ValueError, 'Неподдержанная версия'):
-                scenario_template(repo, TEMPLATES['01-records'])
+                scenario_template(repo)
 
 
 class JobTests(unittest.TestCase):
@@ -286,7 +286,7 @@ class JobTests(unittest.TestCase):
     def test_analysis_role_is_from_server_template_not_client_input(self):
         runner = FakeRunner()
         jobs = self.jobs(runner)
-        for template_id, expected in (('04-scenarios', 'frontend_scenarios'), ('01-records', 'frontend_reader')):
+        for template_id, expected in (('04-scenarios', 'frontend_scenarios'), ('02-shop', 'frontend_reader')):
             data = request(template_id)
             data['analysis_role'] = 'postgres'
             id = jobs.submit(data)['run_id']
@@ -408,20 +408,20 @@ class HttpTests(unittest.TestCase):
         for endpoint in ('/api/runs', '/api/schema-previews'):
             for value in (-1, .5, 1_000_001):
                 data = request()
-                data['workload']['profiles'][0]['calls_per_hour']['records_recent'] = value
+                data['workload']['profiles'][0]['calls_per_hour']['category_join'] = value
                 with self.subTest(endpoint=endpoint, value=value):
                     with self.assertRaises(HTTPError) as caught:
                         self.post(endpoint, data)
                     with caught.exception as response:
                         self.assertEqual(response.code, 400)
-                        self.assertIn('records_recent', json.load(response)['error'])
+                        self.assertIn('category_join', json.load(response)['error'])
         self.assertEqual(self.runner.prepared, [])
 
     def test_valid_api_request_publishes_original_sql_and_trusted_dataset(self):
         data = request()
         sql = '\nSELECT id FROM public.records WHERE group_id = 42;  '
         data['workload']['queries'][0]['sql'] = sql
-        data['workload']['profiles'][0]['calls_per_hour']['records_recent'] = 1_000_000
+        data['workload']['profiles'][0]['calls_per_hour']['category_join'] = 1_000_000
         with self.post('/api/runs', data) as response:
             self.assertEqual(response.status, 202)
             item = json.load(response)
@@ -433,7 +433,7 @@ class HttpTests(unittest.TestCase):
         with urlopen(self.base + prefix + '/workload.json', timeout=5) as response:
             self.assertEqual(json.load(response)['queries'][0]['sql'], sql)
         with urlopen(self.base + prefix + '/demo-config.json', timeout=5) as response:
-            self.assertEqual(json.load(response)['schema_sql'], TEMPLATES['01-records']['schema_sql'])
+            self.assertEqual(json.load(response)['schema_sql'], TEMPLATES['04-scenarios']['schema_sql'])
 
 
     def test_draining_api_rejects_both_post_endpoints_with_503(self):
@@ -483,7 +483,7 @@ class PreparationTests(unittest.TestCase):
         calls = []
         runner = LocalRunner()
         runner.db = lambda sql, database='frontend_demo': calls.append((database, sql)) or '{"tables": []}'
-        template = TEMPLATES['01-records']
+        template = TEMPLATES['04-scenarios']
         snapshot = {**request(), 'schema_sql': template['schema_sql'], 'seed_sql': template['seed_sql']}
         unvalidated_sql = 'DROP ROLE frontend_reader;'
         snapshot['workload']['queries'][0]['sql'] = unvalidated_sql
@@ -505,8 +505,8 @@ class PreparationTests(unittest.TestCase):
         self.assertIn('ALTER ROLE frontend_scenarios SET default_transaction_read_only = on', grants)
         self.assertNotIn('TO frontend_reader;', grants.split('GRANT UPDATE')[1])
         calls.clear()
-        template = TEMPLATES['01-records']
-        runner.prepare({**request(), 'schema_sql': template['schema_sql'], 'seed_sql': template['seed_sql']})
+        template = TEMPLATES['02-shop']
+        runner.prepare({**request('02-shop'), 'schema_sql': template['schema_sql'], 'seed_sql': template['seed_sql']})
         self.assertEqual(runner.analysis_role, 'frontend_reader')
         self.assertNotIn('GRANT UPDATE', '\n'.join(calls))
         calls.clear()
@@ -656,7 +656,7 @@ server.main()
                 self.assertTrue(select.select([process.stdout], [], [], 5)[0], 'server did not start')
                 base = process.stdout.readline().strip().split(' → ')[-1]
                 ids = []
-                for template_id in ('01-records', '02-shop'):
+                for template_id in ('04-scenarios', '02-shop'):
                     req = Request(base + '/api/runs', json.dumps(request(template_id)).encode(),
                                   {'Content-Type': 'application/json'})
                     with urlopen(req, timeout=5) as response:
