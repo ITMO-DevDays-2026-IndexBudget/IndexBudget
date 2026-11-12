@@ -43,7 +43,11 @@ internal class JSqlParserNameResolver(private val catalog: CatalogSnapshot, priv
         return ResolvedWorkload(parsed.input, queries)
     }
 
-    private inner class QueryScope(private val query: QueryInput, private val select: PlainSelect, private val statement: ValidatedSql?) {
+    private inner class QueryScope(
+        private val query: QueryInput,
+        private val select: PlainSelect,
+        private val statement: ValidatedSql?,
+    ) {
         private val bindings = mutableListOf<Binding>()
         private val referenced = linkedSetOf<ColumnRef>()
         private val projected = linkedSetOf<ColumnRef>()
@@ -54,16 +58,7 @@ internal class JSqlParserNameResolver(private val catalog: CatalogSnapshot, priv
         fun resolve(): ResolvedQuery {
             bindTables()
             val kind = statement?.kind ?: StatementKind.SELECT
-            if (kind == StatementKind.SELECT) resolveProjection() else {
-                if (bindings.single().table.ref.schema.startsWith("pg_temp")) fail(ErrorCode.UNSUPPORTED_SQL, "Temporary DML targets are unsupported.")
-                for ((column, value) in statement?.assignments.orEmpty()) {
-                    context.checkDeadline()
-                    val bound = resolveColumn(column)
-                    if (!modified.add(bound.ref)) fail(ErrorCode.UNSUPPORTED_SQL, "Repeated SET target column.")
-                    referenced += bound.ref
-                    literalTypes.requireAssignment(bound.column, value)
-                }
-            }
+            if (kind == StatementKind.SELECT) resolveProjection() else resolveModifiedColumns()
             val predicates = mutableListOf<ResolvedPredicate>()
             val conditions = buildList {
                 select.where?.let { add(resolveCondition(it, PredicateSource.WHERE, bindings, predicates)) }
@@ -91,6 +86,20 @@ internal class JSqlParserNameResolver(private val catalog: CatalogSnapshot, priv
             return ResolvedQuery(query.id, query.sql, bindings.mapTo(linkedSetOf()) { it.table.ref },
                 referenced, predicates, order, projected, selectsAll,
                 conditions.reduceOrNull { left, right -> ResolvedCondition.And(left, right) }, kind, modified)
+        }
+
+        private fun resolveModifiedColumns() {
+            val target = bindings.single().table.ref
+            if (target.schema.startsWith("pg_temp")) {
+                fail(ErrorCode.UNSUPPORTED_SQL, "Temporary DML targets are unsupported.")
+            }
+            for ((column, value) in statement?.assignments.orEmpty()) {
+                context.checkDeadline()
+                val bound = resolveColumn(column)
+                if (!modified.add(bound.ref)) fail(ErrorCode.UNSUPPORTED_SQL, "Repeated SET target column.")
+                referenced += bound.ref
+                literalTypes.requireAssignment(bound.column, value)
+            }
         }
 
         private fun bindTables() {

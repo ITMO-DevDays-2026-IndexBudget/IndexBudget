@@ -17,13 +17,22 @@ internal class PostgresLiteralTypes(private val catalog: CatalogSnapshot, privat
 
     fun requireAssignment(column: CatalogColumn, expression: Expression) {
         val target = columnType(column)
-        if (!target.isBuiltin || target.kind != "b" || target.category == "A") unsupported("SET requires a built-in scalar target type.")
-        val source = infer(expression)
-        if (source != null && source.oid != target.oid && target.category != "S" &&
-            facts().implicitCasts.none { context.checkDeadline(); it.sourceTypeOid == source.oid && it.targetTypeOid == target.oid })
-            unsupported("SET literal cannot be assignment-coerced to the target column type.")
+        if (!target.isBuiltin || target.kind != BASE_TYPE_KIND || target.category == ARRAY_TYPE_CATEGORY) {
+            unsupported("SET requires a built-in scalar target type.")
+        }
         // Unknown literals and cast value/typmod validation are checked by the original EXPLAIN.
+        val source = infer(expression)
+        if (source == null || source.oid == target.oid || target.category == STRING_TYPE_CATEGORY) return
+        if (!hasAssignmentCast(source, target)) {
+            unsupported("SET literal cannot be assignment-coerced to the target column type.")
+        }
     }
+
+    private fun hasAssignmentCast(source: CatalogType, target: CatalogType): Boolean =
+        facts().implicitCasts.any { cast ->
+            context.checkDeadline()
+            cast.sourceTypeOid == source.oid && cast.targetTypeOid == target.oid
+        }
 
     fun infer(expression: Expression): CatalogType? {
         context.checkDeadline()
@@ -79,7 +88,7 @@ internal class PostgresLiteralTypes(private val catalog: CatalogSnapshot, privat
         }
         val found = byName[schema to name]
             ?: unsupported("Literal cast type was not found in the catalog.")
-        if (!found.isBuiltin || found.kind == "p" || found.category == "A") unsupported("User-defined or nonscalar cast types are not supported.")
+        if (!found.isBuiltin || found.kind == "p" || found.category == ARRAY_TYPE_CATEGORY) unsupported("User-defined or nonscalar cast types are not supported.")
         return found
     }
 
@@ -148,6 +157,11 @@ internal class PostgresLiteralTypes(private val catalog: CatalogSnapshot, privat
     private fun fail(code: ErrorCode, message: String): Nothing = throw AnalysisException(AnalysisError(code, message))
 
     private companion object {
+        // pg_type.typtype and typcategory codes.
+        const val BASE_TYPE_KIND = "b"
+        const val ARRAY_TYPE_CATEGORY = "A"
+        const val STRING_TYPE_CATEGORY = "S"
+
         // PostgreSQL gram.y SystemTypeName aliases, not a list of supported types.
         // Generic names (int4, regclass, tsvector, quoted names, etc.) use search_path.
         val STANDARD_TYPE_NAMES = mapOf(

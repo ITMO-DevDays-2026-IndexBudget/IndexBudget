@@ -58,8 +58,8 @@ class JSqlParserSqlAnalyzer internal constructor(
             context.checkDeadline()
             validateSqlSize(query)
             val tokens = PostgresParserTokens(query.sql, context)
-            val select = parseSingleStatement(query, context, tokens)
-            val validated = JSqlParserAstValidator(query.id, context, tokens::restoreIdentifier).validateStatement(select)
+            val statement = parseSingleStatement(query, context, tokens)
+            val validated = JSqlParserAstValidator(query.id, context, tokens::restoreIdentifier).validateStatement(statement)
             validated to validated.tables.map { TableName(name = decodePostgresIdentifier(it.postgresName), schema = it.schemaName?.let(::decodePostgresIdentifier)) }
         } catch (error: AnalysisException) {
             if (error.error.queryId != null) throw error

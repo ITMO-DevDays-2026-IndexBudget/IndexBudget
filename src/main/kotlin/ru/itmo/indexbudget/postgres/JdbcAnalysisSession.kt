@@ -23,6 +23,7 @@ import ru.itmo.indexbudget.domain.ExplainPlan
 import ru.itmo.indexbudget.domain.IndexCandidate
 import ru.itmo.indexbudget.domain.ResolvedWorkload
 import ru.itmo.indexbudget.domain.RunContext
+import ru.itmo.indexbudget.domain.StatementKind
 import ru.itmo.indexbudget.domain.TableName
 import tools.jackson.core.JacksonException
 import tools.jackson.core.StreamReadFeature
@@ -141,17 +142,7 @@ class JdbcAnalysisSession(
             workload.queries.size != expected.size || workload.queries.map { it.id }.toSet() != expected) {
             fail(ErrorCode.INTERNAL_ERROR, "Evaluation requires unique candidates and every workload query exactly once")
         }
-        if (workload.queries.any { it.statementKind != ru.itmo.indexbudget.domain.StatementKind.SELECT }) {
-            try {
-                query("SELECT pg_catalog.set_config('default_transaction_read_only', 'on', false)", context,
-                    ErrorCode.DB_CONNECTION_ERROR) { rows ->
-                    if (!rows.next() || rows.getString(1) != "on") fail(ErrorCode.DB_CONNECTION_ERROR, "Cannot enable read-only DML analysis")
-                }
-                query("SELECT pg_catalog.current_setting('transaction_read_only')", context, ErrorCode.DB_CONNECTION_ERROR) { rows ->
-                    if (!rows.next() || rows.getString(1) != "on") fail(ErrorCode.DB_CONNECTION_ERROR, "DML EXPLAIN requires a read-only transaction")
-                }
-            } catch (error: Exception) { abortQuietly(); throw error }
-        }
+        ensureReadOnlyForDml(workload, context)
         val result = withHypotheses(context) {
             for (candidate in candidates.sortedBy { it.id }) {
                 try {
@@ -184,6 +175,27 @@ class JdbcAnalysisSession(
         context.checkDeadline()
         context.recordCompletedEvaluation()
         return result
+    }
+
+    private fun ensureReadOnlyForDml(workload: ResolvedWorkload, context: RunContext) {
+        if (workload.queries.all { it.statementKind == StatementKind.SELECT }) return
+        try {
+            query("SELECT pg_catalog.set_config('default_transaction_read_only', 'on', false)", context,
+                ErrorCode.DB_CONNECTION_ERROR) { rows ->
+                if (!rows.next() || rows.getString(1) != "on") {
+                    fail(ErrorCode.DB_CONNECTION_ERROR, "Cannot enable read-only DML analysis")
+                }
+            }
+            query("SELECT pg_catalog.current_setting('transaction_read_only')", context,
+                ErrorCode.DB_CONNECTION_ERROR) { rows ->
+                if (!rows.next() || rows.getString(1) != "on") {
+                    fail(ErrorCode.DB_CONNECTION_ERROR, "DML EXPLAIN requires a read-only transaction")
+                }
+            }
+        } catch (error: Exception) {
+            abortQuietly()
+            throw error
+        }
     }
 
     /** Cleanup completes before an evaluation becomes successful or is counted as complete. */

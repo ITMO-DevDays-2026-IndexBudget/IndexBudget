@@ -21,22 +21,84 @@ internal class SqlTemplateMatcher(private val context: RunContext) {
             TableName(decodePostgresIdentifier(it.postgresName), it.schemaName?.let(::decodePostgresIdentifier))
         }.toSet()
     }
+
     fun match(template: String, example: String, catalog: CatalogSnapshot): Boolean {
         val source = parse(template)
         val exampleAst = parse(example)
         if (source.kind != exampleAst.kind) return false
-        val original = source.scope
-        val sample = exampleAst.scope
-        qualify(original, catalog)
-        qualify(sample, catalog)
-        val values = mutableMapOf<String, String>()
+        qualify(source.scope, catalog)
+        qualify(exampleAst.scope, catalog)
+
+        // All clauses share one binding table, including repeated parameters in SET and WHERE.
+        val binder = ParameterBinder()
+        bindWhere(source.scope, exampleAst.scope, binder)
+        if (!bindJoins(source.scope, exampleAst.scope, binder)) return false
+        bindLimit(source.scope, exampleAst.scope, binder)
+        if (!bindDml(source, exampleAst, binder)) return false
+
+        if (source.statement.toString() != exampleAst.statement.toString()) return false
+        // Validate source-only dialect flags too: canonical SQL text is not itself a whitelist.
+        JSqlParserAstValidator("template", context).validateStatement(source.statement)
+        context.checkDeadline()
+        return true
+    }
+
+    private fun bindWhere(source: PlainSelect, example: PlainSelect, binder: ParameterBinder) {
+        source.where = binder.bind(source.where, example.where)
+    }
+
+    private fun bindJoins(source: PlainSelect, example: PlainSelect, binder: ParameterBinder): Boolean {
+        val sourceJoins = source.joins.orEmpty()
+        val exampleJoins = example.joins.orEmpty()
+        if (sourceJoins.size != exampleJoins.size) return false
+        sourceJoins.zip(exampleJoins).forEach { (sourceJoin, exampleJoin) ->
+            if (sourceJoin.onExpressions.size != exampleJoin.onExpressions.size) return false
+            sourceJoin.setOnExpressions(sourceJoin.onExpressions.zip(exampleJoin.onExpressions).map { (left, right) ->
+                binder.bind(left, right)
+            })
+        }
+        return true
+    }
+
+    private fun bindLimit(source: PlainSelect, example: PlainSelect, binder: ParameterBinder) {
+        if (source.limit != null && example.limit != null) {
+            source.limit.rowCount = binder.bind(source.limit.rowCount, example.limit.rowCount)
+        }
+    }
+
+    private fun bindDml(source: ValidatedSql, example: ValidatedSql, binder: ParameterBinder): Boolean {
+        if (source.statement is Update && example.statement is Update) {
+            if (!bindUpdateAssignments(source.statement, example.statement, binder)) return false
+            source.statement.where = source.scope.where
+        } else if (source.statement is Delete) {
+            source.statement.where = source.scope.where
+        }
+        return true
+    }
+
+    private fun bindUpdateAssignments(source: Update, example: Update, binder: ParameterBinder): Boolean {
+        val sourceAssignments = source.updateSets
+        val exampleAssignments = example.updateSets
+        if (sourceAssignments.size != exampleAssignments.size) return false
+        for (index in sourceAssignments.indices) {
+            val assignment = sourceAssignments[index]
+            val bound = requireNotNull(binder.bind(assignment.values[0], exampleAssignments[index].values[0]))
+            // The validator admits exactly one scalar value per SET assignment.
+            assignment.setValues(ExpressionList<Expression>(bound))
+        }
+        return true
+    }
+
+    private inner class ParameterBinder {
+        private val literalsByParameter = mutableMapOf<String, String>()
+
         fun bind(left: Expression?, right: Expression?): Expression? {
             context.checkDeadline()
             if (left == null || right == null) return left
             if (left is JdbcParameter) {
                 if (!scalar(right)) return left
                 val key = left.toString()
-                val previous = values.putIfAbsent(key, right.toString())
+                val previous = literalsByParameter.putIfAbsent(key, right.toString())
                 if (previous != null && previous != right.toString()) return left
                 return right
             }
@@ -48,11 +110,7 @@ internal class SqlTemplateMatcher(private val context: RunContext) {
                     left.rightExpression = bind(left.rightExpression, right.rightExpression)
                 }
                 is ParenthesedExpressionList<*> -> {
-                    right as ParenthesedExpressionList<*>
-                    if (left.size == right.size) {
-                        @Suppress("UNCHECKED_CAST") val mutable = left as MutableList<Expression>
-                        for (i in mutable.indices) mutable[i] = requireNotNull(bind(mutable[i], right[i]))
-                    }
+                    return bindExpressionList(left, right as ParenthesedExpressionList<*>)
                 }
                 is InExpression -> {
                     right as InExpression
@@ -71,34 +129,25 @@ internal class SqlTemplateMatcher(private val context: RunContext) {
             }
             return left
         }
-        original.where = bind(original.where, sample.where)
-        val joins = original.joins.orEmpty()
-        val samples = sample.joins.orEmpty()
-        if (joins.size != samples.size) return false
-        joins.zip(samples).forEach { (left, right) ->
-            if (left.onExpressions.size != right.onExpressions.size) return false
-            left.setOnExpressions(left.onExpressions.zip(right.onExpressions).map { (a, b) -> bind(a, b) })
-        }
-        if (original.limit != null && sample.limit != null) original.limit.rowCount = bind(original.limit.rowCount, sample.limit.rowCount)
-        if (source.statement is Update && exampleAst.statement is Update) {
-            val left = source.statement.updateSets
-            val right = exampleAst.statement.updateSets
-            if (left.size != right.size) return false
-            for (i in left.indices) {
-                @Suppress("UNCHECKED_CAST") val values = left[i].values as MutableList<Expression>
-                values[0] = requireNotNull(bind(values[0], right[i].values[0]))
+
+        private fun bindExpressionList(
+            source: ParenthesedExpressionList<*>,
+            example: ParenthesedExpressionList<*>,
+        ): ParenthesedExpressionList<*> {
+            if (source.size != example.size) return source
+            val expressions = source.mapIndexed { index, expression ->
+                requireNotNull(bind(expression, example[index]))
             }
-            source.statement.where = original.where
-        } else if (source.statement is Delete) source.statement.where = original.where
-        if (source.statement.toString() != exampleAst.statement.toString()) return false
-        // Validate source-only dialect flags too: canonical SQL text is not itself a whitelist.
-        JSqlParserAstValidator("template", context).validateStatement(source.statement)
-        context.checkDeadline()
-        return true
+            return ParenthesedExpressionList<Expression>(expressions).apply { astNode = source.astNode }
+        }
     }
 
     /** Freeze table resolution in exported SQL; never carry an implicit historical search_path. */
-    fun qualifiedExample(sql: String, catalog: CatalogSnapshot): String = parse(sql).let { qualify(it.scope, catalog); it.statement.toString() }
+    fun qualifiedExample(sql: String, catalog: CatalogSnapshot): String {
+        val example = parse(sql)
+        qualify(example.scope, catalog)
+        return example.statement.toString()
+    }
 
     private fun qualify(select: PlainSelect, catalog: CatalogSnapshot) {
         val tables = listOf(select.fromItem) + select.joins.orEmpty().map { it.fromItem }
