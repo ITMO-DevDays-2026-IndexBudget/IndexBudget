@@ -21,6 +21,33 @@ class BrinHypopgIntegrationTest {
     private val mapper = JsonMapper()
 
     @Test
+    fun `varchar BRIN default opclass and collation match a real index`() {
+        connect().use { admin ->
+            execute(admin, "CREATE SCHEMA brin_catalog_demo")
+            try {
+                execute(admin, "CREATE TABLE brin_catalog_demo.labels (label varchar(50) COLLATE \"C\")")
+                execute(admin, "CREATE INDEX real_brin_label ON brin_catalog_demo.labels USING brin (label)")
+                connect().use { connection ->
+                    JdbcAnalysisSession(connection).use { session ->
+                        val table = session.readCatalog(setOf(TableName("labels", "brin_catalog_demo")), RunContext())
+                            .tables.single()
+                        val column = table.columns.single()
+                        val index = table.existingIndexes.single()
+                        assertEquals("brin", index.method)
+                        val actual = index.keys.single()
+                        assertEquals("pg_catalog.text_minmax_ops", actual.operatorClass)
+                        assertEquals("pg_catalog.\"C\"", actual.collation)
+                        assertEquals(actual.operatorClass, column.defaultOperatorClasses["brin"])
+                        assertEquals(actual.collation, column.collation)
+                    }
+                }
+            } finally {
+                execute(admin, "DROP SCHEMA brin_catalog_demo CASCADE")
+            }
+        }
+    }
+
+    @Test
     fun `real BRIN size costs budgets mixed sets cleanup and three matching artifacts`() {
         Files.createDirectories(Path.of("build/brin-verification"))
         val output = Files.createTempDirectory(Path.of("build/brin-verification"), "run-")
@@ -207,9 +234,16 @@ class BrinHypopgIntegrationTest {
         assertTrue(html.contains(result.inputHash!!) && sql.contains(result.inputHash))
         assertTrue(html.contains("btree, brin"))
         assertTrue(sql.contains("-- index_methods: btree,brin"))
+        val recommendation = html.substringAfter("<ul class=\"recommended-indexes\">", "").substringBefore("</ul>")
+        assertTrue(recommendation.isNotEmpty())
         for (candidate in result.candidates.candidates.filter { it.id in result.result.selected!!.evaluation.candidateIds }) {
             assertTrue(sql.contains(candidate.ddl!!))
-            assertTrue(html.contains(candidate.definition.method))
+            val expected = when (candidate.definition.method) {
+                "btree" -> "events(sequence)"
+                "brin" -> "events · brin (sequence)"
+                else -> error("Unexpected method")
+            }
+            assertTrue(recommendation.contains("<code>$expected</code>"), recommendation)
         }
         return result
     }

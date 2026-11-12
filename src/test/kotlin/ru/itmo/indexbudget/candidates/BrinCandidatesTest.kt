@@ -78,11 +78,73 @@ class BrinCandidatesTest {
                     if (applicable) {
                         assertEquals(setOf(GenerationReason.BRIN_RANGE), candidates.single().generationReasons)
                         assertEquals(setOf("q"), candidates.single().sourceQueryIds)
-                        assertTrue(candidates.single().sourceBranches.isNotEmpty())
+                        assertEquals(setOf(CandidateSourceBranch("q", "condition/L"), CandidateSourceBranch("q", "condition/R")),
+                            candidates.single().sourceBranches)
                     }
                 }
             }
         }
+    }
+
+    @Test
+    fun `BRIN provenance excludes the equality leaf of a distinct OR branch`() {
+        val other = ColumnRef(table, "other")
+        for (rangeOnLeft in listOf(true, false)) {
+            val query = ResolvedQuery("q", "unchanged", setOf(table), setOf(column, other), listOf(
+                ResolvedPredicate(column, ComparisonOperator.GREATER_THAN, PredicateSource.WHERE),
+                ResolvedPredicate(other, ComparisonOperator.EQUAL, PredicateSource.WHERE)), emptyList(),
+                condition = ResolvedCondition.Or(ResolvedCondition.Predicate(if (rangeOnLeft) 0 else 1),
+                    ResolvedCondition.Predicate(if (rangeOnLeft) 1 else 0)))
+            val input = WorkloadInput(listOf(QueryInput("q", query.sql)), listOf(Profile("p", 1.0, mapOf("q" to 1.0))),
+                Constraints(Long.MAX_VALUE, null), indexMethods = setOf(IndexMethod.BRIN))
+            val scopes = mutableListOf<CandidateScope>()
+            BtreeCandidateEnumerator().forEachScope(ResolvedWorkload(input, listOf(query)), RunContext(), scopes::add)
+            val candidate = scopes.flatMap { it.variants }.single()
+            assertEquals(brin, candidate.definition)
+            assertEquals(setOf(CandidateSourceBranch("q", if (rangeOnLeft) "condition/L" else "condition/R")),
+                candidate.sourceBranches)
+        }
+    }
+
+    @Test
+    fun `mixed methods retain pairs and respect the shared local cap and INCLUDE quota`() {
+        val refs = listOf("a", "b", "c", "d").map { ColumnRef(table, it) }
+        val query = ResolvedQuery("q", "unchanged", setOf(table), refs.toSet(), refs.flatMap {
+            listOf(ResolvedPredicate(it, ComparisonOperator.EQUAL, PredicateSource.WHERE),
+                ResolvedPredicate(it, ComparisonOperator.GREATER_THAN, PredicateSource.WHERE))
+        }, listOf(OrderByColumn(refs[0]), OrderByColumn(refs[0], SortDirection.DESC)), projectedColumns = refs.toSet())
+        val input = WorkloadInput(listOf(QueryInput("q", query.sql)), listOf(Profile("p", 1.0, mapOf("q" to 1.0))),
+            Constraints(Long.MAX_VALUE, null), indexMethods = IndexMethod.entries.toSet())
+        val catalog = CatalogSnapshot(listOf(CatalogTable(table, refs.map { columns.single().copy(name = it.name) })))
+        val result = ProfileAwareCandidateGenerator().generate(ResolvedWorkload(input, listOf(query)), catalog, RunContext())
+        val stats = result.diagnostics.localScopes.single()
+        assertEquals(42, stats.enumeratedDefinitions) // 4 BRIN, 4 B-tree singles, 18 plain and 16 covering pairs.
+        assertEquals(16, stats.enumeratedIncludeDefinitions)
+        assertEquals(8, stats.retainedIncludeDefinitions)
+        assertEquals(32, stats.retainedDefinitions)
+        assertEquals(16, result.candidates.size)
+        assertEquals(16, result.reserve.size)
+        val pool = result.candidates + result.reserve
+        assertEquals(32, pool.map { it.id }.toSet().size)
+        val brins = pool.filter { it.definition.method == "brin" }
+        assertEquals(refs.toSet(), brins.map { it.definition.keys.single().column }.toSet())
+        assertTrue(brins.all { it.definition.includedColumns.isEmpty() })
+        val btrees = pool.filter { it.definition.method == "btree" }
+        assertEquals(4, btrees.count { it.definition.keys.size == 1 })
+        assertEquals(16, btrees.count { it.definition.keys.size == 2 && it.definition.includedColumns.isEmpty() })
+        val covering = btrees.filter { it.definition.includedColumns.isNotEmpty() }
+        assertEquals(8, covering.size)
+        assertTrue(covering.all { it.definition.keys.size == 2 && it.definition.includedColumns.size == 2 })
+        val cutoff = result.diagnostics.decisions.single { it.reason == CandidateReason.LOCAL_CANDIDATE_LIMIT }
+        assertEquals("42", cutoff.details["candidates_before"])
+        assertEquals("32", cutoff.details["candidates_after"])
+        assertEquals("16", cutoff.details["include_before"])
+        assertEquals("8", cutoff.details["include_after"])
+        assertEquals("8", cutoff.details["include_limit"])
+        assertEquals("4", result.diagnostics.decisions.single { it.reason == CandidateReason.INCLUDE_PAYLOAD_LIMIT }
+            .details["excluded_variants"])
+        assertEquals("2", result.diagnostics.decisions.single { it.reason == CandidateReason.INCLUDE_VARIANT_LIMIT }
+            .details["excluded_variants"])
     }
 
     @Test

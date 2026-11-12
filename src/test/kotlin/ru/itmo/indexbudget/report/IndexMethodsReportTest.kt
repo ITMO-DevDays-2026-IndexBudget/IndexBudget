@@ -8,7 +8,7 @@ import tools.jackson.databind.json.JsonMapper
 
 class IndexMethodsReportTest {
     @Test
-    fun `BRIN is explicitly versioned even without selected candidates and old reports stay v3`() {
+    fun `BRIN is explicitly versioned across statuses and old reports stay v3`() {
         for (status in RunStatus.entries) {
             val source = ContractFixtures.report(status = status)
             for (methods in listOf(setOf(IndexMethod.BTREE), setOf(IndexMethod.BRIN), IndexMethod.entries.toSet())) {
@@ -24,6 +24,36 @@ class IndexMethodsReportTest {
                 }
             }
         }
+    }
+
+    @Test
+    fun `BRIN keeps v4 for completed and partial results selecting only baseline`() {
+        val source = ContractFixtures.report()
+        val input = requireNotNull(source.input).copy(indexMethods = IndexMethod.entries.toSet())
+        val baseline = ContractFixtures.baselineConfiguration()
+        val completed = ContractFixtures.completedResult().copy(bestRobust = baseline, bestMean = baseline,
+            diagnostics = SearchDiagnostics(stopReasons = listOf(StopReason.ZERO_STORAGE_BUDGET),
+                statistics = RunStatistics(explainAttempts = 2, evaluationAttempts = 1, completedEvaluations = 1)))
+        val failedEvaluation = ContractFixtures.partialResult()
+        val partial = failedEvaluation.copy(bestRobust = baseline, bestMean = baseline,
+            diagnostics = failedEvaluation.diagnostics.copy(
+                statistics = RunStatistics(explainAttempts = 3, evaluationAttempts = 2, completedEvaluations = 1)))
+        for (result in listOf(completed, partial)) {
+            val effectiveInput = if (result is SearchResult.Completed)
+                input.copy(constraints = input.constraints.copy(storageBudgetBytes = 0)) else input
+            val report = DefaultReportBuilder().build(effectiveInput, source.candidates, result, RunContext())
+            assertNotNull(report.result.selected)
+            assertTrue(report.result.selected!!.evaluation.candidateIds.isEmpty())
+            assertEquals(result.diagnostics.stopReasons, report.result.diagnostics.stopReasons)
+            val json = JsonMapper().readTree(JsonReportWriter().render(report))
+            assertEquals(4, json["schema_version"].intValue())
+            assertFalse(json["selected"].isNull)
+            assertTrue(json["selected_indexes"].isEmpty)
+            assertEquals(result.diagnostics.stopReasons.map { it.name },
+                json["diagnostics"]["stop_reasons"].toList().map { it.stringValue() })
+            assertTrue(HtmlReportRenderer().render(report).contains("Выбран пустой набор"))
+        }
+        assertEquals(listOf(StopReason.EVALUATION_FAILED), partial.diagnostics.stopReasons)
     }
 
     @Test
