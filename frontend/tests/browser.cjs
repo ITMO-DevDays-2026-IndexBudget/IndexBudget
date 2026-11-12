@@ -89,10 +89,11 @@ const output = path.resolve('build/frontend-ui-verification');
     await page.locator('#reset').click();
     await page.locator('#tab-queries').click();
     assert.equal(await page.locator('#sql-editor').inputValue(), templates[0].workload.queries[0].sql);
-    // Переход к библиотеке явный: старый датасет не получает несовместимый JOIN/DML.
+    // Примеры привязаны к выбранной базе; чужой JOIN/DML в её библиотеке не появляется.
     await page.locator('.query-library-link [data-tab="examples"]').click();
-    assert.equal(await page.locator('[data-add-example="update_payload"]').isDisabled(), true);
-    await page.locator('.examples-switch [data-template="04-scenarios"]').click();
+    assert.equal(await page.locator('.example-item').count(), templates[0].workload.queries.length);
+    assert.equal(await page.locator('[data-add-example="update_payload"]').count(), 0);
+    await page.locator('[data-template="04-scenarios"]').click();
     assert.equal(await page.locator('.example-item').count(), 9);
     assert.equal(await page.locator('[data-add-example="records_by_group"]').isDisabled(), true);
     await page.locator('#tab-queries').click();

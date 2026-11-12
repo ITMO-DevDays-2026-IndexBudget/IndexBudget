@@ -16,7 +16,6 @@ const helpTexts = {
   objective: ['Robust или mean?', 'Robust выбирает набор по худшему отношению стоимости сценария к исходной. Mean — по отношению средних стоимостей с учётом весов.'],
   mode: ['Глубина анализа', 'Быстрый режим подходит для первого запуска. Глубокий даёт больше времени и попыток, но может выбрать тот же набор. При остановке по лимиту сохраняется пригодный частичный результат.'],
   profiles: ['Частота и вес', 'Частота: от 0 до 1 000 000 вызовов SQL в час, целое число. Это вход для расчёта, а не команда выполнить столько запросов. Веса 9 и 1 задают доли сценариев 90% и 10%. В robust участвуют оба сценария.'],
-  schema: ['Подготовленный датасет', 'У каждого датасета готовые схема и данные. Перед анализом сервер восстанавливает их и читает каталог PostgreSQL.']
 };
 
 function helpButton(key) {
@@ -288,6 +287,17 @@ function examplesTemplate() {
   return templates.find(t => Array.isArray(t.examples) && t.examples.length);
 }
 
+function templateExamples(template) {
+  if (template.examples?.length) return template.examples;
+  return template.workload.queries.map(query => ({
+    ...query,
+    name: query.id,
+    statement_kind: query.sql.trim().split(/\s+/, 1)[0].toLowerCase(),
+    calls_per_hour: Object.fromEntries(template.workload.profiles.map(profile => [profile.id, profile.calls_per_hour[query.id]])),
+    cost_guard: template.workload.constraints.query_cost_guards?.[query.id],
+  }));
+}
+
 function queryExample(query) {
   return templates.find(t => t.id === state.template_id)?.examples?.find(example => example.sql === query.sql);
 }
@@ -307,8 +317,8 @@ function manualExampleTables(workload) {
 
 function addExample(id) {
   const template = templates.find(t => t.id === state.template_id);
-  const example = template?.examples?.find(item => item.id === id);
-  if (!example) throw new Error('Этот пример доступен в датасете «Чтение и запись». Сначала выбери его.');
+  const example = template && templateExamples(template).find(item => item.id === id);
+  if (!example) throw new Error('Пример недоступен в выбранном датасете.');
   const w = state.workload;
   const existing = w.queries.findIndex(query => query.sql === example.sql);
   if (existing !== -1) return {id: w.queries[existing].id, index: existing, alreadyAdded: true};
@@ -321,7 +331,8 @@ function addExample(id) {
   let queryId = example.id, suffix = 2;
   while (w.queries.some(query => query.id === queryId)) queryId = `${example.id}_${suffix++}`;
   const frequencies = w.profiles.map(profile => ({profile,
-    value: Object.hasOwn(example.calls_per_hour, profile.id) ? example.calls_per_hour[profile.id] : example.calls_per_hour.normal,
+    value: Object.hasOwn(example.calls_per_hour, profile.id) ? example.calls_per_hour[profile.id]
+      : (example.calls_per_hour.normal ?? Object.values(example.calls_per_hour)[0]),
     fallback: !Object.hasOwn(example.calls_per_hour, profile.id)}));
   if (!frequencies.every(({value}) => Number.isInteger(value) && value >= 0 && value <= maxCallsPerHour)
       || !frequencies.some(({value}) => value > 0)) throw new Error('У примера нет допустимых исходных частот для текущих профилей.');
@@ -349,7 +360,13 @@ function renderTemplates() {
   const ordered = library ? [library, ...templates.filter(template => template !== library)] : templates;
   $('templates').innerHTML = ordered.map(t => `<button type="button" class="template-card ${state.template_id === t.id ? 'selected' : ''}" data-template="${escape(t.id)}" aria-pressed="${state.template_id === t.id}">
     <div class="template-top"><span class="template-icon ${escape(t.accent)}">${templateIcon(t.accent)}</span><span class="template-tag">${escape(t.tag)}</span></div>
-    <h3>${escape(t.name)}</h3><p>${escape(t.description)}</p><div class="template-bottom"><span>${t.catalog.tables.length} табл.</span><span>${t.workload.queries.length} SQL</span><span>${t.workload.profiles.length} проф.</span></div>${state.template_id === t.id ? '<span class="selected-check" aria-hidden="true">✓</span>' : ''}</button>`).join('');
+    <h3>${escape(t.name)}</h3><p>${escape(t.description)}</p><div class="template-bottom"><span>${t.catalog.tables.length} ${tableCountLabel(t.catalog.tables.length)}</span></div>${state.template_id === t.id ? '<span class="selected-check" aria-hidden="true">✓</span>' : ''}</button>`).join('');
+}
+
+function tableCountLabel(count) {
+  if (count % 100 >= 11 && count % 100 <= 14) return 'таблиц';
+  if (count % 10 === 1) return 'таблица';
+  return count % 10 >= 2 && count % 10 <= 4 ? 'таблицы' : 'таблиц';
 }
 
 function renderAll() {
@@ -368,13 +385,7 @@ function renderControls() {
   $('mode').value = w.analysis_mode || 'normal';
   $('ranking').value = w.candidate_ranking || 'frequency';
   $('guards').value = guardsText; $('manual').value = manualText;
-  renderRates(); updateObjective();
-}
-
-function updateObjective() {
-  $('objective-note').textContent = state.workload.objective === 'mean'
-    ? 'Учитываем относительные веса сценариев'
-    : 'Учитываем каждый сценарий независимо от его веса';
+  renderRates();
 }
 
 function writeSource() {
@@ -442,8 +453,7 @@ function renderQueries() {
   $('editor-content').innerHTML = `<div class="query-library-link"><span>Выбери готовый сценарий или напишите свой SQL.</span><button type="button" class="text-button" data-tab="examples">Выбрать пример</button></div><div class="editor-toolbar"><div class="query-tabs">${queries.map((q,i) => `<button type="button" class="query-tab ${i===queryIndex ? 'active' : ''}" data-query="${i}" title="${escape(q.id)}" aria-pressed="${i===queryIndex}"><span>Q${String(i+1).padStart(2,'0')}</span> ${escape(queryExample(q)?.name || q.id.replace(/^(records_|orders_|wide_)/,''))}</button>`).join('')}</div><button type="button" id="add-query" class="quiet-button" ${queries.length>=20?'disabled':''} aria-label="Добавить запрос">+ SQL</button></div>
     ${selectedExample ? `<p class="query-purpose">${escape(selectedExample.purpose)}</p>` : ''}
     <div class="editor-meta"><label for="query-id">ID</label><input id="query-id" value="${escape(q.id)}" required><button type="button" id="delete-query" class="delete-button" ${queries.length<=1?'disabled':''}>Удалить запрос</button></div>
-    <div class="code-editor"><div class="line-numbers" aria-hidden="true" id="line-numbers"></div><textarea id="sql-editor" spellcheck="false" aria-label="SQL запроса ${escape(q.id)}" required></textarea></div>
-    <div class="editor-footnote"><span>${state.template_id === examplesTemplate()?.id ? 'SELECT / UPDATE / DELETE' : 'SELECT'} · оцениваем план через EXPLAIN, сами запросы не выполняем</span><span class="dialect">POSTGRESQL</span></div><p class="query-purpose">Для UPDATE/DELETE cost оценивает поиск и подготовку строк; фактическая модификация таблицы не включена. Частоты вызовов не заменяют строки/час в профиле записи.</p>`;
+    <div class="code-editor"><div class="line-numbers" aria-hidden="true" id="line-numbers"></div><textarea id="sql-editor" spellcheck="false" aria-label="SQL запроса ${escape(q.id)}" required></textarea></div>`;
   // HTML-парсер удаляет первый перевод строки внутри textarea; значение задаём без разбора HTML.
   $('sql-editor').value = q.sql;
   lineNumbers();
@@ -451,22 +461,19 @@ function renderQueries() {
 }
 
 function renderExamples() {
-  const template = examplesTemplate();
-  if (!template) {
-    $('editor-content').innerHTML = '<div class="examples-content"><h3>Примеры запросов</h3><p>Библиотека примеров недоступна. Готовые запросы выбранного датасета остаются во вкладке «Запросы».</p></div>';
-    return;
-  }
-  const compatible = template.id === state.template_id;
+  const template = templates.find(t => t.id === state.template_id);
+  const examples = templateExamples(template);
   const limit = state.workload.queries.length >= 20;
-  $('editor-content').innerHTML = `<div class="examples-content"><h3>Примеры запросов</h3><p class="examples-intro">Добавь запрос чтения или изменения строк. Затем его можно изменить во вкладке «Запросы».</p>
-    ${compatible ? '<p class="examples-dataset">Для датасета «Чтение и запись»: записи и группы. UPDATE и DELETE не меняют данные — анализатор получает только план.</p>' : `<div class="examples-switch"><p>Эти примеры используют записи и группы из датасета «Чтение и запись». Его выбор загрузит исходную нагрузку этого датасета.</p><button type="button" class="quiet-button" data-template="${escape(template.id)}">Открыть «Чтение и запись»</button></div>`}
-    <p class="examples-frequency-note">Частоты указаны для обычного дня и пика. Для профиля с другим именем добавляется частота обычного дня; её можно изменить во вкладке «Нагрузка».</p>
-    ${compatible && limit ? '<p class="examples-limit" role="status">В нагрузке 20 запросов. Удали один, чтобы добавить новый пример.</p>' : ''}
+  const profileNames = {normal: 'Обычный день', peak: 'Пик'};
+  $('editor-content').innerHTML = `<div class="examples-content"><h3>Примеры запросов · ${escape(template.name)}</h3>
+    <p class="examples-frequency-note">Для нового профиля добавляется исходная частота примера; её можно изменить во вкладке «Нагрузка».</p>
+    ${limit ? '<p class="examples-limit" role="status">В нагрузке 20 запросов. Удали один, чтобы добавить новый пример.</p>' : ''}
     <p id="example-status" class="example-status" role="status" aria-live="polite"></p>
-    <div class="example-list">${template.examples.map(example => {
-      const included = compatible && state.workload.queries.some(query => query.sql === example.sql);
-      const disabled = !compatible || included || limit;
-      return `<article class="example-item" data-example-id="${escape(example.id)}"><div class="example-heading"><h4>${escape(example.name)}</h4><span class="example-kind">${escape(example.statement_kind)}</span></div><p class="example-purpose">${escape(example.purpose)}</p><p class="example-frequencies">Обычный день: <strong>${format(example.calls_per_hour.normal)}</strong> · Пик: <strong>${format(example.calls_per_hour.peak)}</strong> вызовов/ч</p><details class="example-sql"><summary>SQL и условия</summary><pre tabindex="0" aria-label="SQL примера ${escape(example.name)}">${escape(example.sql)}</pre><p>${escape(example.syntax_hint)}</p>${example.cost_guard != null ? `<p>При добавлении включается предел ухудшения planner cost: ${format((example.cost_guard - 1) * 100)}%. Настройка доступна в дополнительных параметрах.</p>` : ''}</details><div class="example-actions"><button type="button" class="quiet-button add-example" data-add-example="${escape(example.id)}" ${disabled ? 'disabled' : ''} aria-label="${included ? 'Уже в нагрузке' : 'Добавить в нагрузку'}: ${escape(example.name)}">${included ? 'Уже в нагрузке' : 'Добавить в нагрузку'}</button>${included ? '<span class="example-added">SQL уже добавлен</span>' : ''}</div></article>`;
+    <div class="example-list">${examples.map(example => {
+      const included = state.workload.queries.some(query => query.sql === example.sql);
+      const frequencies = Object.entries(example.calls_per_hour).map(([id, calls]) =>
+        `${escape(profileNames[id] || id)}: <strong>${format(calls)}</strong>`).join(' · ');
+      return `<article class="example-item" data-example-id="${escape(example.id)}"><div class="example-heading"><h4>${escape(example.name)}</h4><span class="example-kind">${escape(example.statement_kind)}</span></div>${example.purpose ? `<p class="example-purpose">${escape(example.purpose)}</p>` : ''}<p class="example-frequencies">${frequencies} вызовов/ч</p><details class="example-sql"><summary>SQL и условия</summary><pre tabindex="0" aria-label="SQL примера ${escape(example.name)}">${escape(example.sql)}</pre>${example.syntax_hint ? `<p>${escape(example.syntax_hint)}</p>` : ''}${example.cost_guard != null ? `<p>При добавлении включается предел ухудшения planner cost: ${format((example.cost_guard - 1) * 100)}%. Настройка доступна в дополнительных параметрах.</p>` : ''}</details><div class="example-actions"><button type="button" class="quiet-button add-example" data-add-example="${escape(example.id)}" ${included || limit ? 'disabled' : ''} aria-label="${included ? 'Уже в нагрузке' : 'Добавить в нагрузку'}: ${escape(example.name)}">${included ? 'Уже в нагрузке' : 'Добавить в нагрузку'}</button></div></article>`;
     }).join('')}</div></div>`;
 }
 
@@ -476,11 +483,9 @@ function lineNumbers() {
 
 function renderProfiles() {
   const {queries, profiles} = state.workload;
-  $('editor-content').innerHTML = `<div class="profile-content"><p>Укажи от 0 до 1 000 000 вызовов/ч целыми числами. Частоты участвуют в расчёте; анализ не выполняет столько запросов.</p><div class="profile-table-wrap"><table class="profile-table"><thead><tr><th>Запрос / профиль</th>${profiles.map((p,i) => `<th><div class="profile-name"><input value="${escape(p.id)}" data-profile-id="${i}" aria-label="ID профиля ${i+1}" required><button type="button" data-delete-profile="${i}" ${profiles.length===1?'disabled':''} aria-label="Удалить профиль ${escape(p.id)}">×</button></div></th>`).join('')}</tr></thead><tbody>
+  $('editor-content').innerHTML = `<div class="profile-content"><div class="subheading"><h4>Частоты и веса</h4>${helpButton('profiles')}</div><div class="profile-table-wrap"><table class="profile-table"><thead><tr><th>Запрос / профиль</th>${profiles.map((p,i) => `<th><div class="profile-name"><input value="${escape(p.id)}" data-profile-id="${i}" aria-label="ID профиля ${i+1}" required><button type="button" data-delete-profile="${i}" ${profiles.length===1?'disabled':''} aria-label="Удалить профиль ${escape(p.id)}">×</button></div></th>`).join('')}</tr></thead><tbody>
     <tr><td>Вес сценария</td>${profiles.map((p,i) => `<td><input type="number" min="0" step="any" value="${escape(p.weight)}" data-weight="${i}" aria-label="Вес ${escape(p.id)}" required><div class="profile-share" data-share="${i}"></div></td>`).join('')}</tr>
-    ${queries.map((q,qi) => `<tr><td>${escape(q.id)}</td>${profiles.map((p,pi) => `<td><input type="number" min="0" max="${maxCallsPerHour}" step="1" value="${escape(p.calls_per_hour[q.id])}" data-frequency-profile="${pi}" data-frequency-query="${qi}" aria-label="Частота ${escape(q.id)} в ${escape(p.id)}" required></td>`).join('')}</tr>`).join('')}</tbody><tfoot><tr><td>Всего вызовов/ч</td>${profiles.map((p,i)=>`<td data-total="${i}"></td>`).join('')}</tr></tfoot></table></div><div class="profile-actions"><button type="button" id="add-profile" class="quiet-button" ${profiles.length>=3?'disabled':''}>+ Профиль нагрузки</button></div><p class="profile-note">Вес задаёт долю сценария при расчёте среднего. В robust учитывается и сценарий с маленьким весом.</p></div>`;
-  const intro = $('editor-content').querySelector('.profile-content > p');
-  intro.insertAdjacentHTML('beforeend', ' ' + helpButton('profiles'));
+    ${queries.map((q,qi) => `<tr><td>${escape(q.id)}</td>${profiles.map((p,pi) => `<td><input type="number" min="0" max="${maxCallsPerHour}" step="1" value="${escape(p.calls_per_hour[q.id])}" data-frequency-profile="${pi}" data-frequency-query="${qi}" aria-label="Частота ${escape(q.id)} в ${escape(p.id)}" required></td>`).join('')}</tr>`).join('')}</tbody><tfoot><tr><td>Всего вызовов/ч</td>${profiles.map((p,i)=>`<td data-total="${i}"></td>`).join('')}</tr></tfoot></table></div><div class="profile-actions"><button type="button" id="add-profile" class="quiet-button" ${profiles.length>=3?'disabled':''}>+ Профиль нагрузки</button></div></div>`;
   updateProfiles();
 }
 
@@ -496,9 +501,7 @@ function updateProfiles() {
 
 function renderSchema() {
   const template = templates.find(t => t.id === state.template_id);
-  $('editor-content').innerHTML = `<div class="schema-content"><p>Схема и данные принадлежат выбранному датасету. Сервер готовит их и читает каталог при каждом запуске.</p><h4 id="schema-sql-label">Схема и существующие индексы · только просмотр</h4><pre class="code" tabindex="0" aria-labelledby="schema-sql-label">${escape(template.schema_sql)}</pre></div>`;
-  const intro = $('editor-content').querySelector('.schema-content > p');
-  intro.insertAdjacentHTML('beforeend', ' ' + helpButton('schema'));
+  $('editor-content').innerHTML = `<div class="schema-content"><h4 id="schema-sql-label">Схема и существующие индексы</h4><pre class="code" tabindex="0" aria-labelledby="schema-sql-label">${escape(template.schema_sql)}</pre></div>`;
 }
 
 function materialize() {
@@ -522,7 +525,7 @@ function materialize() {
 function renderJson() {
   let text, valid = true;
   try { text = JSON.stringify(materialize(), null, 2); } catch (e) { text = e.message; valid = false; }
-  $('editor-content').innerHTML = `<div class="json-content"><p>Именно этот workload JSON v2 получит анализатор. Датасет выбирается отдельно по шаблону; его схема и данные фиксированы.${manualExampleTables(state.workload) ? ' В JSON включаются ручные частоты записи таблиц выбранных примеров; остальные значения сохраняются в черновике.' : writeSource() === 'observed' ? ' Наблюдаемый профиль и окно передаются без изменения; покрытие таблиц проверяет анализатор.' : ''}</p><div class="json-toolbar"><button type="button" id="download-json" class="quiet-button" ${valid?'':'disabled'}>↓ Скачать JSON</button><span class="hint">${valid ? format(new TextEncoder().encode(text).length) + ' байт' : 'Исправь дополнительные параметры'}</span></div><pre>${escape(text)}</pre></div>`;
+  $('editor-content').innerHTML = `<div class="json-content"><div class="json-toolbar"><button type="button" id="download-json" class="quiet-button" ${valid?'':'disabled'}>↓ Скачать JSON</button><span class="hint">${valid ? format(new TextEncoder().encode(text).length) + ' байт' : 'Исправь дополнительные параметры'}</span></div><pre>${escape(text)}</pre></div>`;
 }
 
 function renderDiagram() {
@@ -542,7 +545,7 @@ function renderDiagram() {
 function renderSummary() {
   const w = state.workload, t = templates.find(t=>t.id===state.template_id);
   $('summary-title').textContent = t.name;
-  const items = [['Общих SQL',w.queries.length],['Профилей нагрузки',w.profiles.length],['Методы индексов',Array.isArray(w.index_methods) ? w.index_methods.map(m => ({btree:'B-tree',brin:'BRIN',hash:'Hash'}[m] || m)).join(', ') : 'Некорректный список'],['Бюджет места',format(w.constraints.storage_budget_bytes/1048576)+' MiB'],['Цель',w.objective==='mean'?'Средний результат':'Худший сценарий'],['Источник записи',writeSource()==='observed' ? (w.table_write_rates_origin?.complete ? 'Наблюдаемый · полный' : 'Наблюдаемый · требует проверки') : (w.table_write_rates ? 'Ручной' : 'Не задан')],['Лимит записи',w.constraints.write_budget_units_per_hour == null ? 'Выключен' : String(w.constraints.write_budget_units_per_hour)+' ед./ч']];
+  const items = [['SQL-запросов',w.queries.length],['Профилей нагрузки',w.profiles.length],['Методы индексов',Array.isArray(w.index_methods) ? w.index_methods.map(m => ({btree:'B-tree',brin:'BRIN',hash:'Hash'}[m] || m)).join(', ') : 'Некорректный список'],['Бюджет места',format(w.constraints.storage_budget_bytes/1048576)+' MiB'],['Цель',w.objective==='mean'?'Средний результат':'Худший сценарий'],['Источник записи',writeSource()==='observed' ? (w.table_write_rates_origin?.complete ? 'Наблюдаемый · полный' : 'Наблюдаемый · требует проверки') : (w.table_write_rates ? 'Ручной' : 'Не задан')],['Лимит записи',w.constraints.write_budget_units_per_hour == null ? 'Выключен' : String(w.constraints.write_budget_units_per_hour)+' ед./ч']];
   $('summary').innerHTML = items.map(([k,v])=>`<div><dt>${escape(k)}</dt><dd>${escape(v)}</dd></div>`).join('');
 }
 
@@ -712,7 +715,7 @@ document.addEventListener('click', e => {
       queryIndex = result.index;
       error(''); renderEditor(); changed(); persist();
       $('example-status').textContent = result.alreadyAdded ? 'Этот SQL уже есть в нагрузке.'
-        : `Добавлен запрос «${templates.find(t => t.id === state.template_id).examples.find(item => item.id === d.addExample).name}».${result.renamed ? ` ID ${result.id}: ранее изменённый запрос сохранён.` : ''}${result.fallback ? ' Для ваших профилей использована частота обычного дня.' : ''} Открой «Запросы», чтобы изменить SQL.`;
+        : `Добавлен запрос «${templateExamples(templates.find(t => t.id === state.template_id)).find(item => item.id === d.addExample).name}».${result.renamed ? ` ID ${result.id}: ранее изменённый запрос сохранён.` : ''}${result.fallback ? ' Для ваших профилей использована исходная частота примера.' : ''} Открой «Запросы», чтобы изменить SQL.`;
       document.querySelector(`[data-add-example="${d.addExample}"]`)?.closest('article')?.querySelector('summary')?.focus();
     } catch (e) { error(e.message); }
     return;
@@ -767,7 +770,7 @@ document.addEventListener('input', e => {
     case 'max-indexes': w.constraints.max_indexes=el.valueAsNumber; break;
     case 'write-budget': w.constraints.write_budget_units_per_hour=el.valueAsNumber; break;
     case 'write-enabled': w.constraints.write_budget_units_per_hour=el.checked?+$('write-budget').value:null; $('write-budget').disabled=!el.checked; break;
-    case 'objective': w.objective=el.value; updateObjective(); break;
+    case 'objective': w.objective=el.value; break;
     case 'mode': w.analysis_mode=el.value; break;
     case 'ranking': w.candidate_ranking=el.value; break;
     case 'guards': guardsText=el.value; if(tab==='json') renderJson(); break;
@@ -834,11 +837,12 @@ async function init() {
     else tour.maybeStart();
     health=await api('/api/health');
     $('connection').className='connection '+(health.database&&health.cli?'ready':'offline');
+    $('connection').hidden=!!(health.database&&health.cli);
     $('connection').textContent=health.database&&health.cli
     ? 'PostgreSQL подключён · CLI готов · результаты сохраняются на сервере'
       : 'Редактор доступен. Для анализа '+[!health.database?'запустите demo-БД (инструкция в frontend/README.md)':'',!health.cli?'соберите CLI: ./gradlew installDist':''].filter(Boolean).join(' и ')+'.';
     document.querySelector('.local-badge').innerHTML = `<i></i> ${health.local_only ? 'Локальная среда' : 'Демонстрационный стенд'}`;
-  } catch(e) { error(e.message); $('connection').textContent='Не удалось подключиться к локальному серверу.'; }
+  } catch(e) { error(e.message); $('connection').hidden=false; $('connection').textContent='Не удалось подключиться к локальному серверу.'; }
 }
 
 const closeHelp = installHelp();

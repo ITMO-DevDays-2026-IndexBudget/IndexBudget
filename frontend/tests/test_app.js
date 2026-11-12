@@ -35,7 +35,7 @@ function app() {
   const stored = new Map();
   const element = id => {
     if (!elements.has(id)) elements.set(id, {value: '', dataset: {},
-      querySelectorAll: () => [], scrollIntoView() {}, checkValidity: () => true,
+      querySelectorAll: () => [], scrollIntoView() {}, checkValidity: () => true, addEventListener() {},
       classList: {toggle() {}}, querySelector: () => ({insertAdjacentHTML() {}})});
     return elements.get(id);
   };
@@ -197,7 +197,8 @@ test('просмотр схемы не создаёт редакторы DDL/see
   const markup = ui.element('editor-content').innerHTML;
   assert.doesNotMatch(markup, /<textarea|id="(?:schema-sql|seed-sql)"/);
   assert.match(markup, /&lt;script&gt;/);
-  assert.match(markup, /только просмотр/);
+  assert.match(markup, /Схема и существующие индексы/);
+  assert.doesNotMatch(markup, /только просмотр|data-help|Схема и данные фиксированы/);
   assert.doesNotMatch(markup, /preview-schema|Проверить схему/);
 });
 
@@ -300,10 +301,11 @@ test('библиотека экранирует названия и SQL, пок�
   assert.doesNotMatch(markup, /<img src=x>/);
   assert.match(markup, /Добавить в нагрузку/);
   assert.match(markup, /Уже в нагрузке/);
-  assert.match(markup, /частота обычного дня/);
+  assert.match(markup, /исходная частота примера/);
   assert.match(markup, /SQL и условия/);
   ui.run('state = templateState(templates[0]); renderExamples();');
-  assert.match(ui.element('editor-content').innerHTML, /Открыть «Чтение и запись»/);
+  assert.match(ui.element('editor-content').innerHTML, /records_by_group/);
+  assert.doesNotMatch(ui.element('editor-content').innerHTML, /examples-switch|update_payload/);
 });
 
 test('новый датасет виден первым, но рендер не переключает прежний черновик', () => {
@@ -312,6 +314,51 @@ test('новый датасет виден первым, но рендер не 
   const markup = ui.element('templates').innerHTML;
   assert.ok(markup.indexOf('data-template="04-scenarios"') < markup.indexOf('data-template="01-records"'));
   assert.equal(ui.run('state.template_id'), '01-records');
+});
+
+test('каждый датасет показывает свои примеры и восстанавливает SQL с частотами', () => {
+  const ui = app();
+  for (const template of templates) {
+    ui.set('templateId', template.id);
+    ui.run('state = templateState(templates.find(t => t.id === templateId)); renderExamples();');
+    const examples = ui.run('templateExamples(templates.find(t => t.id === templateId))');
+    assert.ok(examples.length > 0, template.id);
+    assert.equal((ui.element('editor-content').innerHTML.match(/class="example-item"/g) || []).length, examples.length);
+    ui.run('state.workload.queries = []; state.workload.profiles.forEach(p => { p.calls_per_hour = {}; });');
+    ui.set('exampleId', examples[0].id);
+    ui.run('addExample(exampleId);');
+    assert.equal(ui.run('state.template_id'), template.id);
+    assert.equal(ui.run('state.workload.queries[0].sql'), examples[0].sql);
+    for (const profile of template.workload.profiles) {
+      assert.equal(ui.run(`state.workload.profiles.find(p => p.id === ${JSON.stringify(profile.id)}).calls_per_hour[exampleId]`),
+        examples[0].calls_per_hour[profile.id]);
+    }
+  }
+});
+
+test('в карточке остаётся только число таблиц', () => {
+  const ui = app();
+  ui.run('renderTemplates();');
+  const footers = [...ui.element('templates').innerHTML.matchAll(/class="template-bottom">(.*?)<\/div>/gs)];
+  assert.equal(footers.length, templates.length);
+  for (const [, footer] of footers) {
+    assert.match(footer, /^<span>\d+ таблиц(?:а|ы)?<\/span>$/);
+    assert.doesNotMatch(footer, /SQL|проф\./);
+  }
+});
+
+test('пояснения не дублируются под редакторами', () => {
+  const ui = app();
+  ui.run('renderQueries();');
+  assert.doesNotMatch(ui.element('editor-content').innerHTML, /editor-footnote|POSTGRESQL|фактическая модификация/);
+  ui.run('renderProfiles();');
+  assert.match(ui.element('editor-content').innerHTML, /data-help="profiles"/);
+  assert.doesNotMatch(ui.element('editor-content').innerHTML, /Частоты — целые|profile-note/);
+  ui.run('renderJson();');
+  assert.doesNotMatch(ui.element('editor-content').innerHTML, /Датасет выбирается|В JSON включаются/);
+  const html = fs.readFileSync(path.join(__dirname, '../static/index.html'), 'utf8');
+  assert.doesNotMatch(html, /class="intro"|Меньше индексов|Больше оснований|В пределах бюджета|Только для новых индексов|objective-note|Бюджет CLI|По умолчанию поиск сравнивает/);
+  assert.match(html, /<h3>Бюджет<\/h3>/);
 });
 
 test('переключение датасета требует явного подтверждения потери изменённой нагрузки', () => {
@@ -467,8 +514,8 @@ test('добавление примера и удаление JOIN сохран�
   assert.deepEqual(saved.state.workload.table_write_rates_origin, observed.table_write_rates_origin);
   assert.equal(saved.seriesUI['launch-mode'], 'series');
   ui.run('renderJson()');
-  assert.match(ui.element('editor-content').innerHTML, /Наблюдаемый профиль и окно передаются без изменения/);
-  assert.doesNotMatch(ui.element('editor-content').innerHTML, /В JSON включаются ручные частоты/);
+  assert.doesNotMatch(ui.element('editor-content').innerHTML, /Наблюдаемый профиль и окно|В JSON включаются ручные частоты/);
+  assert.match(ui.element('editor-content').innerHTML, /table_write_rates_origin/);
 });
 
 test('добавление примера после очистки observed не подставляет ручные rates или окно', () => {
