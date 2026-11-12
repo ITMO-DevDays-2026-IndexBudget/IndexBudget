@@ -32,8 +32,15 @@ def main():
         raise AssertionError('Smoke timeout')
 
     def payload(t):
-        return dict(template_id=t['id'], template_version=t['version'], schema_sql=t['schema_sql'],
-                    seed_sql=t['seed_sql'], workload=copy.deepcopy(t['workload']))
+        return dict(template_id=t['id'], template_version=t['version'], workload=copy.deepcopy(t['workload']))
+
+    def reject(path, data):
+        try:
+            post(path, data)
+            raise AssertionError('Invalid input was accepted')
+        except HTTPError as error:
+            assert error.code == 400
+            assert json.load(error)['error']
 
     assert b'IndexBudget' in get('/')
     for asset in ('/app.js', '/style.css'):
@@ -43,16 +50,34 @@ def main():
     templates = json.loads(get('/api/templates'))
     assert len(templates) == 3
     request = payload(templates[0])
-    request['schema_sql'] += '\nALTER TABLE public.records ADD COLUMN demo_note text;'
+    for endpoint in ('/api/runs', '/api/schema-previews'):
+        for key, sql in (('schema_sql', 'ALTER TABLE public.records ADD COLUMN demo_note text;'),
+                         ('seed_sql', 'DELETE FROM public.records;')):
+            edited = payload(templates[0])
+            edited[key] = sql
+            reject(endpoint, edited)
     preview = wait(post('/api/schema-previews', request))
     assert preview['status'] == 'completed', preview
-    assert 'demo_note' in [c['name'] for c in preview['catalog']['tables'][0]['columns']]
+    assert 'demo_note' not in [c['name'] for c in preview['catalog']['tables'][0]['columns']]
+    assert preview['catalog']['tables'][0]['rows'] == templates[0]['catalog']['tables'][0]['rows']
     assert not preview['report_url']
-    print('PASS edited schema → PostgreSQL catalog', flush=True)
+    print('PASS client DDL/seed rejected; server dataset → PostgreSQL catalog', flush=True)
+    qid = templates[0]['workload']['queries'][0]['id']
+    for value in (-1, .5, 1_000_001):
+        invalid = payload(templates[0])
+        invalid['workload']['profiles'][0]['calls_per_hour'][qid] = value
+        reject('/api/runs', invalid)
+    empty = payload(templates[0])
+    empty['workload']['profiles'][0]['calls_per_hour'] = {
+        key: 0 for key in empty['workload']['profiles'][0]['calls_per_hour']}
+    reject('/api/runs', empty)
     submitted = []
     for t in templates:
         request = payload(t)
         request['workload']['analysis_mode'] = 'fast'
+        if t['id'] == templates[0]['id']:
+            request['workload']['profiles'][0]['calls_per_hour'][qid] = 0
+            request['workload']['profiles'][1]['calls_per_hour'][qid] = 1_000_000
         submitted.append((request, post('/api/runs', request)))
     assert len({j['run_id'] for _, j in submitted}) == 3
     for request, job in submitted:
@@ -68,9 +93,12 @@ def main():
         get(prefix + '/indexes.sql')
         config = json.loads(get(prefix + '/demo-config.json'))
         assert config['analysis_run_id'] == report['run_id']
+        template = next(t for t in templates if t['id'] == request['template_id'])
+        assert config['template_id'] == template['id'] and config['template_version'] == template['version']
+        assert config['schema_sql'] == template['schema_sql'] and config['seed_sql'] == template['seed_sql']
         print(f"PASS {request['template_id']} → {result['status']} → {result['report_url']}", flush=True)
     broken = payload(templates[0])
-    broken['schema_sql'] = 'CREATE TABLE this is invalid;'
+    broken['workload']['queries'][0]['sql'] = 'SELECT missing_demo_column FROM public.records'
     failure = wait(post('/api/runs', broken))
     assert failure['status'] == 'failed' and failure['error'] and not failure['report_url']
     try:
@@ -80,12 +108,8 @@ def main():
         assert error.code == 404
     bad = payload(templates[0])
     bad['workload']['profiles'][0]['weight'] = 0
-    try:
-        post('/api/runs', bad)
-        raise AssertionError('Invalid input was accepted')
-    except HTTPError as error:
-        assert error.code == 400
-    # Восстановить корректную схему после отрицательной проверки.
+    reject('/api/runs', bad)
+    # Ошибка SQL не блокирует следующую подготовку доверенного датасета.
     recovery = wait(post('/api/schema-previews', payload(templates[0])))
     assert recovery['status'] == 'completed', recovery
     assert submitted[0][1]['run_id'].encode() in get('/reports/')
