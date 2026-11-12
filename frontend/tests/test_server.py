@@ -16,9 +16,10 @@ from urllib.request import Request, urlopen
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from server import (FrontendHTTPServer, Jobs, LocalRunner, ROOT, ShuttingDownError,
-                    data_directory, make_handler, read_json, validate_request, write_json)
+                    data_directory, load_templates, make_handler, read_json, validate_request, write_json)
+from scenarios import INITIAL_QUERY_IDS, scenario_template, seed_statements
 
-TEMPLATES = {t['id']: t for t in (read_json(p) for p in (ROOT / 'templates').glob('*.json'))}
+TEMPLATES = load_templates(ROOT)
 
 
 def request(template_id='01-records'):
@@ -154,6 +155,69 @@ class ValidationTests(unittest.TestCase):
                 validate_request(data, TEMPLATES)
 
 
+class ScenarioLibraryTests(unittest.TestCase):
+    def test_library_keeps_exact_canonical_sql_profiles_and_meaning(self):
+        workload = read_json(ROOT.parent / 'demo/scenarios/workload.json')
+        metadata = read_json(ROOT.parent / 'demo/scenarios/catalog.json')
+        template = TEMPLATES['04-scenarios']
+        self.assertEqual(set(TEMPLATES), {'01-records', '02-shop', '03-wide', '04-scenarios'})
+        self.assertEqual([example['id'] for example in template['examples']],
+                         [query['id'] for query in workload['queries']])
+        self.assertEqual(len(template['examples']), 9)
+        for example, query, description in zip(template['examples'], workload['queries'], metadata['examples']):
+            self.assertEqual(example['sql'], query['sql'])
+            for key in ('name', 'purpose', 'syntax_hint'):
+                self.assertEqual(example[key], description[key])
+            self.assertEqual(example['calls_per_hour'], {
+                profile['id']: profile['calls_per_hour'][query['id']] for profile in workload['profiles']})
+            self.assertEqual(example['tables'], ['public.records', 'public.groups']
+                             if query['id'] == 'category_join' else ['public.records'])
+        self.assertEqual({example['statement_kind'] for example in template['examples']},
+                         {'select', 'update', 'delete'})
+        self.assertEqual(template['examples'][0]['cost_guard'], 1.05)
+        self.assertEqual(template['example_profiles'], metadata['profiles'])
+        self.assertEqual([query['id'] for query in template['workload']['queries']], list(INITIAL_QUERY_IDS))
+        for key in ('constraints', 'table_write_rates', 'manual_indexes'):
+            self.assertEqual(template['workload'][key], workload[key])
+        full = request('04-scenarios')
+        full['workload'] = workload
+        self.assertEqual(validate_request(full, TEMPLATES), full)
+
+    def test_seed_reuses_only_exact_known_table_statements(self):
+        source = (ROOT.parent / 'demo/postgres/init/001-seed.sql').read_text()
+        template = TEMPLATES['04-scenarios']
+        schemas, seeds = [], []
+        for table in ('records', 'groups'):
+            schema, seed = seed_statements(source, table)
+            self.assertIn(schema, source)
+            self.assertIn(seed, source)
+            self.assertTrue(schema.startswith('CREATE TABLE public.' + table))
+            self.assertTrue(seed.startswith('INSERT INTO public.' + table))
+            schemas.append(schema)
+            seeds.append(seed)
+        self.assertEqual(template['schema_sql'], '\n\n'.join(schemas))
+        self.assertEqual(template['seed_sql'], '\n\n'.join(seeds))
+        for sql in (template['schema_sql'], template['seed_sql']):
+            self.assertNotIn('CREATE ROLE', sql)
+            self.assertNotIn('GRANT ', sql)
+            self.assertNotIn('\\getenv', sql)
+            self.assertNotIn('wide_records', sql)
+        for changed in (source.replace('CREATE TABLE public.records', 'CREATE TABLE public.other'),
+                        source + '\n' + schemas[0]):
+            with self.assertRaisesRegex(ValueError, 'один блок seed'):
+                seed_statements(changed, 'records')
+
+    def test_library_fails_closed_when_source_contract_changes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = Path(temporary)
+            directory = repo / 'demo/scenarios'
+            directory.mkdir(parents=True)
+            write_json(directory / 'catalog.json', {'schema_version': 2})
+            write_json(directory / 'workload.json', {})
+            with self.assertRaisesRegex(ValueError, 'Неподдержанная версия'):
+                scenario_template(repo, TEMPLATES['01-records'])
+
+
 class JobTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -218,6 +282,55 @@ class JobTests(unittest.TestCase):
                 self.assertEqual(self.finish(jobs, id)['status'], 'completed')
                 self.assertEqual(runner.prepared[-1]['schema_sql'], template['schema_sql'])
                 self.assertEqual(runner.prepared[-1]['seed_sql'], template['seed_sql'])
+
+    def test_analysis_role_is_from_server_template_not_client_input(self):
+        runner = FakeRunner()
+        jobs = self.jobs(runner)
+        for template_id, expected in (('04-scenarios', 'frontend_scenarios'), ('01-records', 'frontend_reader')):
+            data = request(template_id)
+            data['analysis_role'] = 'postgres'
+            id = jobs.submit(data)['run_id']
+            self.assertEqual(self.finish(jobs, id)['status'], 'completed')
+            self.assertEqual(runner.prepared[-1]['analysis_role'], expected)
+            self.assertEqual(read_json(self.path / 'jobs' / id / 'request.json')['analysis_role'], expected)
+
+    def test_scenario_series_preserves_observed_input_and_trusted_role(self):
+        class SeriesRunner(FakeRunner):
+            def analyze(self, workload, output, series):
+                self.workload = read_json(workload)
+                self.series = read_json(series)
+                output.mkdir()
+                write_json(output / 'series.json', {'status': 'completed', 'series_id': 'series-engine-id',
+                                                    'points': [{'ordinal': 1, 'status': 'completed'}]})
+                write_json(output / 'point-1/report.json', {'status': 'completed', 'selected': {'candidate_ids': []}})
+                (output / 'point-1/report.html').write_text('saved point')
+                (output / 'point-1/indexes.sql').write_text('-- empty selected set')
+                return 0, '', ''
+        data = request('04-scenarios')
+        data['analysis_role'] = 'postgres'
+        data['write_source'] = 'observed'
+        for rates in data['workload']['table_write_rates'].values():
+            rates.update(source='observed', inserts_per_hour=.125, updates_per_hour=2_000_000.5)
+        data['workload']['table_write_rates_origin'] = {
+            'kind': 'observed', 'complete': True, 'reasons': [],
+            'window': {'from': '2026-11-12T10:00:00Z', 'to': '2026-11-12T12:00:00Z', 'period_seconds': 7200},
+            'source': {'source_id': '11111111-1111-1111-1111-111111111111', 'database_oid': 16384,
+                       'postgres_version': '16.15'}}
+        data['series'] = {'schema_version': 1, 'budget': 'write_budget_units_per_hour',
+                          'values': [0, .125, 9_000_000], 'timeout_seconds': 30}
+        runner = SeriesRunner()
+        jobs = self.jobs(runner)
+        id = jobs.submit(data)['run_id']
+        result = self.finish(jobs, id)
+        self.assertEqual(result['status'], 'completed', result.get('error'))
+        self.assertEqual(len(runner.prepared), 1)
+        self.assertEqual(runner.prepared[0]['analysis_role'], 'frontend_scenarios')
+        self.assertEqual(runner.workload, data['workload'])
+        self.assertEqual(runner.series, data['series'])
+        published = self.path / 'reports' / id
+        self.assertEqual(read_json(published / 'workload.json'), data['workload'])
+        self.assertEqual(read_json(published / 'demo-config.json')['write_source'], 'observed')
+        self.assertEqual(read_json(published / 'demo-config.json')['analysis_role'], 'frontend_scenarios')
 
     def test_failed_and_incomplete_exports_are_not_published(self):
         for runner in (FakeRunner(missing='indexes.sql'), FakeRunner('failed')):
@@ -378,6 +491,55 @@ class PreparationTests(unittest.TestCase):
         self.assertTrue(any(template['schema_sql'] in sql for _, sql in calls))
         self.assertTrue(any(template['seed_sql'] in sql for _, sql in calls))
         self.assertFalse(any(unvalidated_sql in sql for _, sql in calls))
+
+    def test_dml_role_is_separate_and_reset_for_the_next_dataset(self):
+        calls = []
+        runner = LocalRunner()
+        runner.db = lambda sql, database='frontend_demo': calls.append(sql) or '{"tables": []}'
+        template = TEMPLATES['04-scenarios']
+        runner.prepare({**request('04-scenarios'), **{key: template[key] for key in
+                        ('schema_sql', 'seed_sql', 'analysis_role')}})
+        self.assertEqual(runner.analysis_role, 'frontend_scenarios')
+        grants = '\n'.join(calls)
+        self.assertIn('GRANT UPDATE (payload), DELETE ON public.records TO frontend_scenarios', grants)
+        self.assertIn('ALTER ROLE frontend_scenarios SET default_transaction_read_only = on', grants)
+        self.assertNotIn('TO frontend_reader;', grants.split('GRANT UPDATE')[1])
+        calls.clear()
+        template = TEMPLATES['01-records']
+        runner.prepare({**request(), 'schema_sql': template['schema_sql'], 'seed_sql': template['seed_sql']})
+        self.assertEqual(runner.analysis_role, 'frontend_reader')
+        self.assertNotIn('GRANT UPDATE', '\n'.join(calls))
+        calls.clear()
+        with self.assertRaisesRegex(ValueError, 'Неизвестная роль'):
+            runner.prepare({'analysis_role': 'postgres'})
+        self.assertEqual(calls, [])
+
+    def test_cli_uses_only_the_role_pinned_by_preparation(self):
+        runner = LocalRunner()
+        runner.analysis_role = 'frontend_scenarios'
+        with tempfile.TemporaryDirectory() as temporary:
+            runner.cli = Path(temporary) / 'indexbudget'
+            runner.cli.touch()
+            folder = Path(temporary)
+            workload = folder / 'workload.json'
+            series = folder / 'series.json'
+            write_json(workload, {**request('04-scenarios')['workload'], 'analysis_mode': 'fast',
+                                  'candidate_ranking': 'baseline_cost'})
+            write_json(series, {'schema_version': 1, 'budget': 'storage_budget_bytes',
+                                'values': [0, 1, 2], 'timeout_seconds': 30})
+            for series_path in (None, series):
+                with self.subTest(series=bool(series_path)), patch.object(runner, 'command', return_value=(0, '', '')) as command:
+                    with patch.dict(os.environ, {'INDEXBUDGET_DATABASE_URL': 'shared-database-must-not-be-used',
+                                                 'FRONTEND_DB_PORT': '55433'}):
+                        runner.analyze(workload, folder / 'report', series_path)
+                url = command.call_args.kwargs['env']['INDEXBUDGET_DATABASE_URL']
+                self.assertEqual(url, 'jdbc:postgresql://127.0.0.1:55433/frontend_demo?user=frontend_scenarios')
+                args = command.call_args.args[0]
+                self.assertEqual(args[1], 'analyze-series' if series_path else 'analyze')
+                self.assertEqual(command.call_args.kwargs['timeout'], 90 if series_path else 360)
+                if series_path:
+                    self.assertEqual(args[args.index('--analysis-mode') + 1], 'fast')
+                    self.assertEqual(args[args.index('--candidate-ranking') + 1], 'baseline_cost')
 
 
 class DeploymentLifecycleTests(unittest.TestCase):

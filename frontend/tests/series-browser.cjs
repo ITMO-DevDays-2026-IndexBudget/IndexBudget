@@ -22,6 +22,8 @@ const cli = path.resolve(process.env.FRONTEND_CLI || 'build/install/indexbudget/
       await page.locator('#workspace:not([disabled])').waitFor();
       const skip = page.locator('[data-tour="skip"]');
       if (await skip.isVisible()) await skip.click();
+      // This parity test intentionally uses the original SELECT-only dataset and reader role.
+      await page.locator('[data-template="01-records"]').click();
       // A small supported workload keeps this acceptance deterministic within the normal budget.
       await page.evaluate(() => {
         const first = state.workload.queries[0];
