@@ -763,3 +763,12 @@ LocalRunner вызывает существующий CLI один раз на j
 Jobs подготавливает dataset один раз, публикует единый HTML/JSON и относительные
 артефакты точек; progress — сохранённые point states core, без повторного EXPLAIN.
 Контракт восстановления и API описан в [demo-budget-series.md](demo-budget-series.md).
+
+## D3 / #110: экспериментальная проверка рекомендации
+
+Отдельный runner demo/benchmark создаёт только собственную одноразовую БД. Bridge
+benchmarkObservedWorkload переиспользует TableWriteSnapshotJson/WriteProfileCalculator
+#107 и передаёт observed rates/origin обычному analyze сценария #106. Он не меняет
+формулы domain и не расширяет SQL анализатора INSERT. Обычный analyze не выполняет
+DML/EXPLAIN ANALYZE/физический CREATE INDEX. Формат benchmark v1, методика восстановления,
+метрики и ограничения описаны в [demo/benchmark/README.md](../demo/benchmark/README.md).
