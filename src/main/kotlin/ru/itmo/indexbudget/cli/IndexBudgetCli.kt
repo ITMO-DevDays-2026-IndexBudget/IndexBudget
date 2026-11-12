@@ -25,6 +25,7 @@ class IndexBudgetCli(
     private val outputDirectoryValidator: OutputDirectoryValidator = OutputDirectoryValidator(),
     private val analysisRunner: AnalysisRunner = UnavailableAnalysisRunner(),
     private val statisticsCommand: StatisticsCommand = StatisticsCommand(),
+    private val tableStatisticsCommand: TableStatisticsCommand = TableStatisticsCommand(),
     private val budgetSeriesCommand: BudgetSeriesCommand = BudgetSeriesCommand(workloadReader),
     private val importWorkloadCommand: ImportWorkloadCommand = ImportWorkloadCommand(),
 ) {
@@ -35,6 +36,7 @@ class IndexBudgetCli(
         err: PrintWriter = PrintWriter(System.err, true),
         context: RunContext = RunContext(),
     ): Int {
+        if (args.firstOrNull() == "table-stats") return tableStatisticsCommand.execute(args, out, err)
         if (args.firstOrNull() == "stats") return statisticsCommand.execute(args, out, err)
         if (args.firstOrNull() == "analyze-series") return budgetSeriesCommand.execute(args, out, err, context)
         if (args.firstOrNull() == "import-workload") return importWorkloadCommand.execute(args, out, err)
@@ -174,6 +176,7 @@ class IndexBudgetCli(
               indexbudget analyze --workload <path> --output-dir <path> [--analysis-mode fast|normal|deep] [--candidate-ranking frequency|baseline_cost]
               indexbudget analyze-series --help
               indexbudget stats --help
+              indexbudget table-stats --help
               indexbudget import-workload --help
 
             Validates JSON v2, shared queries, frequency profiles and budgets.

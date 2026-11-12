@@ -707,6 +707,16 @@ EXPLAIN, deadline без нового cleanup SQL, rollback, повтор пос
 
 `SeriesPointRun.report` и `BudgetSeriesPoint.report` — внутренний сохранённый `AnalysisReport?`, полученный после успешного экспорта точки. Он не добавляется к JSON v1. `HtmlReportRenderer.renderContent(report, prefix)` переиспользует полные секции обычного отчёта, задавая изолированные `variant-N-` ID для общей страницы. Отсутствие модели допускается для подставных producer; production `AnalysisPipeline` возвращает её при успешной публикации.
 
+## B1 / #102: источник табличных counters для #107
+
+`TableStatisticsCollector` возвращает отдельный `TableSnapshot` v1. Идентичность:
+source UUID + database OID + relation OID; n_tup_hot_upd не вычитается из n_tup_upd.
+Nullable counters и partial обязательны для потребителей; отсутствие/track_counts=off
+не означает нулевую запись. `JdbcSnapshotReader` общий с query collector и отвечает
+за deadline/socket/guard при JDBC-чтении. `TableStatisticsCommand` управляет одиночным
+чтением/парой и публикацией, не вычисляет write rates (#107).
+Полный формат, ограничения обнаружения reset и примеры — [table-statistics-v1.md](table-statistics-v1.md).
+
 ## Методы индексов и BRIN (#114)
 
 `WorkloadInput.indexMethods: Set<IndexMethod>` по умолчанию `{BTREE}`; reader

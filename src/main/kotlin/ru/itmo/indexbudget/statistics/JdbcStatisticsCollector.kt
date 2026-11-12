@@ -8,8 +8,6 @@ import java.sql.SQLException
 import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.Executor
-import java.util.concurrent.Executors
-import java.util.concurrent.TimeUnit
 
 /** Read-only PostgreSQL 16 collector. No reset, DDL, ANALYZE, ranking or index session initialization. */
 class JdbcStatisticsCollector(
@@ -111,52 +109,10 @@ class JdbcStatisticsCollector(
             StatisticsEpoch(it.getTimestamp("stats_reset").toInstant().toString(), it.getLong("dealloc"))
         }
 
-    private fun <T> query(connection: Connection, context: RunContext, sql: String, read: (ResultSet) -> T): T {
-        context.checkDeadline()
-        connection.prepareStatement(sql).use { statement ->
-            context.checkDeadline()
-            val millis = context.remainingTime().toMillis().coerceAtLeast(1)
-            connection.setNetworkTimeout(Executor { it.run() }, millis.coerceAtMost(Int.MAX_VALUE.toLong()).toInt())
-            statement.queryTimeout = ((millis + 999) / 1000).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
-            statement.fetchSize = 128
-            context.checkDeadline()
-            // queryTimeout covers execute, not later cursor FETCH operations in pgJDBC.
-            // Keep an absolute deadline guard alive until the entire ResultSet has closed.
-            CursorDeadlineGuard(connection, context).use {
-                return statement.executeQuery().use(read)
-            }
-        }
-    }
-
-    private fun next(connection: Connection, context: RunContext, rows: ResultSet): Boolean {
-        context.checkDeadline()
-        // Refresh before every next(): the driver can fetch a new page here, not just in execute.
-        val millis = context.remainingTime().toMillis().coerceIn(1, Int.MAX_VALUE.toLong()).toInt()
-        connection.setNetworkTimeout(Executor { it.run() }, millis)
-        context.checkDeadline()
-        val hasNext = rows.next()
-        context.checkDeadline()
-        return hasNext
-    }
-
-    /** Absolute bound across execute, all FETCHes and row processing, including a stalled read. */
-    private class CursorDeadlineGuard(connection: Connection, context: RunContext) : AutoCloseable {
-        private val scheduler = Executors.newSingleThreadScheduledExecutor { task ->
-            Thread(task, "indexbudget-statistics-deadline").apply { isDaemon = true }
-        }
-        private val pending = scheduler.scheduleAtFixedRate({
-            if (context.isCancelled || context.remainingTime().isZero) {
-                try { connection.abort(Executor { it.run() }) } catch (_: Exception) {
-                    try { connection.close() } catch (_: Exception) { /* Owner closes again in finally. */ }
-                }
-            }
-        }, 0, 10, TimeUnit.MILLISECONDS)
-
-        override fun close() {
-            pending.cancel(false)
-            scheduler.shutdownNow()
-        }
-    }
+    private val reader = JdbcSnapshotReader()
+    private fun <T> query(connection: Connection, context: RunContext, sql: String, read: (ResultSet) -> T): T =
+        reader.query(connection, context, sql, read)
+    private fun next(connection: Connection, context: RunContext, rows: ResultSet) = reader.next(connection, context, rows)
 
     private fun fail(code: ErrorCode, message: String): Nothing = throw AnalysisException(AnalysisError(code, message))
 
