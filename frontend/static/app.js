@@ -5,6 +5,7 @@ const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp
 const clone = value => JSON.parse(JSON.stringify(value));
 const format = value => new Intl.NumberFormat('ru-RU', {maximumFractionDigits: 2}).format(value);
 const draftKey = 'indexbudget.frontend.v1';
+const maxCallsPerHour = 1000000;
 let templates = [], state, tab = 'queries', queryIndex = 0, busy = false, health = {};
 let guardsText = '', manualText = '', activeJob = null, saveTimer;
 
@@ -13,8 +14,8 @@ const helpTexts = {
   write: ['Бюджет записи', 'Условные единицы: изменения строк × число колонок индекса, включая INCLUDE. Выключено — без ограничения; ноль — нулевой бюджет, а не отключение.'],
   objective: ['Robust или mean?', 'Robust выбирает набор по худшему отношению стоимости сценария к исходной. Mean — по отношению средних стоимостей с учётом весов.'],
   mode: ['Глубина анализа', 'Быстрый режим — для первого эксперимента; глубокий даёт поиску больше времени и попыток, но не обещает лучший набор. При достижении лимита пригодный результат сохраняется как частичный.'],
-  profiles: ['Частота и вес', 'Частота — сколько раз SQL вызывается за час внутри сценария. Вес — доля самого сценария: веса 9 и 1 означают 90% и 10%; в robust учитываются оба.'],
-  schema: ['Что меняет схема', 'DDL и заполнение действительно выполняются в отдельной demo-БД перед анализом. После изменения колонок обновите SQL и данные; «Проверить схему» обновит диаграмму.']
+  profiles: ['Частота и вес', 'Частота задаёт модель нагрузки: целое число от 0 до 1 000 000 вызовов/ч. Анализ не запускает SQL указанное число раз. Вес — доля самого сценария: веса 9 и 1 означают 90% и 10%; в robust учитываются оба.'],
+  schema: ['Подготовленный датасет', 'Схема и данные заданы серверным шаблоном. Перед анализом сервер восстанавливает этот датасет в отдельной demo-БД. «Проверить схему» обновляет диаграмму из PostgreSQL.']
 };
 
 function helpButton(key) {
@@ -90,11 +91,10 @@ function installHelp() {
 function installTour() {
   const seenKey = 'indexbudget.tour.v1';
   const steps = [
-    {target:'#templates', title:'Начните с демо-базы', text:'Каждый шаблон содержит настоящие данные, схему и готовую нагрузку. Выбор заполнит форму — дальше всё можно менять.'},
+    {target:'#templates', title:'Начните с демо-базы', text:'Каждый шаблон содержит настоящие данные, схему и готовую нагрузку. Выбор заполнит форму. Меняйте SQL, частоты и бюджеты; схема и данные фиксированы.'},
     {target:'.editor-panel', tab:'queries', title:'Опишите запросы', text:'Здесь редактируются общие SQL: можно добавить запрос или удалить лишний. Вкладка JSON показывает точный вход анализа и позволяет его скачать.'},
-    {target:'.editor-panel', tab:'profiles', title:'Задайте сценарии нагрузки', text:'Частоты — вызовы SQL за час внутри сценария. Веса задают долю сценариев: например, обычный день и распродажа.'},
-    {target:'.editor-panel', tab:'schema', title:'Измените схему и данные', text:'DDL и заполнение выполняются в отдельной demo-БД перед анализом. «Проверить схему» применяет изменения и обновляет диаграмму справа.'},
-    {target:'.schema-panel', title:'Посмотрите на связи', text:'На карте — таблицы, колонки, внешние ключи и существующие индексы. Подпись сообщает, показан ли шаблон, проверенная схема или устаревшая версия.'},
+    {target:'.editor-panel', tab:'profiles', title:'Задайте сценарии нагрузки', text:'Частоты — модель вызовов SQL за час, от 0 до 1 000 000 целыми числами. Указанное число запросов не выполняется. Веса задают долю сценариев.'},
+    {target:'.schema-panel', title:'Посмотрите на связи', text:'На карте — таблицы, колонки, внешние ключи и существующие индексы. Схема и данные фиксированы выбранным шаблоном. Подпись сообщает, проверена ли схема в PostgreSQL.'},
     {target:'.budget-grid', title:'Ограничьте новые индексы', text:'Укажите доступное место, максимальное число индексов и, при необходимости, бюджет записи. Существующие индексы уже входят в исходный план.'},
     {target:'.strategy-grid', title:'Выберите цель и глубину', text:'Robust учитывает худший сценарий, mean — средний с учётом весов. Глубина задаёт ресурсы поиска; больше времени не гарантирует лучший результат.'},
     {target:'.advanced', advanced:true, title:'Тонкая настройка — по желанию', text:'Здесь доступны интенсивность записи, рейтинг кандидатов, ограничения ухудшения запросов и ручные индексы для сравнения. Для первого запуска достаточно значений шаблона.'},
@@ -218,7 +218,9 @@ function error(message) {
 
 function persist() {
   try {
-    localStorage.setItem(draftKey, JSON.stringify({state, guardsText, manualText}));
+    localStorage.setItem(draftKey, JSON.stringify({state: {
+      template_id: state.template_id, template_version: state.template_version, workload: state.workload
+    }, guardsText, manualText}));
     $('saved').textContent = 'Черновик сохранён в этом браузере';
   } catch {
     $('saved').textContent = 'Браузер не позволяет сохранить черновик';
@@ -231,11 +233,33 @@ function changed() {
   renderSummary();
 }
 
+function templateState(template) {
+  return {template_id: template.id, template_version: template.version,
+    workload: clone(template.workload), catalog: clone(template.catalog), catalogSource: 'template'};
+}
+
+function restoreDraft(draft, availableTemplates) {
+  const saved = draft?.state;
+  const template = availableTemplates.find(t => t.id === saved?.template_id && t.version === saved?.template_version);
+  const w = saved?.workload;
+  // Старые черновики содержали DDL, seed и каталог: восстанавливаем только ввод нагрузки.
+  // Ошибочные числовые значения оставляем для исправления, не округляем и не заменяем нулём.
+  if (!template || !w || w.schema_version !== 2 || !w.constraints || typeof w.constraints !== 'object'
+      || !Array.isArray(w.queries) || !w.queries.length || w.queries.length > 20
+      || !w.queries.every(q => q && typeof q.id === 'string' && typeof q.sql === 'string')
+      || !Array.isArray(w.profiles) || !w.profiles.length || w.profiles.length > 3
+      || !w.profiles.every(p => p && typeof p.id === 'string' && p.calls_per_hour
+        && typeof p.calls_per_hour === 'object' && !Array.isArray(p.calls_per_hour))
+      || (w.table_write_rates && (typeof w.table_write_rates !== 'object'
+        || !Object.values(w.table_write_rates).every(r => r && typeof r === 'object')))) return null;
+  return {state: {...templateState(template), workload: clone(w)},
+    guardsText: typeof draft.guardsText === 'string' ? draft.guardsText : '',
+    manualText: typeof draft.manualText === 'string' ? draft.manualText : ''};
+}
+
 function loadTemplate(id) {
   const t = templates.find(t => t.id === id);
-  state = {template_id: t.id, template_version: t.version, schema_sql: t.schema_sql,
-    seed_sql: t.seed_sql, workload: clone(t.workload), catalog: clone(t.catalog),
-    catalogSource: 'template', catalogSchema: t.schema_sql, catalogSeed: t.seed_sql};
+  state = templateState(t);
   guardsText = ''; manualText = ''; queryIndex = 0;
   error(''); renderAll(); persist();
 }
@@ -282,7 +306,7 @@ function updateObjective() {
 function renderRates() {
   const rows = Object.entries(state.workload.table_write_rates || {});
   $('write-rates').innerHTML = `${rows.length ? '<div class="rate-row rate-head"><span>Таблица</span><span>INSERT</span><span>UPDATE</span><span>DELETE</span><span></span></div>' : '<p class="field-note">Профиль записи не задан. При включённом бюджете нужны данные для всех таблиц запросов.</p>'}
-    ${rows.map(([name, rate], i) => `<div class="rate-row"><span>${escape(name)}</span>${['inserts_per_hour','updates_per_hour','deletes_per_hour'].map(k => `<input type="number" min="0" step="any" value="${rate[k]}" data-rate="${i}" data-rate-key="${k}" aria-label="${escape(name)} ${k}">`).join('')}<button type="button" data-remove-rate="${i}" aria-label="Удалить интенсивность записи ${escape(name)}">×</button></div>`).join('')}
+    ${rows.map(([name, rate], i) => `<div class="rate-row"><span>${escape(name)}</span>${['inserts_per_hour','updates_per_hour','deletes_per_hour'].map(k => `<input type="number" min="0" step="any" value="${escape(rate[k])}" data-rate="${i}" data-rate-key="${k}" aria-label="${escape(name)} ${k}">`).join('')}<button type="button" data-remove-rate="${i}" aria-label="Удалить интенсивность записи ${escape(name)}">×</button></div>`).join('')}
     <div class="rate-actions"><button type="button" class="quiet-button" id="add-rate">+ Таблица</button><button type="button" class="text-button" id="clear-rates">Очистить профиль записи</button></div>`;
 }
 
@@ -303,8 +327,10 @@ function renderQueries() {
   const q = queries[queryIndex];
   $('editor-content').innerHTML = `<div class="editor-toolbar"><div class="query-tabs">${queries.map((q,i) => `<button type="button" class="query-tab ${i===queryIndex ? 'active' : ''}" data-query="${i}" title="${escape(q.id)}" aria-pressed="${i===queryIndex}"><span>Q${String(i+1).padStart(2,'0')}</span> ${escape(q.id.replace(/^(records_|orders_|wide_)/,''))}</button>`).join('')}</div><button type="button" id="add-query" class="quiet-button" ${queries.length>=20?'disabled':''} aria-label="Добавить запрос">+ SQL</button></div>
     <div class="editor-meta"><label for="query-id">ID</label><input id="query-id" value="${escape(q.id)}" required><button type="button" id="delete-query" class="delete-button" ${queries.length<=1?'disabled':''}>Удалить запрос</button></div>
-    <div class="code-editor"><div class="line-numbers" aria-hidden="true" id="line-numbers"></div><textarea id="sql-editor" spellcheck="false" aria-label="SQL запроса ${escape(q.id)}" required>${escape(q.sql)}</textarea></div>
+    <div class="code-editor"><div class="line-numbers" aria-hidden="true" id="line-numbers"></div><textarea id="sql-editor" spellcheck="false" aria-label="SQL запроса ${escape(q.id)}" required></textarea></div>
     <div class="editor-footnote"><span>SELECT · без выполнения запроса · полный SQL передаётся в EXPLAIN</span><span class="dialect">POSTGRESQL</span></div>`;
+  // HTML-парсер удаляет первый перевод строки внутри textarea; значение задаём без разбора HTML.
+  $('sql-editor').value = q.sql;
   lineNumbers();
   $('sql-editor').addEventListener('scroll', () => $('line-numbers').scrollTop = $('sql-editor').scrollTop);
 }
@@ -315,9 +341,9 @@ function lineNumbers() {
 
 function renderProfiles() {
   const {queries, profiles} = state.workload;
-  $('editor-content').innerHTML = `<div class="profile-content"><p>Одни запросы, разные режимы работы. Частоты задаются в вызовах в час.</p><div class="profile-table-wrap"><table class="profile-table"><thead><tr><th>Запрос / профиль</th>${profiles.map((p,i) => `<th><div class="profile-name"><input value="${escape(p.id)}" data-profile-id="${i}" aria-label="ID профиля ${i+1}" required><button type="button" data-delete-profile="${i}" ${profiles.length===1?'disabled':''} aria-label="Удалить профиль ${escape(p.id)}">×</button></div></th>`).join('')}</tr></thead><tbody>
-    <tr><td>Вес сценария</td>${profiles.map((p,i) => `<td><input type="number" min="0" step="any" value="${p.weight}" data-weight="${i}" aria-label="Вес ${escape(p.id)}" required><div class="profile-share" data-share="${i}"></div></td>`).join('')}</tr>
-    ${queries.map((q,qi) => `<tr><td>${escape(q.id)}</td>${profiles.map((p,pi) => `<td><input type="number" min="0" step="any" value="${p.calls_per_hour[q.id]}" data-frequency-profile="${pi}" data-frequency-query="${qi}" aria-label="Частота ${escape(q.id)} в ${escape(p.id)}" required></td>`).join('')}</tr>`).join('')}</tbody><tfoot><tr><td>Всего вызовов/ч</td>${profiles.map((p,i)=>`<td data-total="${i}"></td>`).join('')}</tr></tfoot></table></div><div class="profile-actions"><button type="button" id="add-profile" class="quiet-button" ${profiles.length>=3?'disabled':''}>+ Профиль нагрузки</button></div><p class="profile-note">Вес задаёт относительную долю сценария для среднего результата. В robust каждый сценарий участвует в худшей оценке, даже с маленьким весом.</p></div>`;
+  $('editor-content').innerHTML = `<div class="profile-content"><p>Частоты — целые числа от 0 до 1 000 000 вызовов/ч. Это модель нагрузки: указанное число запросов не выполняется.</p><div class="profile-table-wrap"><table class="profile-table"><thead><tr><th>Запрос / профиль</th>${profiles.map((p,i) => `<th><div class="profile-name"><input value="${escape(p.id)}" data-profile-id="${i}" aria-label="ID профиля ${i+1}" required><button type="button" data-delete-profile="${i}" ${profiles.length===1?'disabled':''} aria-label="Удалить профиль ${escape(p.id)}">×</button></div></th>`).join('')}</tr></thead><tbody>
+    <tr><td>Вес сценария</td>${profiles.map((p,i) => `<td><input type="number" min="0" step="any" value="${escape(p.weight)}" data-weight="${i}" aria-label="Вес ${escape(p.id)}" required><div class="profile-share" data-share="${i}"></div></td>`).join('')}</tr>
+    ${queries.map((q,qi) => `<tr><td>${escape(q.id)}</td>${profiles.map((p,pi) => `<td><input type="number" min="0" max="${maxCallsPerHour}" step="1" value="${escape(p.calls_per_hour[q.id])}" data-frequency-profile="${pi}" data-frequency-query="${qi}" aria-label="Частота ${escape(q.id)} в ${escape(p.id)}" required></td>`).join('')}</tr>`).join('')}</tbody><tfoot><tr><td>Всего вызовов/ч</td>${profiles.map((p,i)=>`<td data-total="${i}"></td>`).join('')}</tr></tfoot></table></div><div class="profile-actions"><button type="button" id="add-profile" class="quiet-button" ${profiles.length>=3?'disabled':''}>+ Профиль нагрузки</button></div><p class="profile-note">Вес задаёт относительную долю сценария для среднего результата. В robust каждый сценарий участвует в худшей оценке, даже с маленьким весом.</p></div>`;
   const intro = $('editor-content').querySelector('.profile-content > p');
   intro.insertAdjacentHTML('beforeend', ' ' + helpButton('profiles'));
   updateProfiles();
@@ -326,11 +352,16 @@ function renderProfiles() {
 function updateProfiles() {
   const profiles = state.workload.profiles, sum = profiles.reduce((s,p) => s + p.weight, 0);
   document.querySelectorAll('[data-share]').forEach(e => e.textContent = sum > 0 ? format(profiles[+e.dataset.share].weight/sum*100) + '% от времени' : 'Задайте веса');
-  document.querySelectorAll('[data-total]').forEach(e => e.textContent = format(Object.values(profiles[+e.dataset.total].calls_per_hour).reduce((a,b)=>a+b,0)));
+  document.querySelectorAll('[data-total]').forEach(e => {
+    const values = Object.values(profiles[+e.dataset.total].calls_per_hour);
+    e.textContent = values.every(v => Number.isInteger(v) && v >= 0 && v <= maxCallsPerHour)
+      ? format(values.reduce((a,b) => a+b, 0)) : 'Проверьте частоты';
+  });
 }
 
 function renderSchema() {
-  $('editor-content').innerHTML = `<div class="schema-content"><p>Подготовка выполняется в отдельной локальной базе. Схема и данные пересоздаются перед каждым анализом.</p><label for="schema-sql">Схема и существующие индексы · DDL</label><textarea id="schema-sql" class="code" spellcheck="false" required>${escape(state.schema_sql)}</textarea><label for="seed-sql">Заполнение данными · SQL</label><textarea id="seed-sql" class="code" spellcheck="false" required>${escape(state.seed_sql)}</textarea><div class="schema-actions"><button type="button" id="preview-schema" class="quiet-button">Проверить схему</button><span class="hint">Обновит диаграмму из PostgreSQL</span></div><p class="field-note">После изменения колонок обновите запросы, заполнение и профиль записи. ANALYZE статистики выполняется на этапе подготовки.</p></div>`;
+  const template = templates.find(t => t.id === state.template_id);
+  $('editor-content').innerHTML = `<div class="schema-content"><p>Схема и данные фиксированы выбранным датасетом. Перед каждым анализом сервер восстанавливает их в отдельной demo-БД.</p><h4 id="schema-sql-label">Схема и существующие индексы · только просмотр</h4><pre class="code" tabindex="0" aria-labelledby="schema-sql-label">${escape(template.schema_sql)}</pre><div class="schema-actions"><button type="button" id="preview-schema" class="quiet-button">Проверить схему</button><span class="hint">Обновит диаграмму из PostgreSQL</span></div></div>`;
   const intro = $('editor-content').querySelector('.schema-content > p');
   intro.insertAdjacentHTML('beforeend', ' ' + helpButton('schema'));
 }
@@ -351,14 +382,12 @@ function materialize() {
 function renderJson() {
   let text, valid = true;
   try { text = JSON.stringify(materialize(), null, 2); } catch (e) { text = e.message; valid = false; }
-  $('editor-content').innerHTML = `<div class="json-content"><p>Именно этот workload JSON v2 получит анализатор. DDL и заполнение сохраняются отдельно в конфигурации демо.</p><div class="json-toolbar"><button type="button" id="download-json" class="quiet-button" ${valid?'':'disabled'}>↓ Скачать JSON</button><span class="hint">${valid ? format(new TextEncoder().encode(text).length) + ' байт' : 'Исправьте дополнительные параметры'}</span></div><pre>${escape(text)}</pre></div>`;
+  $('editor-content').innerHTML = `<div class="json-content"><p>Именно этот workload JSON v2 получит анализатор. Датасет выбирается отдельно по шаблону; его схема и данные фиксированы.</p><div class="json-toolbar"><button type="button" id="download-json" class="quiet-button" ${valid?'':'disabled'}>↓ Скачать JSON</button><span class="hint">${valid ? format(new TextEncoder().encode(text).length) + ' байт' : 'Исправьте дополнительные параметры'}</span></div><pre>${escape(text)}</pre></div>`;
 }
 
 function renderDiagram() {
   const catalog = state.catalog;
-  const stale = state.schema_sql !== state.catalogSchema || state.seed_sql !== state.catalogSeed;
-  $('schema-source').textContent = stale ? '● Схема изменена · требуется проверка' : state.catalogSource === 'database' ? '● Проверено в локальном PostgreSQL' : '● Структура шаблона · до проверки в БД';
-  $('schema-source').classList.toggle('stale', stale);
+  $('schema-source').textContent = state.catalogSource === 'database' ? '● Проверено в локальном PostgreSQL' : '● Структура шаблона · до проверки в БД';
   const column = c => `<div class="column-row"><b>${c.primary?'PK':catalog.relations.some(r=>r.label.includes(`(${c.name})`))?'FK':'·'}</b><span>${escape(c.name)}</span><span class="column-type">${escape(c.type.replace('timestamp without time zone','timestamp'))}</span></div>`;
   $('diagram').innerHTML = catalog.tables.map((t,i) => `<article class="db-table"><div class="db-table-head"><strong>${escape(t.name.replace(/^public\./,''))}</strong><span>${format(Math.max(0,t.rows))} строк</span></div><div class="db-table-body">${t.columns.slice(0,7).map(column).join('')}</div>${t.columns.length>7?`<details><summary>Ещё ${t.columns.length-7} колонок</summary>${t.columns.slice(7).map(column).join('')}</details>`:''}${t.indexes.length?`<details><summary>${t.indexes.length} существующих инд.</summary>${t.indexes.map(x=>`<p style="overflow-wrap:anywhere;margin-top:8px">${escape(x)}</p>`).join('')}</details>`:''}</article>${i < catalog.tables.length-1 && catalog.relations.length ? '<div class="relation">Связь по внешнему ключу</div>':''}`).join('') + (catalog.tables.length ? '' : '<p class="hint">В схеме пока нет таблиц</p>');
   $('schema-stats').innerHTML = `<span>${catalog.tables.length} табл. · ${catalog.tables.reduce((n,t)=>n+t.columns.length,0)} колонок</span><span>${catalog.relations.length} связей</span>`;
@@ -377,11 +406,37 @@ function renderSummary() {
   $('summary').innerHTML = items.map(([k,v])=>`<div><dt>${escape(k)}</dt><dd>${escape(v)}</dd></div>`).join('');
 }
 
+function validateWorkload(workload) {
+  const {queries, profiles} = workload;
+  if (!Array.isArray(queries) || queries.length < 1 || queries.length > 20) throw new Error('Нужно от 1 до 20 запросов.');
+  const ids = queries.map(q => q.id);
+  if (ids.some(id => typeof id !== 'string' || !id.trim()) || new Set(ids).size !== ids.length) throw new Error('ID запросов должны быть непустыми и различаться.');
+  for (const query of queries) {
+    if (typeof query.sql !== 'string' || !query.sql.trim()) throw new Error(`${query.id}: введите SQL.`);
+    if (new TextEncoder().encode(query.sql).length > 65536) throw new Error(`${query.id}: SQL превышает 64 KiB.`);
+  }
+  if (!Array.isArray(profiles) || profiles.length < 1 || profiles.length > 3) throw new Error('Нужно от 1 до 3 профилей нагрузки.');
+  const profileIds = profiles.map(p => p.id);
+  if (profileIds.some(id => typeof id !== 'string' || !id.trim()) || new Set(profileIds).size !== profileIds.length) throw new Error('ID профилей должны быть непустыми и различаться.');
+  for (const profile of profiles) {
+    if (!Number.isFinite(profile.weight) || profile.weight <= 0) throw new Error(`${profile.id}: вес должен быть положительным.`);
+    const calls = profile.calls_per_hour;
+    if (!calls || typeof calls !== 'object' || Array.isArray(calls) || Object.keys(calls).length !== ids.length || ids.some(id => !Object.hasOwn(calls, id))) throw new Error(`${profile.id}: задайте частоты для всех запросов.`);
+    for (const id of ids) {
+      if (!Number.isInteger(calls[id]) || calls[id] < 0 || calls[id] > maxCallsPerHour) throw new Error(`${profile.id}, ${id}: частота должна быть целым числом от 0 до 1 000 000 вызовов/ч.`);
+    }
+    if (!ids.some(id => calls[id] > 0)) throw new Error(`${profile.id}: хотя бы одна частота должна быть больше нуля.`);
+  }
+  if (ids.some(id => !profiles.some(p => p.calls_per_hour[id] > 0))) throw new Error('Каждый запрос должен использоваться хотя бы в одном профиле.');
+}
+
 function requestSnapshot() {
+  // Проверяем всю матрицу и SQL, даже если их вкладка сейчас не открыта.
+  const workload = materialize();
+  validateWorkload(workload);
   const invalid = [...$('workspace').querySelectorAll('input,textarea,select')].find(e=>!e.disabled && !e.checkValidity());
   if (invalid) { invalid.reportValidity(); throw new Error('Проверьте выделенное поле.'); }
-  return {template_id: state.template_id, template_version: state.template_version,
-    schema_sql: state.schema_sql, seed_sql: state.seed_sql, workload: materialize()};
+  return {template_id: state.template_id, template_version: state.template_version, workload};
 }
 
 function setBusy(value) {
@@ -432,7 +487,6 @@ async function poll(id) {
       history.replaceState(null,'','/');
       if (job.catalog) {
         state.catalog = job.catalog; state.catalogSource = 'database';
-        state.catalogSchema = state.schema_sql; state.catalogSeed = state.seed_sql;
         renderDiagram(); persist();
       }
       if (job.status === 'failed') error(job.error || 'Не удалось завершить запуск.');
@@ -494,8 +548,6 @@ document.addEventListener('input', e => {
   if (d.rate!==undefined) w.table_write_rates[Object.keys(w.table_write_rates)[+d.rate]][d.rateKey]=el.valueAsNumber;
   switch(el.id) {
     case 'sql-editor': w.queries[queryIndex].sql=el.value; lineNumbers(); break;
-    case 'schema-sql': state.schema_sql=el.value; renderDiagram(); break;
-    case 'seed-sql': state.seed_sql=el.value; renderDiagram(); break;
     case 'storage': w.constraints.storage_budget_bytes=Math.round(el.valueAsNumber*1048576); $('storage-range').value=Math.min(256,el.valueAsNumber); break;
     case 'storage-range': w.constraints.storage_budget_bytes=el.valueAsNumber*1048576; $('storage').value=el.value; break;
     case 'max-indexes': w.constraints.max_indexes=el.valueAsNumber; break;
@@ -545,8 +597,9 @@ async function init() {
     templates=await api('/api/templates');
     let draft;
     try { draft=JSON.parse(localStorage.getItem(draftKey)); } catch {}
-    if(draft?.state && templates.some(t=>t.id===draft.state.template_id&&t.version===draft.state.template_version)) {
-      state=draft.state; guardsText=draft.guardsText||''; manualText=draft.manualText||''; renderAll();
+    const restored = restoreDraft(draft, templates);
+    if (restored) {
+      ({state, guardsText, manualText} = restored); renderAll(); persist();
     } else loadTemplate(templates[0].id);
     $('workspace').disabled=false; $('analyze').disabled=false; $('start-tour').disabled=false;
     const id=new URLSearchParams(location.search).get('run');
