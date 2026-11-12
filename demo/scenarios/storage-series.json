@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "budget": "storage_budget_bytes",
+  "values": [0, 4194304, 16777216, 67108864],
+  "timeout_seconds": 600
+}

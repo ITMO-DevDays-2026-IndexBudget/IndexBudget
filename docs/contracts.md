@@ -719,6 +719,16 @@ Hash с reloptions консервативно не удаляет автомат
 Report v4 / сводка v2 сохраняют метод и null direction/nulls; B-tree-only — v3/v1.
 [Полный контракт и реальная проверка](hash.md).
 
+## B1 / #102: источник табличных counters для #107
+
+`TableStatisticsCollector` возвращает отдельный `TableSnapshot` v1. Идентичность:
+source UUID + database OID + relation OID; n_tup_hot_upd не вычитается из n_tup_upd.
+Nullable counters и partial обязательны для потребителей; отсутствие/track_counts=off
+не означает нулевую запись. `JdbcSnapshotReader` общий с query collector и отвечает
+за deadline/socket/guard при JDBC-чтении. `TableStatisticsCommand` управляет одиночным
+чтением/парой и публикацией, не вычисляет write rates (#107).
+Полный формат, ограничения обнаружения reset и примеры — [table-statistics-v1.md](table-statistics-v1.md).
+
 ## Методы индексов и BRIN (#114)
 
 `WorkloadInput.indexMethods: Set<IndexMethod>` по умолчанию `{BTREE}`; reader

@@ -1,0 +1,43 @@
+{
+  "schema_version": 2,
+  "objective": "robust",
+  "analysis_mode": "normal",
+  "candidate_ranking": "frequency",
+  "queries": [
+    {"id": "records_by_group", "sql": "SELECT id, value FROM public.records WHERE group_id = 42"},
+    {"id": "records_by_value", "sql": "SELECT id, payload FROM public.records WHERE value = 7"},
+    {"id": "time_window", "sql": "SELECT id, value FROM public.records WHERE created_at BETWEEN '2026-01-03 07:30:00'::timestamp AND '2026-01-03 07:31:00'::timestamp"},
+    {"id": "group_list", "sql": "SELECT id, value FROM public.records WHERE group_id IN (42, 43, 44)"},
+    {"id": "alternative_filters", "sql": "SELECT id, value FROM public.records WHERE (group_id = 42 AND value >= 500) OR (group_id = 43 AND value < 10)"},
+    {"id": "category_join", "sql": "SELECT r.id, g.name FROM public.records r INNER JOIN public.groups g ON r.group_id = g.id WHERE g.category = 7 AND r.value >= 990 ORDER BY r.created_at DESC LIMIT 20"},
+    {"id": "all_records", "sql": "SELECT * FROM public.records WHERE group_id >= 0"},
+    {"id": "update_payload", "sql": "UPDATE public.records r SET payload = 'demo-updated' WHERE r.group_id = 42 AND r.value >= 900"},
+    {"id": "delete_recent", "sql": "DELETE FROM public.records WHERE created_at < '2026-01-01 00:10:00'::timestamp AND group_id IN (42, 43)"}
+  ],
+  "profiles": [
+    {"id": "normal", "weight": 9, "calls_per_hour": {
+      "records_by_group": 3000, "records_by_value": 150, "time_window": 100,
+      "group_list": 200, "alternative_filters": 100, "category_join": 50,
+      "all_records": 1, "update_payload": 30, "delete_recent": 5
+    }},
+    {"id": "peak", "weight": 1, "calls_per_hour": {
+      "records_by_group": 150, "records_by_value": 3000, "time_window": 100,
+      "group_list": 100, "alternative_filters": 100, "category_join": 100,
+      "all_records": 1, "update_payload": 120, "delete_recent": 20
+    }}
+  ],
+  "table_write_rates": {
+    "public.records": {"inserts_per_hour": 1000, "updates_per_hour": 3000, "deletes_per_hour": 100, "source": "manual"},
+    "public.groups": {"inserts_per_hour": 100, "updates_per_hour": 50, "deletes_per_hour": 0, "source": "manual"}
+  },
+  "constraints": {
+    "storage_budget_bytes": 67108864,
+    "write_budget_units_per_hour": 60000,
+    "max_indexes": 5,
+    "query_cost_guards": {"records_by_group": 1.05}
+  },
+  "manual_indexes": [
+    {"schema": "public", "table": "records", "keys": [{"column": "group_id"}, {"column": "created_at", "direction": "desc"}]},
+    {"schema": "public", "table": "records", "keys": [{"column": "value"}]}
+  ]
+}
