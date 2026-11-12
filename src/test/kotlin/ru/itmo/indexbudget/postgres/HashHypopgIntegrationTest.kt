@@ -113,7 +113,7 @@ class HashHypopgIntegrationTest {
                 assertTrue(report.candidates.diagnostics.preparation!!.sizeAttempts <= 32)
                 assertTrue(report.result.diagnostics.statistics.explainAttempts <= 2000)
                 val json = mapper.readTree(Files.readString(output.resolve("analysis/report.json")))
-                assertEquals(listOf("btree", "hash"), json["index_methods"].map { it.stringValue() })
+                assertEquals(listOf("btree", "hash"), json["index_methods"].toList().map { it.stringValue() })
                 val html = Files.readString(output.resolve("analysis/report.html"))
                 val sql = Files.readString(output.resolve("analysis/indexes.sql"))
                 assertTrue(html.contains(report.runId) && sql.contains(report.runId))
@@ -140,7 +140,7 @@ class HashHypopgIntegrationTest {
                     assertTrue(result.points.all { it.report!!.schemaVersion == 4 })
                     val summary = mapper.readTree(Files.readString(output.resolve("series-${budget.name}/series.json")))
                     assertEquals(2, summary["schema_version"].intValue())
-                    assertEquals(setOf("btree", "hash"), summary["preparation"]["candidates"].map { it["method"].stringValue() }.toSet())
+                    assertEquals(setOf("btree", "hash"), summary["preparation"]["candidates"].toList().map { it["method"].stringValue() }.toSet())
                 }
                 assertTrue(connections.all { it.isClosed })
                 assertEquals(0, scalar(admin, "SELECT count(*) FROM pg_catalog.pg_indexes WHERE schemaname = 'hash_demo'"))
