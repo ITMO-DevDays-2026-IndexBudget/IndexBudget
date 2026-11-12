@@ -6,6 +6,7 @@ import java.security.MessageDigest
 import java.util.HexFormat
 import org.postgresql.core.Utils
 import ru.itmo.indexbudget.domain.IndexDefinition
+import ru.itmo.indexbudget.domain.hasSupportedShape
 
 /** Renders a catalog-resolved definition; never opens a connection or executes SQL. */
 class PostgresDdlRenderer : DdlRenderer {
@@ -18,21 +19,23 @@ class PostgresDdlRenderer : DdlRenderer {
                 append(quoteIdentifier(key.column.name))
                 key.collation?.let { append(" COLLATE ").append(it) }
                 append(' ').append(key.operatorClass)
-                append(' ').append(key.direction.name)
-                append(" NULLS ").append(key.nulls.name)
+                if (canonical.method == "btree") {
+                    append(' ').append(key.direction.name)
+                    append(" NULLS ").append(key.nulls.name)
+                }
             }
         }
         val include = canonical.includedColumns.takeIf { it.isNotEmpty() }
             ?.joinToString(", ", " INCLUDE (", ")") { quoteIdentifier(it.name) }.orEmpty()
         return "CREATE INDEX ${quoteIdentifier(name)} ON ${quoteIdentifier(table.schema)}." +
-            "${quoteIdentifier(table.name)} USING btree ($keys)$include;"
+            "${quoteIdentifier(table.name)} USING ${canonical.method} ($keys)$include;"
     }
 }
 
 /** The same normalized structure supplies IDs, comparison keys and DDL. */
 internal object CanonicalIndex {
     fun normalize(definition: IndexDefinition): IndexDefinition {
-        require(definition.method == "btree" && !definition.unique) { "Expected a nonunique B-tree candidate" }
+        require(definition.hasSupportedShape()) { "Unsupported index definition" }
         require(definition.keys.size in 1..2) { "Expected one or two physical keys" }
         require(definition.keys.map { it.column }.distinct().size == definition.keys.size) { "Repeated index key" }
         quoteIdentifier(definition.table.schema)

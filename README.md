@@ -31,6 +31,26 @@ build/install/indexbudget/bin/indexbudget --version
 
 Версии закреплены: Kotlin **2.4.21**, Spring Boot **4.1.2**, Gradle **9.7.0**. Spring Boot работает с `WebApplicationType.NONE`: HTTP-сервер не запускается. Jackson 3 и PostgreSQL JDBC управляются BOM Spring Boot; доменные контракты не зависят от этих библиотек.
 
+## BRIN для диапазонов
+
+По умолчанию подбираются прежние B-tree. Для явного сравнения методов добавьте
+`"index_methods": ["btree", "brin"]` в workload v2. BRIN предлагается только на одной
+колонке диапазонного WHERE, без INCLUDE и настройки параметров; оба метода делят
+прежние caps и бюджеты. Ручной набор принимает `"method": "brin"` независимо от
+автоматических методов. Write proxy не доказывает равную цену записи разных методов.
+
+[Входной пример](examples/workload-v2-brin.json), [контракт, версии отчётов и реальный
+прогон на миллионе строк](docs/brin.md). Воспроизведение на отдельном локальном Docker:
+
+```sh
+bash demo/check-brin.sh
+```
+
+Скрипт готовит данные и статистику только в собственном одноразовом контейнере;
+обычный анализ не создаёт физические индексы. Артефакты сохраняются в
+`build/brin-verification/run-*/`. При BRIN используются report v4 / сводка серии v2;
+прежние B-tree-only запуски сохраняют v3/v1.
+
 ## CLI
 
 После `installDist` можно добавить `build/install/indexbudget/bin` в `PATH` и использовать имя `indexbudget`.
