@@ -64,7 +64,12 @@
       "storage_budget_bytes": 33554432,
       "write_budget_units_per_hour": 12000,
       "max_indexes": 5
-    }
+    },
+    "index_methods": [
+      "btree",
+      "brin",
+      "hash"
+    ]
   },
   "catalog": {
     "tables": [

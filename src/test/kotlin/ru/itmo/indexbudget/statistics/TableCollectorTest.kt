@@ -64,7 +64,7 @@ class TableCollectorTest {
         val connection = proxy(Connection::class.java) { method, args -> when (method) {
             "abort", "close" -> { closed = true; null }
             "prepareStatement" -> {
-                val query = args!![0] as String; sql += query
+                val query = checkNotNull(args) { "Expected args to be available" }[0] as String; sql += query
                 proxy(PreparedStatement::class.java) { name, _ -> when (name) {
                     "executeQuery" -> {
                         if (deny) throw SQLException("secret DSN password", "42501")
@@ -75,7 +75,7 @@ class TableCollectorTest {
                             "close" -> null
                             "wasNull" -> wasNull
                             else -> {
-                                val key = values!![0].toString()
+                                val key = checkNotNull(values) { "Expected values to be available" }[0].toString()
                                 wasNull = missing && key.startsWith("n_tup")
                                 when (op) {
                                     "getInt" -> 160015

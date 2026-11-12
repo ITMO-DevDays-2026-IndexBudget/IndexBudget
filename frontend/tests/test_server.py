@@ -160,7 +160,7 @@ class ScenarioLibraryTests(unittest.TestCase):
         workload = read_json(ROOT.parent / 'demo/scenarios/workload.json')
         metadata = read_json(ROOT.parent / 'demo/scenarios/catalog.json')
         template = TEMPLATES['04-scenarios']
-        self.assertEqual(set(TEMPLATES), {'01-records', '02-shop', '03-wide', '04-scenarios'})
+        self.assertEqual(set(TEMPLATES), {'01-records', '02-shop', '03-wide', '04-scenarios', '04-events-brin', '05-lookup-hash'})
         self.assertEqual([example['id'] for example in template['examples']],
                          [query['id'] for query in workload['queries']])
         self.assertEqual(len(template['examples']), 9)

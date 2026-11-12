@@ -72,8 +72,8 @@ class SearchResultContractTest {
         assertNull(input.tableWriteRates)
         assertNull(input.constraints.writeBudgetUnitsPerHour)
         report.candidates.candidates.forEach { assertNull(it.writeUnitsPerHour) }
-        assertNull(report.result.bestRobust!!.metrics.budgetUsage.writeUnitsPerHour)
-        assertNull(report.result.bestMean!!.metrics.budgetUsage.writeUnitsPerHour)
+        assertNull(checkNotNull(report.result.bestRobust) { "Expected bestRobust to be available" }.metrics.budgetUsage.writeUnitsPerHour)
+        assertNull(checkNotNull(report.result.bestMean) { "Expected bestMean to be available" }.metrics.budgetUsage.writeUnitsPerHour)
         val unestimated = ContractFixtures.unestimatedCandidate()
         assertNull(unestimated.estimatedBytes)
         assertNull(unestimated.budgetedBytes)

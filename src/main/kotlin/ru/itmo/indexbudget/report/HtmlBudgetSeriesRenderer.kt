@@ -300,7 +300,7 @@ class HtmlBudgetSeriesRenderer {
         val include = candidate.path("included_columns").takeIf { it.isArray && !it.isEmpty }
             ?.joinToString(", ", " INCLUDE (", ")") { it.stringValue() }.orEmpty()
         val method = candidate.path("method").takeIf { it.isString }?.stringValue() ?: "btree"
-        return label + (if (method == "btree") "" else " · $method ") + "($keys)$include"
+        return label + " · $method " + "($keys)$include"
     }
     private fun StringBuilder.entry(label: String, value: String) {
         append("<div><dt>").append(h(label)).append("</dt><dd>").append(h(value)).append("</dd></div>")

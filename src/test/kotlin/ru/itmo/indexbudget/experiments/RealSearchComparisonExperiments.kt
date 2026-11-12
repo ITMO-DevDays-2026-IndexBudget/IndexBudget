@@ -229,7 +229,7 @@ class RealSearchComparison(
         outcome: Outcome,
         strategy: String,
     ): Map<String, Any?> {
-        val selected = result?.selected ?: reference!!.selected(reference.objective)
+        val selected = result?.selected ?: checkNotNull(reference) { "Expected reference to be available" }.selected(reference.objective)
         val metricsOfSelected = selected.metrics
         return linkedMapOf(
             "strategy" to strategy,

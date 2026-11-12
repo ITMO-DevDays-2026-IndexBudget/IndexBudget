@@ -16,25 +16,9 @@ class ManualIndexEvaluator {
         val decisions = mutableListOf<CandidateDecision>()
         for ((tableRef, definitionsForTable) in definitions.withIndex().groupBy { it.value.table }) {
             context.checkDeadline()
-            if (tableRef !in workload.queries.flatMap { it.tables }) invalid(ErrorCode.UNKNOWN_TABLE, "Manual indexes must reference workload tables.")
-            val table = catalog.tables.singleOrNull { it.ref == tableRef }
-                ?: invalid(ErrorCode.UNKNOWN_TABLE, "Manual index table is unknown.")
-            if (table.kind != TableKind.ORDINARY) invalid(ErrorCode.UNSUPPORTED_SQL, "Manual indexes require ordinary tables.")
+            val table = manualTable(tableRef, catalog, workload)
             for ((definitionIndex, definition) in definitionsForTable) {
-                val field = "manual_indexes.$definitionIndex"
-                if (!definition.hasSupportedShape() ||
-                    definition.includedColumns.isNotEmpty())
-                    invalid(ErrorCode.INVALID_INPUT, "Expected B-tree with one or two columns or single-column BRIN/hash.")
-                for ((keyIndex, key) in definition.keys.withIndex()) {
-                    val keyField = "$field.keys.$keyIndex"
-                    if (key.column.table != tableRef || table.columns.none { it.name == key.column.name })
-                        invalid(ErrorCode.UNKNOWN_COLUMN, "Manual index column is unknown.")
-                    val column = table.columns.single { it.name == key.column.name }
-                    if (column.operatorClassFor(definition.method) == null)
-                        invalid(ErrorCode.INVALID_INPUT, "Manual index key has no default operator class for its method.", keyField)
-                    if (key.collation != null || key.operatorClass != null)
-                        invalid(ErrorCode.INVALID_INPUT, "Manual indexes use catalog-default collation and operator class.")
-                }
+                validateDefinition(definition, definitionIndex, table)
             }
             // A synthetic scope supplies provenance only to the shared canonicalizer; source IDs are
             // cleared below because manual indexes must not claim automatic generation from SQL.
@@ -45,6 +29,35 @@ class ManualIndexEvaluator {
             decisions += canonical.decisions.map { it.copy(queryId = null, phase = null) }
         }
         return ManualComparison(ManualComparisonStatus.NOT_EVALUATED, candidates.sortedBy { it.id }, decisions)
+    }
+
+    private fun manualTable(tableRef: TableRef, catalog: CatalogSnapshot, workload: ResolvedWorkload): CatalogTable {
+        if (tableRef !in workload.queries.flatMap { it.tables }) {
+            invalid(ErrorCode.UNKNOWN_TABLE, "Manual indexes must reference workload tables.")
+        }
+        val table = catalog.tables.singleOrNull { it.ref == tableRef }
+            ?: invalid(ErrorCode.UNKNOWN_TABLE, "Manual index table is unknown.")
+        if (table.kind != TableKind.ORDINARY) invalid(ErrorCode.UNSUPPORTED_SQL, "Manual indexes require ordinary tables.")
+        return table
+    }
+
+    private fun validateDefinition(definition: IndexDefinition, index: Int, table: CatalogTable) {
+        if (!definition.hasSupportedShape() || definition.includedColumns.isNotEmpty()) {
+            invalid(ErrorCode.INVALID_INPUT, "Expected B-tree with one or two columns or single-column BRIN/hash.")
+        }
+        definition.keys.forEachIndexed { keyIndex, key ->
+            val keyField = "manual_indexes.$index.keys.$keyIndex"
+            if (key.column.table != table.ref || table.columns.none { it.name == key.column.name }) {
+                invalid(ErrorCode.UNKNOWN_COLUMN, "Manual index column is unknown.")
+            }
+            val column = table.columns.single { it.name == key.column.name }
+            if (column.operatorClassFor(definition.method) == null) {
+                invalid(ErrorCode.INVALID_INPUT, "Manual index key has no default operator class for its method.", keyField)
+            }
+            if (key.collation != null || key.operatorClass != null) {
+                invalid(ErrorCode.INVALID_INPUT, "Manual indexes use catalog-default collation and operator class.")
+            }
+        }
     }
 
     fun evaluate(prepared: ManualComparison, workload: ResolvedWorkload, baseline: EvaluationResult,

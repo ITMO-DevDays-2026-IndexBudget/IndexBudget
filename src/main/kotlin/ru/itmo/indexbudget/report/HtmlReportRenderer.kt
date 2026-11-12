@@ -321,7 +321,7 @@ class HtmlReportRenderer : ReportRenderer {
 
     private fun shortDefinition(candidate: IndexCandidate, report: AnalysisReport): String =
         shortTable(candidate.definition.table, report) +
-            (if (candidate.definition.method == "btree") "" else " · ${candidate.definition.method} ") +
+            " · ${candidate.definition.method} " +
             "(" + candidate.definition.keys.joinToString { it.column.name } + ")" +
             candidate.definition.includedColumns.takeIf { it.isNotEmpty() }?.joinToString(", ", " INCLUDE (", ")") { it.name }.orEmpty()
 

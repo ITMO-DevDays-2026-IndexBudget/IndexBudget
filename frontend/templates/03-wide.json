@@ -36,7 +36,12 @@
       "max_indexes": 5
     },
     "analysis_mode": "normal",
-    "candidate_ranking": "frequency"
+    "candidate_ranking": "frequency",
+    "index_methods": [
+      "btree",
+      "brin",
+      "hash"
+    ]
   },
   "catalog": {
     "tables": [

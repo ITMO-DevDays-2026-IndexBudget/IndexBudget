@@ -22,6 +22,7 @@ const scenarioTemplate = {...copy(templates[0]), id: '04-scenarios', name: 'Чт
       cost_guard: scenarios.constraints.query_cost_guards?.[query.id],
       tables: query.id === 'category_join' ? ['public.records', 'public.groups'] : ['public.records']};
   })};
+scenarioTemplate.workload.index_methods = ['btree', 'brin', 'hash'];
 scenarioTemplate.workload.queries = scenarioTemplate.workload.queries.filter(query => initialIds.includes(query.id));
 scenarioTemplate.workload.profiles.forEach(profile => {
   profile.calls_per_hour = Object.fromEntries(Object.entries(profile.calls_per_hour).filter(([id]) => initialIds.includes(id)));
@@ -67,6 +68,38 @@ test('все шаблоны и обе границы частоты допуст
     workload.profiles[0].calls_per_hour[workload.queries[0].id] = value;
     assert.doesNotThrow(check(workload));
   }
+});
+
+test('все методы передаются из каждого шаблона в одиночный анализ и серию', () => {
+  const ui = app();
+  for (const template of templates) {
+    ui.set('template', template);
+    ui.run('state = templateState(template)');
+    for (const mode of ['single', 'series']) {
+      ui.element('launch-mode').value = mode;
+      ui.element('series-budget').value = 'storage_budget_bytes';
+      ui.element('series-values').value = '0, 65536, 67108864';
+      ui.element('series-timeout').value = '600';
+      assert.deepEqual(Array.from(ui.run('requestSnapshot().workload.index_methods')), ['btree', 'brin', 'hash']);
+    }
+  }
+});
+
+test('черновик без методов получает все методы без потери SQL; явный список сохраняется', () => {
+  const ui = app();
+  const workload = copy(templates[0].workload);
+  delete workload.index_methods;
+  workload.queries[0].sql = ' SELECT id FROM public.records WHERE group_id = 7;\n';
+  const draft = {state: {template_id: templates[0].id, template_version: templates[0].version, workload}};
+  ui.set('draft', draft);
+  ui.run('state = restoreDraft(draft, templates).state; persist();');
+  assert.deepEqual(Array.from(ui.run('requestSnapshot().workload.index_methods')), ['btree', 'brin', 'hash']);
+  assert.equal(ui.run('requestSnapshot().workload.queries[0].sql'), workload.queries[0].sql);
+  assert.deepEqual(JSON.parse(ui.stored.values().next().value).state.workload.index_methods, ['btree', 'brin', 'hash']);
+  workload.index_methods = ['hash'];
+  ui.set('draft', draft);
+  assert.deepEqual(Array.from(ui.run('restoreDraft(draft, templates).state.workload.index_methods')), ['hash']);
+  assert.deepEqual(templates[0].workload.index_methods, ['btree', 'brin', 'hash']);
 });
 
 test('частоты не округляются: дробь, минус, избыток, пустое и нечисловое значение отклоняются', () => {

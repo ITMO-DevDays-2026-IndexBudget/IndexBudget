@@ -147,10 +147,10 @@ class LimitedRepairPipelineTest {
             if (cleanupCode == ErrorCode.DB_CONNECTION_ERROR) {
                 assertTrue(StopReason.CONNECTION_LOST in result.diagnostics.stopReasons)
             }
-            assertEquals(listOf("records_created_at"), result.bestRobust!!.evaluation.candidateIds)
-            assertEquals(listOf("records_group_created_at"), result.bestMean!!.evaluation.candidateIds)
-            assertEquals(ContractFixtures.robustEvaluation().plansByQueryId, result.bestRobust!!.evaluation.plansByQueryId)
-            assertEquals(ContractFixtures.meanEvaluation().plansByQueryId, result.bestMean!!.evaluation.plansByQueryId)
+            assertEquals(listOf("records_created_at"), checkNotNull(result.bestRobust) { "Expected bestRobust to be available" }.evaluation.candidateIds)
+            assertEquals(listOf("records_group_created_at"), checkNotNull(result.bestMean) { "Expected bestMean to be available" }.evaluation.candidateIds)
+            assertEquals(ContractFixtures.robustEvaluation().plansByQueryId, checkNotNull(result.bestRobust) { "Expected bestRobust to be available" }.evaluation.plansByQueryId)
+            assertEquals(ContractFixtures.meanEvaluation().plansByQueryId, checkNotNull(result.bestMean) { "Expected bestMean to be available" }.evaluation.plansByQueryId)
         }
         assertEquals(listOf(emptyList(), listOf("records_created_at"), listOf("records_group_created_at"),
             listOf("z_failed")), calls)

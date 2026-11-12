@@ -67,7 +67,9 @@ def main():
     health = json.loads(get('/api/health'))
     assert health['database'] and health['cli'], health
     templates = json.loads(get('/api/templates'))
-    assert {template['id'] for template in templates} == {'01-records', '02-shop', '03-wide', '04-scenarios'}
+    assert {t['id'] for t in templates} == {'01-records', '02-shop', '03-wide', '04-scenarios', '04-events-brin', '05-lookup-hash'}
+    for template in templates:
+        assert template['workload']['index_methods'] == ['btree', 'brin', 'hash']
     request = payload(templates[0])
     for endpoint in ('/api/runs', '/api/schema-previews'):
         for key, sql in (('schema_sql', 'ALTER TABLE public.records ADD COLUMN demo_note text;'),
@@ -98,7 +100,7 @@ def main():
             request['workload']['profiles'][0]['calls_per_hour'][qid] = 0
             request['workload']['profiles'][1]['calls_per_hour'][qid] = 1_000_000
         submitted.append((request, post('/api/runs', request)))
-    assert len({j['run_id'] for _, j in submitted}) == 4
+    assert len({j['run_id'] for _, j in submitted}) == len(templates)
     for request, job in submitted:
         result = wait(job)
         assert result['status'] in ('completed', 'partial'), result
@@ -106,6 +108,7 @@ def main():
         report = json.loads(get(prefix + '/report.json'))
         actual = json.loads(get(prefix + '/workload.json'))
         assert actual == request['workload']
+        assert report['index_methods'] == ['btree', 'brin', 'hash'] and report['schema_version'] == 4
         assert report['status'] == result['status'] and report['analysis_mode'] == 'fast'
         assert report['queries'][0]['sql'] == actual['queries'][0]['sql']
         assert b'<html' in get(result['report_url'])
@@ -115,6 +118,28 @@ def main():
         template = next(t for t in templates if t['id'] == request['template_id'])
         assert config['template_id'] == template['id'] and config['template_version'] == template['version']
         assert config['schema_sql'] == template['schema_sql'] and config['seed_sql'] == template['seed_sql']
+        if template['id'] == '04-events-brin':
+            assert {c['definition']['method'] for c in report['selected_indexes']} == {'brin'}, report['selected_indexes']
+            assert report['selected']['cost_by_query_id']['events_window'] < report['baseline']['cost_by_query_id']['events_window']
+            assert report['selected']['cost_by_query_id']['events_all'] == report['baseline']['cost_by_query_id']['events_all']
+            assert report['selected']['metrics']['budget_usage']['budgeted_bytes'] <= 65536
+            btree = [c for c in report['candidates'] if c['definition']['method'] == 'btree']
+            assert btree and all(c['budgeted_bytes'] > 65536 for c in btree)
+        if template['id'] == '05-lookup-hash':
+            assert {(c['definition']['method'], c['definition']['keys'][0]['column']['name'])
+                    for c in report['selected_indexes']} == {('hash', 'external_key'), ('btree', 'created_at')}
+            assert len(report['selected_indexes']) == 2
+            assert {c['definition']['method'] for c in report['candidates']} == {'btree', 'hash'}
+            assert report['selected']['cost_by_query_id']['lookup_exact'] < report['baseline']['cost_by_query_id']['lookup_exact']
+            assert report['selected']['cost_by_query_id']['lookup_recent'] < report['baseline']['cost_by_query_id']['lookup_recent']
+            assert report['selected']['cost_by_query_id']['lookup_all'] == report['baseline']['cost_by_query_id']['lookup_all']
+            budget = actual['constraints']['storage_budget_bytes']
+            assert report['selected']['metrics']['budget_usage']['budgeted_bytes'] <= budget
+            btree = [c for c in report['candidates'] if c['definition']['method'] == 'btree'
+                     and c['definition']['keys'][0]['column']['name'] == 'external_key']
+            assert btree and all(c['budgeted_bytes'] > budget for c in btree)
+            assert b'USING hash' in get(prefix + '/indexes.sql')
+            assert b'USING btree' in get(prefix + '/indexes.sql')
         print(f"PASS {request['template_id']} → {result['status']} → {result['report_url']}", flush=True)
     scenario = next(template for template in templates if template['id'] == '04-scenarios')
     source = json.loads((Path(__file__).resolve().parents[2] / 'demo/scenarios/workload.json').read_text())
@@ -189,6 +214,22 @@ def main():
     print(f"PASS canonical SELECT/UPDATE/DELETE budget series → {series_job['status']} → 3 preserved point reports", flush=True)
     if database:
         print('PASS separate DML privileges, server read-only and unchanged seed/physical indexes', flush=True)
+    # При тех же данных и SQL больший бюджет позволяет выбрать более дорогой B-tree.
+    generous = payload(next(t for t in templates if t['id'] == '04-events-brin'))
+    generous['workload']['constraints']['storage_budget_bytes'] = 67108864
+    result = wait(post('/api/runs', generous))
+    assert result['status'] == 'completed', result
+    report = json.loads(get(result['report_url'].rsplit('/', 1)[0] + '/report.json'))
+    assert {c['definition']['method'] for c in report['selected_indexes']} == {'btree'}
+    print('PASS events: 64 KiB selects BRIN, 64 MiB selects B-tree', flush=True)
+    tight = payload(next(t for t in templates if t['id'] == '05-lookup-hash'))
+    tight['workload']['constraints']['storage_budget_bytes'] = 8388608
+    result = wait(post('/api/runs', tight))
+    assert result['status'] == 'completed', result
+    report = json.loads(get(result['report_url'].rsplit('/', 1)[0] + '/report.json'))
+    assert [c['definition']['method'] for c in report['selected_indexes']] == ['hash']
+    assert report['selected']['cost_by_query_id']['lookup_recent'] == report['baseline']['cost_by_query_id']['lookup_recent']
+    print('PASS lookup: 8 MiB selects hash, 16 MiB selects hash + B-tree', flush=True)
     broken = payload(templates[0])
     broken['workload']['queries'][0]['sql'] = 'SELECT missing_demo_column FROM public.records'
     failure = wait(post('/api/runs', broken))

@@ -157,7 +157,7 @@ class HtmlBudgetSeriesRendererTest {
         assertTrue(html.contains("Снижение на 79,6%"))
         assertTrue(html.contains("79,583983315 %"))
         assertTrue(html.contains("3\u00a0MiB"))
-        assertTrue(html.contains("records("))
+        assertTrue(html.contains("records · btree ("))
         assertFalse(Regex("<summary>ib_[^<]+").containsMatchIn(html))
     }
 
@@ -232,8 +232,8 @@ class HtmlBudgetSeriesRendererTest {
             selectedIds.add(candidate["id"].stringValue())
         }
         val html = renderer.render(summary)
-        assertTrue(html.contains("public.records("))
-        assertTrue(html.contains("archive.records("))
+        assertTrue(html.contains("public.records · btree ("))
+        assertTrue(html.contains("archive.records · btree ("))
     }
 
     private fun generate(variant: String): JsonNode {

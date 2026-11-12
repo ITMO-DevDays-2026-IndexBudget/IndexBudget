@@ -25,7 +25,7 @@ class BrinCandidatesTest {
         assertEquals(candidate, canonicalizer().canonicalize(scope(explicit)).candidates.single())
         assertEquals("CREATE INDEX \"ib_${candidate.id.take(60)}\" ON \"odd schema\".\"events\" USING brin " +
             "(\"at\"\"time\" \"pg_catalog\".\"int4_minmax_ops\");", candidate.ddl)
-        assertFalse(candidate.ddl!!.contains("ASC"))
+        assertFalse(checkNotNull(candidate.ddl) { "Expected ddl to be available" }.contains("ASC"))
         assertThrows(AnalysisException::class.java) {
             canonicalizer().canonicalize(brin.copy(keys = listOf(key.copy(operatorClass = "pg_catalog.int4_ops"))))
         }
