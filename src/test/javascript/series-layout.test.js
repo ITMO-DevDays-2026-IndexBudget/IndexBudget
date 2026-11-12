@@ -120,7 +120,7 @@ async function noPageOverflow(page, message) {
           if (!['completed', 'partial'].includes(point.status)) {
             const unavailable = page.locator('#series-empty-indexes');
             assert.ok(await unavailable.isVisible());
-            assert.match(await unavailable.textContent(), /Рекомендация отсутствует|результат не сохранён/);
+            assert.match(await unavailable.textContent(), /Пригодная рекомендация не сохранена|результат не сохранён/);
             assert.doesNotMatch(await unavailable.textContent(), /[Пп]устой набор|[Нн]овые индексы не предлагаются/,
               'A failed/skipped point is not presented as an empty recommendation');
           } else if (selectedIds.size === 0) {

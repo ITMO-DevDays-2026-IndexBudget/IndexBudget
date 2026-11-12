@@ -329,7 +329,7 @@ internal object ImportedHtmlAssertions {
         assertTrue(provenanceSection.contains(provenance.sourceId.toString()))
         assertTrue(provenanceSection.contains(provenance.selectionRule))
         assertTrue(provenanceSection.contains("Историческое время выполнения"))
-        assertTrue(provenanceSection.contains("не являются прогнозом времени с новыми индексами"))
+        assertTrue(provenanceSection.contains("не предсказывает время с новым набором"))
         val rows = htmlRows(provenanceSection)
         for (window in provenance.windows) {
             val windowRows = rows.filter { it.first() == window.profileId }

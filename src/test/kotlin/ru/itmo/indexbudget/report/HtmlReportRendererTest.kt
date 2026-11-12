@@ -28,7 +28,7 @@ class HtmlReportRendererTest {
         val guardsTable = capture(queries, "(Ограничения planner cost для критических SQL.*?</table>)", stripTags = false)
 
         assertTrue(queries.contains("Ограничения planner cost для критических SQL"))
-        assertTrue(queries.contains("не latency и не SLA"))
+        assertTrue(queries.contains("не к времени или SLA"))
         assertEquals(listOf("records_by_group", "1,5", "100", "120", "1,2", "Соблюдено"),
             rowByKey(guardsTable, "records_by_group"))
         assertEquals(listOf("records_by_value", "1", "0", "5", "Неприменимо (нулевой baseline)",
@@ -256,7 +256,7 @@ class HtmlReportRendererTest {
         assertTrue(selectedIds(html).isEmpty())
         val missing = renderer.render(ContractFixtures.report(status = RunStatus.FAILED).copy(input = null, inputHash = null))
         assertTrue(missing.contains("Нет данных"))
-        assertTrue(missing.contains("Профили отсутствуют"))
+        assertTrue(missing.contains("Профили не сохранены"))
         assertFalse(missing.contains("Выбран пустой набор"))
     }
 

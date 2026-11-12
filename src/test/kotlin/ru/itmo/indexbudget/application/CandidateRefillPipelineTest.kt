@@ -148,7 +148,7 @@ class CandidateRefillPipelineTest {
         val html = HtmlReportRenderer().render(point.report)
         assertTrue(html.contains("Общая подготовка пула"))
         assertTrue(html.contains("Текущая бюджетная точка"))
-        assertTrue(html.contains("<h3>Общий shortlist</h3><p>0 / 16</p>"))
+        assertTrue(html.contains("<h3>Итоговый пул кандидатов</h3><p>0 / 16</p>"))
     }
 
     @Test

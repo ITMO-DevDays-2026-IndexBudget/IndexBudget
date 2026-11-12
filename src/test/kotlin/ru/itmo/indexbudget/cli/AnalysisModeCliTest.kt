@@ -236,8 +236,8 @@ class AnalysisModeCliTest {
         assertTrue(help.contains("fast:   command 30s, search 20s, EXPLAIN attempts 500, repair attempts 8"))
         assertTrue(help.contains("normal: command 90s, search 60s, EXPLAIN attempts 2000, repair attempts 28"))
         assertTrue(help.contains("deep:   command 300s, search 240s, EXPLAIN attempts 10000, repair attempts 256"))
-        assertTrue(help.contains("2s EXPLAIN timeout"))
-        assertTrue(help.contains("5s connection timeout"))
+        assertTrue(help.contains("EXPLAIN timeout: min(2s, remaining time)"))
+        assertTrue(help.contains("Connection timeout: min(5s, remaining time)"))
         assertTrue(help.contains("up to 16 candidates"))
         assertTrue(help.contains("greedy/fixed-S0 repair"))
     }
