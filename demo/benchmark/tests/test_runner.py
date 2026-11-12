@@ -33,9 +33,9 @@ class RunnerTests(unittest.TestCase):
     def test_cleanup_refuses_to_touch_another_container(self):
         with tempfile.TemporaryDirectory() as tmp:
             run=module.Experiment(Path(tmp));run.container='owned-id'
-            with patch.object(run,'command',return_value='foreign-owner') as command:
-                with self.assertRaises(ValueError):run.cleanup()
-                self.assertEqual(command.call_count,1)
+            with patch.object(run,'command',side_effect=['owned-id', 'foreign-owner']) as command:
+                with self.assertRaises(RuntimeError):run.cleanup()
+                self.assertEqual(command.call_count,2)
                 self.assertEqual(command.call_args.args[0][1],'inspect')
 
     def test_throughput_counts_entire_trial_once_for_multiple_queries(self):
@@ -50,7 +50,7 @@ class RunnerTests(unittest.TestCase):
     def test_cleanup_removes_only_the_recorded_owned_container(self):
         with tempfile.TemporaryDirectory() as tmp:
             run=module.Experiment(Path(tmp));run.container='owned-id'
-            with patch.object(run,'command',side_effect=[run.token,'']) as command:
+            with patch.object(run,'command',side_effect=['owned-id',run.token,'']) as command:
                 run.cleanup()
                 self.assertEqual(command.call_args.args[0],['docker','rm','-f','owned-id'])
 
@@ -81,3 +81,59 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(sum(kind=='INSERT' for kind,_,_ in mixed),1)
             self.assertTrue(any(kind=='UPDATE' for kind,_,_ in mixed))
             self.assertTrue(any(kind=='DELETE' for kind,_,_ in mixed))
+
+    def test_absent_container_still_removes_owned_image(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = module.Experiment(Path(tmp)); run.container = 'gone'; run.image = 'unique-image'
+            with patch.object(run, 'command', side_effect=['', 'image-id', '']) as command:
+                run.cleanup()
+                self.assertEqual(command.call_args.args[0], ['docker', 'image', 'rm', 'unique-image'])
+            self.assertEqual(json.loads((Path(tmp)/'cleanup.json').read_text())['status'], 'completed')
+
+    def test_container_error_does_not_skip_image_cleanup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = module.Experiment(Path(tmp)); run.container = 'owned-id'; run.image = 'unique-image'
+            with patch.object(run, 'command', side_effect=[RuntimeError('daemon error'), 'image-id', RuntimeError('image error')]) as command:
+                with self.assertRaises(RuntimeError): run.cleanup()
+                self.assertEqual(command.call_count, 3)
+            errors = json.loads((Path(tmp)/'cleanup.json').read_text())['errors']
+            self.assertEqual([e['resource'] for e in errors], ['container', 'image'])
+
+    def test_preparation_and_cli_timeout_preserve_both_streams_and_command_journal(self):
+        for target in ('command', 'cli'):
+            with self.subTest(target=target), tempfile.TemporaryDirectory() as tmp:
+                folder = Path(tmp); run = module.Experiment(folder); run.port = '5432'
+                failure = subprocess.TimeoutExpired([], 180, output=b'partial stdout', stderr=b'partial stderr')
+                with patch.object(module.subprocess, 'run', side_effect=failure):
+                    with self.assertRaises(subprocess.TimeoutExpired):
+                        if target == 'command': run.command(['docker', 'build'])
+                        else: run.cli('db', ['analyze'], 'analysis.log')
+                if target == 'command':
+                    with gzip.open(folder/'commands/0001.log.gz', 'rt') as log: content = log.read()
+                else: content = (folder/'analysis.log').read_text()
+                self.assertIn('partial stdout', content)
+                self.assertIn('partial stderr', content)
+                self.assertEqual(len(json.loads((folder/'commands.json').read_text())), 1)
+
+    def test_readiness_uses_tcp_retries_and_limits_each_attempt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = module.Experiment(Path(tmp)); run.container = 'owned-id'
+            with patch.object(run, 'command', side_effect=[RuntimeError('initializing'), '1']) as command, patch.object(module.time, 'sleep'):
+                run.wait_ready()
+            self.assertEqual(command.call_count, 2)
+            for call in command.call_args_list:
+                args = call.args[0]
+                self.assertEqual(args[args.index('-h')+1], '127.0.0.1')
+                self.assertLessEqual(call.kwargs['timeout'], 5)
+
+    def test_manifest_records_resources_before_run_returns(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp); run = module.Experiment(folder)
+            run.image = 'unique-image'; run.container = 'planned-name'; run.record_resources()
+            def stopped(*args, **kwargs):
+                self.assertEqual(json.loads((folder/'resources.json').read_text()),
+                                 dict(ownership_token=run.token, container='planned-name', image='unique-image'))
+                self.assertEqual(json.loads((folder/'commands.json').read_text()), [['docker', 'run']])
+                raise KeyboardInterrupt()
+            with patch.object(module.subprocess, 'run', side_effect=stopped):
+                with self.assertRaises(KeyboardInterrupt): run.command(['docker', 'run'])

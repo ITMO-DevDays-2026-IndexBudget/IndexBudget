@@ -20,7 +20,9 @@ CLI = ROOT / 'build/install/indexbudget/bin/indexbudget'
 
 def save(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, indent=2, ensure_ascii=False, allow_nan=False) + '\n')
+    temporary = path.with_name('.' + path.name + '.tmp')
+    temporary.write_text(json.dumps(value, indent=2, ensure_ascii=False, allow_nan=False) + '\n')
+    temporary.replace(path)
 
 
 def summarize(samples, per_query=False):
@@ -67,16 +69,56 @@ class Experiment:
         self.samples = []
         self.trials = []
 
-    def command(self, args, *, data=None, timeout=180):
-        # URLs passed to CLI contain only an ephemeral localhost port and trust-auth user, no passwords.
+    def record_resources(self):
+        save(self.output / 'resources.json', dict(ownership_token=self.token,
+             container=self.container, image=self.image))
+
+    def execute(self, args, log_path, *, data=None, timeout=180, env=None):
         self.commands.append(args)
-        process = subprocess.run(args, input=data, text=True, capture_output=True, timeout=timeout, cwd=ROOT)
-        logs = self.output / 'commands'
-        logs.mkdir(exist_ok=True)
-        with gzip.open(logs / f'{len(self.commands):04d}.log.gz', 'wt') as log:
-            log.write(process.stdout + '\n' + process.stderr)
-        if process.returncode: raise RuntimeError('Experiment command failed; see commands.json and failure.json')
+        save(self.output / 'commands.json', self.commands)
+        if log_path is None:
+            log_path = self.output / 'commands' / f'{len(self.commands):04d}.log.gz'
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+
+        def write_log(stdout, stderr):
+            def text(value):
+                return value.decode(errors='replace') if isinstance(value, bytes) else value or ''
+            content = text(stdout) + '\n' + text(stderr)
+            if log_path.suffix == '.gz':
+                with gzip.open(log_path, 'wt') as log:
+                    log.write(content)
+            else:
+                log_path.write_text(content)
+
+        try:
+            process = subprocess.run(args, input=data, text=True, capture_output=True,
+                                     timeout=timeout, cwd=ROOT, env=env)
+        except subprocess.TimeoutExpired as error:
+            write_log(error.stdout, error.stderr)
+            raise
+        write_log(process.stdout, process.stderr)
+        return process
+
+    def command(self, args, *, data=None, timeout=180):
+        process = self.execute(args, None, data=data, timeout=timeout)
+        if process.returncode:
+            raise RuntimeError('Experiment command failed; see commands.json and command logs')
         return process.stdout
+
+    def wait_ready(self):
+        deadline = time.monotonic() + 60
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError('Main PostgreSQL did not become ready')
+            try:
+                # The entrypoint temporary initialization server never listens on TCP.
+                self.command(['docker', 'exec', self.container, 'psql', '-X', '-qAt',
+                              '-h', '127.0.0.1', '-U', 'demo_admin', '-d', 'indexbudget',
+                              '-v', 'ON_ERROR_STOP=1', '-c', 'SELECT 1;'], timeout=min(5, remaining))
+                return
+            except (RuntimeError, subprocess.TimeoutExpired):
+                time.sleep(min(.2, max(0, deadline - time.monotonic())))
 
     def sql(self, database, sql):
         return self.command(['docker','exec','-i', self.container, 'psql','-X','-qAt','-v','ON_ERROR_STOP=1',
@@ -95,19 +137,14 @@ class Experiment:
     def operation(self, database, kind, query_id, query, folder, mode, variant, repeat):
         before = self.wal(database)
         args = ['docker','exec','-i',self.container,'psql','-X','--csv','-P','pager=off','-P','footer=off','-v','ON_ERROR_STOP=1','-U','demo_admin','-d',database]
-        self.commands.append(args)
         start = time.perf_counter()
         try:
-            process = subprocess.run(args, input='\\timing on\n' + query.rstrip(';') + ';\n', text=True,
-                                     capture_output=True, timeout=180)
-        except subprocess.TimeoutExpired as error:
-            def text(value): return value.decode(errors='replace') if isinstance(value, bytes) else value or ''
-            with gzip.open(folder / (query_id + '.log.gz'), 'wt') as log:
-                log.write(text(error.stdout) + '\n' + text(error.stderr))
+            process = self.execute(args, folder / (query_id + '.log.gz'),
+                                   data='\\timing on\n' + query.rstrip(';') + ';\n')
+        except subprocess.TimeoutExpired:
             save(folder / 'error.json', dict(kind='timeout', query_id=query_id, completed=False))
             raise
         wall = time.perf_counter() - start
-        with gzip.open(folder / (query_id + '.log.gz'), 'wt') as log: log.write(process.stdout + '\n' + process.stderr)
         if process.returncode:
             save(folder/'error.json',dict(kind='sql_error',query_id=query_id,exit_code=process.returncode,completed=False))
             raise RuntimeError('Measured operation failed; raw operation log retained')
@@ -122,30 +159,27 @@ class Experiment:
         save(self.output / 'samples.json', self.samples)
 
     def cli(self, database, args, log_name):
-        self.commands.append([str(CLI)] + args)
         env = os.environ.copy()
         env['INDEXBUDGET_DATABASE_URL'] = f'jdbc:postgresql://127.0.0.1:{self.port}/{database}?user=demo_admin'
-        process = subprocess.run([str(CLI)] + args, env=env, text=True, capture_output=True, cwd=ROOT, timeout=180)
-        (self.output / log_name).write_text(process.stdout + '\n' + process.stderr)
+        process = self.execute([str(CLI)] + args, self.output / log_name, env=env)
         if process.returncode not in (0, 3): raise RuntimeError('CLI did not produce a usable result')
         return process.returncode
 
     def run(self, repetitions, observation_seconds):
         image = 'indexbudget-benchmark-' + self.token
         print('Building owned PostgreSQL/HypoPG image', flush=True)
-        self.command(['docker','build','-t',image,'demo/postgres'])
         self.image = image
-        self.container = self.command(['docker','run','--rm','-d','--label','indexbudget.benchmark='+self.token,
+        self.record_resources()
+        self.command(['docker','build','-t',image,'demo/postgres'])
+        self.container = 'indexbudget-benchmark-' + self.token
+        self.record_resources()
+        self.container = self.command(['docker','run','--rm','-d','--name',self.container,'--label','indexbudget.benchmark='+self.token,
             '--cpus','2','--memory','2g','--shm-size','256m','-p','127.0.0.1::5432',
             '-e','POSTGRES_HOST_AUTH_METHOD=trust','-e','POSTGRES_USER=demo_admin', '-e','POSTGRES_DB=indexbudget',
             '-e','INDEXBUDGET_READER_PASSWORD=',image,
             '-c','autovacuum=off','-c','max_parallel_workers_per_gather=0']).strip()
-        deadline = time.monotonic() + 60
-        while True:
-            try: self.sql('indexbudget','SELECT 1;'); break
-            except RuntimeError:
-                if time.monotonic() > deadline: raise
-                time.sleep(.2)
+        self.record_resources()
+        self.wait_ready()
         self.port = self.command(['docker','port',self.container,'5432/tcp']).strip().rsplit(':',1)[1]
         # The image does not COPY seed files; initialize this owned database explicitly.
         self.sql('indexbudget', (ROOT / 'demo/postgres/init/001-seed.sql').read_text())
@@ -228,12 +262,31 @@ class Experiment:
         self.sql('postgres',f'DROP DATABASE {name};')
 
     def cleanup(self):
+        errors = []
         if self.container:
-            label = self.command(['docker','inspect','-f','{{index .Config.Labels "indexbudget.benchmark"}}',self.container]).strip()
-            if label != self.token: raise ValueError('Cleanup ownership mismatch')
-            self.command(['docker','rm','-f',self.container])
+            try:
+                selector = ('name=^/' + self.container + '$' if self.container.startswith('indexbudget-benchmark-')
+                            else 'id=' + self.container)
+                existing = self.command(['docker', 'container', 'ls', '-a', '-q', '--no-trunc',
+                                         '--filter', selector]).strip()
+                if existing:
+                    label = self.command(['docker','inspect','-f','{{index .Config.Labels "indexbudget.benchmark"}}',self.container]).strip()
+                    if label != self.token:
+                        raise ValueError('Cleanup ownership mismatch')
+                    self.command(['docker','rm','-f',self.container])
+            except Exception as error:
+                errors.append(dict(resource='container', type=type(error).__name__, message=str(error)))
         if self.image:
-            self.command(['docker','image','rm',self.image])
+            try:
+                images = self.command(['docker', 'image', 'ls', '-q', self.image]).strip()
+                if images:
+                    self.command(['docker','image','rm',self.image])
+            except Exception as error:
+                errors.append(dict(resource='image', type=type(error).__name__, message=str(error)))
+        save(self.output / 'cleanup.json', dict(status='failed' if errors else 'completed',
+             owned_container=self.container, image=self.image, errors=errors))
+        if errors:
+            raise RuntimeError('Cleanup failed; see cleanup.json')
 
 
 def main():
@@ -252,10 +305,6 @@ def main():
     finally:
         try:
             experiment.cleanup()
-            save(experiment.output/'cleanup.json',dict(status='completed',owned_container=experiment.container,image=experiment.image))
-        except BaseException as error:
-            save(experiment.output/'cleanup.json',dict(status='failed',type=type(error).__name__))
-            raise
         finally:
             save(experiment.output/'commands.json',experiment.commands)
 

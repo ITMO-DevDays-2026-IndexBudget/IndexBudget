@@ -31,6 +31,7 @@ jobs:
         run: |
           python3 -m unittest discover -s deploy/frontend/tests -v
           python3 -m unittest discover -s frontend/tests -v
+          python3 -m unittest discover -s demo/benchmark/tests -v
           node --test frontend/tests/test_app.js
       - name: Build CLI and start disposable frontend database
         run: |

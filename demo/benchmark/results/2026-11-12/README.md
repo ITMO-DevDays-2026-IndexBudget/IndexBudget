@@ -5,13 +5,20 @@
 committed-транзакция. Код runner: `2710d6309567074ad1c7cb0fb47b4d70d773b7b7`.
 Полная среда и настройки — environment.json. Сборка `build installDist` успешна;
 предупреждения компилятора не препятствовали выполнению.
+Последующие исправления запуска, диагностики и cleanup проверены unit-тестами;
+этот физический прогон остаётся результатом указанного исходного SHA. Его сырые
+измерения не заменялись результатами новой версии runner.
 
 Команда из корня репозитория:
+Укажите путь к установленной JDK 25; `python3` должен быть версии 3.10 или новее.
 
 ```sh
-source .idea/java-env.sh
+export JAVA_HOME="/absolute/path/to/jdk-25"
+export PATH="$JAVA_HOME/bin:$PATH"
+java -version
+python3 --version
 ./gradlew --no-daemon build installDist
-python3.13 demo/benchmark/run.py --output build/mixed-benchmark-001
+python3 demo/benchmark/run.py --output build/mixed-benchmark-001
 ```
 
 ## Источник и восстановление

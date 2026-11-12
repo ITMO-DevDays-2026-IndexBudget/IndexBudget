@@ -16,12 +16,18 @@ PR #63 проверен по исходникам: он использует SAV
 
 Нужны Docker Desktop/Compose, JDK 25, Python 3.10+, собранный CLI и зависимости Gradle.
 Выполнять локально; адрес стенда/внешний DSN не принимается.
+Укажите путь к установленной JDK 25 (на macOS можно использовать
+`export JAVA_HOME=$(/usr/libexec/java_home -v 25)`). `java -version` должен показать 25,
+`python3 --version` — 3.10 или новее. Локальный `.idea/java-env.sh` не требуется.
 
 ```sh
-source .idea/java-env.sh
+export JAVA_HOME="/absolute/path/to/jdk-25"
+export PATH="$JAVA_HOME/bin:$PATH"
+java -version
+python3 --version
 ./gradlew --no-daemon build installDist
-python3.13 -m unittest discover -s demo/benchmark/tests -v
-python3.13 demo/benchmark/run.py --output build/mixed-benchmark-001
+python3 -m unittest discover -s demo/benchmark/tests -v
+python3 demo/benchmark/run.py --output build/mixed-benchmark-001
 ```
 
 Каталог должен отсутствовать. Default: три повтора каждого из read/mixed для каждого
@@ -37,7 +43,13 @@ parallel workers per gather=0. Trust auth действует только на �
 Пароли не требуются. При cleanup проверяется label, удаляется только записанный контейнер
 и уникальный образ. Нет compose down общего стенда, volume deletion или Docker prune.
 Оставшиеся после аварийного убийства процесса ресурсы можно найти по сохранённым
-commands.json/cleanup.json; не очищайте глобальные ресурсы.
+resources.json и commands.json; cleanup.json существует только после попытки очистки.
+resources.json содержит ownership token, уникальное имя образа, имя контейнера перед
+запуском и ID после успешного запуска. Журнал команд публикуется перед каждой командой;
+manifest и журнал заменяются атомарно. При SIGKILL cleanup не выполняется: проверьте
+label `indexbudget.benchmark` через docker inspect перед удалением конкретного
+контейнера из manifest, затем удалите только указанный уникальный образ.
+Не очищайте глобальные ресурсы.
 
 ## Последовательность
 
@@ -83,6 +95,9 @@ commands.json/cleanup.json; не очищайте глобальные ресу�
 - `failure.json`/trial error.json: неуспех, timeout, сохранённые сырые логи и ранее
   завершённые операции. Неполный прогон не помечается completed;
 - `commands.json`: выполненные команды без секретов, включая очистку; `cleanup.json`.
+- `resources.json`: текущий manifest собственных ресурсов, доступный до cleanup;
+  cleanup.json сохраняет отдельные ошибки контейнера и образа. Отсутствие уже
+  автоматически удалённого контейнера не считается ошибкой.
 - `commands/*.log.gz`: stdout/stderr подготовки, SQL-проверок и cleanup по номеру команды.
 
 Latency `psql_ms` включает выполнение и обработку/передачу результатов psql. Wall time
