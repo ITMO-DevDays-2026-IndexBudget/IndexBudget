@@ -96,7 +96,8 @@ class JdbcAnalysisSessionIntegrationTest {
             QueryInput("select", "SELECT payload FROM records WHERE a = 314"),
             QueryInput("update", "UPDATE records r SET payload = 'changed' WHERE r.a = 314"),
             QueryInput("delete", "DELETE FROM records WHERE b = 314"),
-        ), listOf(Profile("p", 1.0, mapOf("select" to 1.0, "update" to 2.0, "delete" to 3.0))),
+            QueryInput("broad", "UPDATE records SET payload = 'changed' WHERE a > 0"),
+        ), listOf(Profile("p", 1.0, mapOf("select" to 1.0, "update" to 2.0, "delete" to 3.0, "broad" to 1.0))),
             Constraints(100_000_000, null))
         val context = RunContext().apply { startSearch() }
         val analyzer = JSqlParserSqlAnalyzer()
@@ -110,11 +111,12 @@ class JdbcAnalysisSessionIntegrationTest {
         val baseline = session.evaluate(emptyList(), mixed, context)
         val selected = session.evaluate(candidates, mixed, context)
         assertEquals(input.queries.map { it.id }.toSet(), selected.costByQueryId.keys)
-        assertEquals(6, observed.size)
+        assertEquals(8, observed.size)
         assertTrue(observed.all { event -> input.queries.any { event.sql == "EXPLAIN (FORMAT JSON) ${it.sql}" } })
         assertTrue(selected.plansByQueryId.getValue("update").json.contains("ModifyTable"))
         assertTrue(selected.plansByQueryId.getValue("delete").json.contains("ModifyTable"))
         assertTrue(selected.costByQueryId.getValue("update") < baseline.costByQueryId.getValue("update"))
+        assertEquals(baseline.costByQueryId.getValue("broad"), selected.costByQueryId.getValue("broad"))
         assertEquals(0, hypothesisCount(connection))
         for (sql in listOf("UPDATE records SET payload = 'oops' WHERE id = 314",
             "DELETE FROM records WHERE id = 314", "EXPLAIN ANALYZE DELETE FROM records WHERE id = 314")) {
@@ -136,7 +138,7 @@ class JdbcAnalysisSessionIntegrationTest {
         assertTrue(ru.itmo.indexbudget.report.JsonReportWriter().render(report).contains("row_search_and_preparation"))
         val cancelled = RunContext()
         session = JdbcAnalysisSession(observingConnection(mutableListOf(), beforeExplain = { text ->
-            if (text.contains("UPDATE records")) cancelled.cancel()
+            if (text.contains("UPDATE records r")) cancelled.cancel()
         }))
         assertEquals(ErrorCode.CANCELLED, assertThrows(AnalysisException::class.java) {
             session.evaluate(candidates, mixed, cancelled)
@@ -145,6 +147,53 @@ class JdbcAnalysisSessionIntegrationTest {
         assertTrue(connection.isClosed)
         connect().use { fresh -> assertEquals(0, hypothesisCount(fresh)) }
         assertEquals(before, longScalar(admin, "SELECT sum(id::bigint + a + b + length(payload)) FROM $schema.records"))
+    }
+
+    @Test
+    fun `mixed workload completes the real pipeline and exports consistent artifacts`(@TempDir directory: Path) {
+        sql(admin, "GRANT UPDATE (payload), DELETE ON $schema.records TO $role")
+        val input = WorkloadInput(listOf(
+            QueryInput("s", "SELECT payload FROM records WHERE a = 314"),
+            QueryInput("u", "UPDATE records SET payload = 'updated' WHERE a = 314"),
+            QueryInput("d", "DELETE FROM records WHERE b = 314"),
+        ), listOf(Profile("day", 1.0, mapOf("s" to 10.0, "u" to 2.0, "d" to 1.0)),
+            Profile("night", 1.0, mapOf("s" to 1.0, "u" to 10.0, "d" to 10.0))),
+            Constraints(100_000_000, 1000.0, queryCostGuards = mapOf("u" to 1.0)),
+            tableWriteRates = mapOf("$schema.records" to TableWriteRates(1.0, 2.0, 3.0)))
+        val before = longScalar(admin, "SELECT sum(id::bigint + a + b + length(payload)) FROM $schema.records")
+        val context = RunContext()
+        val pipeline = AnalysisPipeline(JSqlParserSqlAnalyzer(), object : AnalysisSessionFactory {
+            override fun open(context: RunContext): AnalysisSession = session
+        }, ProfileAwareCandidateGenerator(), MetricsCalculatorImpl(), ObjectiveComparatorImpl(),
+            LimitedRepairOptimizer(), DefaultReportBuilder(), AtomicReportExporter(HtmlReportRenderer()))
+        val output = directory.resolve("mixed")
+        val result = pipeline.run(input, output, context)
+        assertEquals(RunStatus.COMPLETED, result.status)
+        assertEquals(setOf("s", "u", "d"), result.baseline?.costByQueryId?.keys)
+        assertEquals(setOf("s", "u", "d"), result.selected?.evaluation?.costByQueryId?.keys)
+        val json = mapper.readTree(Files.readString(output.resolve("report.json")))
+        assertEquals(listOf("select", "update", "delete"), json["queries"].map { it["statement_kind"].asString() })
+        assertEquals("row_search_and_preparation", json["queries"][1]["cost_interpretation"].asString())
+        assertTrue(Files.readString(output.resolve("report.html")).contains("ModifyTable"))
+        for (file in listOf("report.json", "report.html", "indexes.sql"))
+            assertTrue(Files.readString(output.resolve(file)).contains(context.runId))
+        assertEquals(before, longScalar(admin, "SELECT sum(id::bigint + a + b + length(payload)) FROM $schema.records"))
+        assertEquals(1, scalar(admin, "SELECT count(*) FROM pg_indexes WHERE schemaname = '$schema'"))
+        assertTrue(connection.isClosed)
+    }
+
+    @Test
+    fun `DML evaluation refuses an already read write transaction and aborts the session`() {
+        val mixed = workload.copy(queries = workload.queries.map { it.copy(statementKind = StatementKind.DELETE) })
+        connection.autoCommit = false
+        sql(connection, "SELECT 1")
+        val context = RunContext()
+        assertEquals(ErrorCode.DB_CONNECTION_ERROR, assertThrows(AnalysisException::class.java) {
+            session.evaluate(emptyList(), mixed, context)
+        }.error.code)
+        assertTrue(connection.isClosed)
+        assertEquals(0, context.statistics().explainAttempts)
+        assertEquals(50000, scalar(admin, "SELECT count(*) FROM $schema.records"))
     }
 
     @Test
