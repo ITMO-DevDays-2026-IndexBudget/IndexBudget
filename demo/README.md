@@ -110,13 +110,21 @@ reader из окружения контейнера. Для существующ
   ручной write profile и оба бюджета. Для сравнения objective скопируйте файл
   и замените `robust` на `mean`, сохраняя остальные параметры.
 - `demo/workload-wide.json`: SELECT * с признаками c1/c2 и отдельный SQL со
-  100 условиями. Это вход для будущей проверки AST/каталога/candidate caps.
+  100 условиями. Это вход для проверки реализованных AST/каталога/candidate caps.
 - Уже существующие `examples/workload-v2*.json` используют эту же records.
 
-Данные и SQL готовы для подключения модулей. Автогенерация ≤8 кандидатов,
-бюджетные рекомендации, оба objective и отчёты относятся к сквозному PoC #22;
-этот стенд сам по себе не подтверждает их готовность. CLI `analyze` пока
-остаётся каркасом. Проверка через psql не заменяет будущий JDBC evaluator #13.
+Сквозной CLI читает каталог и размеры, оценивает наборы в HypoPG, выполняет поиск
+и публикует HTML/JSON/SQL. Для SELECT-примера после подключения выполните:
+
+```sh
+build/install/indexbudget/bin/indexbudget analyze --workload demo/workload-poc.json --output-dir reports/poc-001
+```
+
+CLI должен быть собран (`./gradlew installDist`). Smoke через psql проверяет подготовку
+БД отдельно от pipeline. Для UPDATE/DELETE нужна отдельно настроенная opt-in роль:
+[права и границы DML](../docs/dml-analysis.md). Существующая `indexbudget_reader`
+остаётся SELECT-only, анализатор не выдаёт GRANT. Фиксированный смешанный датасет
+с готовой отдельной ролью доступен в [локальном frontend](../frontend/README.md).
 
 ## Проверка HypoPG вручную
 
@@ -144,14 +152,14 @@ SELECT count(*) FROM hypopg_list_indexes;
 см. [документацию HypoPG](https://hypopg.readthedocs.io/en/rel1_stable/usage.html).
 Cost — оценка планировщика, размер — оценка HypoPG, не фактическое время/место.
 Smoke check не требует заданного процента выигрыша. Физические измерения и
-write benchmark выполняются отдельно после готовности поиска.
+write benchmark выполняются [отдельным runner](benchmark/README.md) на собственной test-БД.
 
 ## Автоматическая проверка
 
 Workflow `Demo DB` собирает образ, ждёт seed и запускает smoke check дважды.
 При ошибке сохраняет логи; тестовый volume удаляется только на CI runner.
-Это проверка #4; cleanup после JDBC-ошибок, cancellation и isolation
-адаптера будут проверяться в #13/#15.
+Это проверка окружения #4. `bash demo/check-hypopg.sh` отдельно проверяет JDBC evaluator,
+cleanup, ошибки и изоляцию на одноразовой БД; результаты smoke не заменяют эти проверки.
 
 Независимая числовая сверка метрик на реальных costs и размерах запускается
 через `bash demo/check-metrics.sh` на собственной одноразовой БД.
