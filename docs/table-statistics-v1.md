@@ -117,3 +117,11 @@ CI job postgres-table-statistics-integration запускает тот же ск
 skipped/failures в PostgreSQL suite. Тестовый писатель вызывает pg_stat_force_next_flush
 для воспроизводимой публикации известной нагрузки; production collector этого не делает.
 Reset/track_counts=off/DDL в tests — только явная подготовка одноразовой БД, не работа CLI.
+
+Общий `SnapshotCaptureRunner` обслуживает query/table команды: владеет отменой,
+раздельными RunContext, ожиданием и атомарной публикацией. Специфичные parse/manifest
+и диагностика остаются в командах. Общие тесты проверяют отмену во время ожидания,
+ошибку второго чтения/публикации, сохранение первого снимка и очистку staging.
+Дополнительные проверки: успешная маршрутизация через IndexBudgetCli, совместимая
+пара с растущими counters, фактический ненулевой HOT и database reset между двумя
+чтениями metadata одного collect() из второго PostgreSQL-соединения.

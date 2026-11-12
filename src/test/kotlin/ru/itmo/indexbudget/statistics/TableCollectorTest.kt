@@ -39,6 +39,15 @@ class TableCollectorTest {
         assertTrue(db.closed)
     }
 
+    @Test fun `JDBC mapping retains each distinct counter including nonzero HOT`() {
+        val db = Database(count = 1)
+        val entry = JdbcTableStatisticsCollector({ db.connection }).collect(UUID.randomUUID(), SnapshotLimits(), RunContext()).entries.single()
+        assertEquals(101L, entry.nTupIns)
+        assertEquals(37L, entry.nTupUpd)
+        assertEquals(9L, entry.nTupDel)
+        assertEquals(23L, entry.nTupHotUpd)
+    }
+
     @Test fun `null statistics never become zero and no modifying SQL is sent`() {
         val db = Database(missing = true)
         val result = JdbcTableStatisticsCollector({ db.connection }).collect(UUID.randomUUID(), SnapshotLimits(), RunContext())
@@ -73,7 +82,10 @@ class TableCollectorTest {
                                     "getBoolean" -> true
                                     "getTimestamp" -> Timestamp.valueOf("2026-11-12 00:00:00")
                                     "getString" -> when (key) { "schema_name" -> "public"; "table_name" -> "t$index"; else -> "16.15" }
-                                    "getLong" -> { if (key == "n_tup_hot_upd") onCounter(); if (wasNull) 0L else index.toLong() + 10 }
+                                    "getLong" -> { if (key == "n_tup_hot_upd") onCounter(); if (wasNull) 0L else when (key) {
+                                        "n_tup_ins" -> 101L; "n_tup_upd" -> 37L; "n_tup_del" -> 9L; "n_tup_hot_upd" -> 23L
+                                        else -> index.toLong() + 10
+                                    } }
                                     else -> null
                                 }
                             }

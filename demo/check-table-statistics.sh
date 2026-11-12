@@ -28,7 +28,7 @@ address=$(docker port "$container" 5432/tcp)
 port=${address##*:}
 [[ "$port" =~ ^[0-9]+$ ]] || { echo 'Cannot determine test database port.' >&2; exit 1; }
 export INDEXBUDGET_TABLE_STATS_TEST_URL="jdbc:postgresql://127.0.0.1:$port/table_stats_test"
-./gradlew --no-daemon test --rerun-tasks --tests 'ru.itmo.indexbudget.statistics.Table*' --tests 'ru.itmo.indexbudget.statistics.StatisticsSnapshotTest'
+./gradlew --no-daemon test --rerun-tasks --tests 'ru.itmo.indexbudget.statistics.Table*' --tests 'ru.itmo.indexbudget.statistics.StatisticsSnapshotTest' --tests 'ru.itmo.indexbudget.cli.SnapshotCaptureRunnerTest'
 python3 - <<'CHECK'
 import xml.etree.ElementTree as ET
 r = ET.parse('build/test-results/test/TEST-ru.itmo.indexbudget.statistics.TableStatisticsIntegrationTest.xml').getroot()

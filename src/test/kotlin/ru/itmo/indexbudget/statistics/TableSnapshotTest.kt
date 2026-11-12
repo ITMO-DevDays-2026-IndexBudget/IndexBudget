@@ -5,6 +5,8 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import ru.itmo.indexbudget.application.ShutdownCancellation
 import ru.itmo.indexbudget.cli.TableStatisticsCommand
+import ru.itmo.indexbudget.cli.IndexBudgetCli
+import ru.itmo.indexbudget.application.WorkloadReader
 import ru.itmo.indexbudget.domain.*
 import tools.jackson.databind.json.JsonMapper
 import java.io.PrintWriter
@@ -70,6 +72,54 @@ class TableSnapshotTest {
             assertTrue(Files.exists(path.resolve("snapshot-1.json")))
             assertTrue(Files.readString(path.resolve("capture.json")).contains("CANCELLED"))
         } finally { Thread.interrupted() }
+    }
+
+    @Test fun `complete snapshot routes through IndexBudgetCli and publishes consistent identities`() {
+        val value = snapshot()
+        val command = TableStatisticsCommand(TableStatisticsCollector { _, _, _ -> value }, ShutdownCancellation { AutoCloseable {} })
+        val path = directory.resolve("single-complete")
+        val code = IndexBudgetCli(WorkloadReader(), tableStatisticsCommand = command).execute(
+            arrayOf("table-stats", "snapshot", "--source-id", source.sourceId.toString(), "--output-dir", path.toString()),
+            PrintWriter(StringWriter()), PrintWriter(StringWriter()))
+        assertEquals(0, code)
+        val mapper = JsonMapper()
+        val capture = mapper.readTree(Files.readString(path.resolve("capture.json")))
+        val saved = mapper.readTree(Files.readString(path.resolve("snapshot-1.json")))
+        assertEquals("completed", capture["status"].stringValue())
+        assertEquals("completed", saved["status"].stringValue())
+        assertEquals(value.snapshotId.toString(), saved["snapshot_id"].stringValue())
+        assertEquals(saved["snapshot_id"], capture["snapshots"][0]["snapshot_id"])
+        assertEquals("snapshot-1.json", capture["snapshots"][0]["path"].stringValue())
+        assertEquals(0, capture["diagnostics"].size())
+        assertTrue(capture["conditions_match"].isNull)
+    }
+
+    @Test fun `compatible complete pair with growing counters publishes successful capture`() {
+        val first = snapshot()
+        val second = snapshot(listOf(first.entries.single().copy(nTupIns = 20, nTupUpd = 12, nTupDel = 3, nTupHotUpd = 8)))
+        var calls = 0
+        val command = TableStatisticsCommand(TableStatisticsCollector { _, _, _ ->
+            if (calls++ == 0) first else second
+        }, ShutdownCancellation { AutoCloseable {} })
+        val path = directory.resolve("pair-complete")
+        val code = command.execute(arrayOf("table-stats", "pair", "--source-id", source.sourceId.toString(),
+            "--output-dir", path.toString(), "--interval-seconds", "1"), PrintWriter(StringWriter()), PrintWriter(StringWriter()))
+        assertEquals(0, code)
+        val mapper = JsonMapper()
+        val capture = mapper.readTree(Files.readString(path.resolve("capture.json")))
+        assertEquals("completed", capture["status"].stringValue())
+        assertTrue(capture["conditions_match"].booleanValue())
+        assertEquals(0, capture["diagnostics"].size())
+        assertEquals(2, capture["snapshots"].size())
+        for ((index, value) in listOf(first, second).withIndex()) {
+            val file = "snapshot-${index + 1}.json"
+            assertTrue(Files.exists(path.resolve(file)))
+            val saved = mapper.readTree(Files.readString(path.resolve(file)))
+            assertEquals(value.snapshotId.toString(), saved["snapshot_id"].stringValue())
+            assertEquals(saved["snapshot_id"], capture["snapshots"][index]["snapshot_id"])
+            assertEquals(file, capture["snapshots"][index]["path"].stringValue())
+            assertEquals("completed", capture["snapshots"][index]["status"].stringValue())
+        }
     }
 
     @Test fun `independent pair contexts publish diagnostics for disappeared relations`() {

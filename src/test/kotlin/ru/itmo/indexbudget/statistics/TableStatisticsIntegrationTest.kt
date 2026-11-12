@@ -4,6 +4,8 @@ import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable
 import ru.itmo.indexbudget.domain.RunContext
+import java.lang.reflect.Proxy
+import java.lang.reflect.InvocationTargetException
 import java.sql.Connection
 import java.sql.DriverManager
 import java.util.UUID
@@ -48,6 +50,14 @@ class TableStatisticsIntegrationTest {
             assertEquals(10L, b.nTupDel!! - a.nTupDel!!)
             assertTrue(b.nTupHotUpd!! >= a.nTupHotUpd!!)
             assertTrue(b.nTupHotUpd!! <= b.nTupUpd!!)
+            connection().use { c -> c.createStatement().use { statement ->
+                statement.executeQuery("SELECT n_tup_hot_upd FROM pg_catalog.pg_stat_user_tables WHERE relid='$schema.probe'::regclass").use { rows ->
+                    assertTrue(rows.next())
+                    val publishedHot = rows.getLong(1)
+                    assertTrue(publishedHot > 0, "Fixture must publish real HOT updates")
+                    assertEquals(publishedHot, b.nTupHotUpd)
+                }
+            } }
         } finally { connection().use { c -> c.createStatement().use { it.execute("DROP SCHEMA $schema CASCADE") } } }
     }
 
@@ -101,6 +111,45 @@ class TableStatisticsIntegrationTest {
         } finally { connection().use { c -> c.createStatement().use { it.execute("DROP TABLE public.$name") } } }
         val after = capture()
         assertTrue(compareTableSnapshots(listOf(before, after)).any { it["code"] == "RELATION_DISAPPEARED" })
+    }
+
+    @Test fun `database reset between metadata reads marks the single snapshot incomplete`() {
+        connection().use { admin ->
+            fun resetAndRead(): String {
+                admin.createStatement().use { it.execute("SELECT pg_catalog.pg_stat_reset()") }
+                return admin.createStatement().use { statement ->
+                    statement.executeQuery("SELECT stats_reset FROM pg_catalog.pg_stat_database WHERE datname=pg_catalog.current_database()").use {
+                        assertTrue(it.next()); it.getTimestamp(1).toInstant().toString()
+                    }
+                }
+            }
+            val initial = resetAndRead()
+            var expectedAfter: String? = null
+            var metadataReads = 0
+            val raw = connection()
+            val wrapped = Proxy.newProxyInstance(Connection::class.java.classLoader, arrayOf(Connection::class.java)) { _, method, args ->
+                if (method.name == "prepareStatement" && (args!![0] as String).contains("FROM pg_catalog.pg_database")) {
+                    metadataReads++
+                    if (metadataReads == 2) {
+                        Thread.sleep(10) // Distinct published reset timestamps, including on coarse clocks.
+                        expectedAfter = resetAndRead()
+                    }
+                }
+                try { method.invoke(raw, *(args ?: emptyArray())) }
+                catch (error: InvocationTargetException) { throw error.targetException }
+            } as Connection
+            try {
+                val result = capture(connect = { wrapped })
+                assertEquals(2, metadataReads)
+                assertEquals(initial, result.resetBefore)
+                assertNotNull(expectedAfter)
+                assertNotEquals(initial, expectedAfter)
+                assertEquals(expectedAfter, result.resetAfter)
+                assertTrue(TableSnapshotReason.RESET_DETECTED in result.reasons)
+                assertFalse(result.complete)
+                assertTrue(raw.isClosed)
+            } finally { raw.close() }
+        }
     }
 
     @Test fun `row limit retains prefix and physical connection closes`() {

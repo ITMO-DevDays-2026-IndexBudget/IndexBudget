@@ -7,14 +7,9 @@ import ru.itmo.indexbudget.domain.*
 import ru.itmo.indexbudget.statistics.*
 import tools.jackson.databind.json.JsonMapper
 import java.io.PrintWriter
-import java.io.IOException
-import java.nio.file.Files
 import java.nio.file.Path
-import java.nio.file.StandardCopyOption.ATOMIC_MOVE
 import java.time.Duration
 import java.util.UUID
-import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicReference
 
 /** Separate command family; snapshot waits never hold JDBC connections or consume a search deadline. */
 @Component
@@ -25,66 +20,16 @@ class TableStatisticsCommand(
 ) {
     fun execute(args: Array<String>, out: PrintWriter, err: PrintWriter): Int {
         if (args.contentEquals(arrayOf("table-stats", "--help"))) { out.println(HELP); return 0 }
-        var output: Path? = null
-        var intervalSeconds: Long? = null
-        val completed = mutableListOf<TableSnapshot>()
-        try {
-            val request = parse(args)
-            intervalSeconds = request.intervalSeconds
-            val destination = request.output.toAbsolutePath()
-            if (Files.exists(destination)) invalid("Statistics output directory must be new.")
-            Files.createDirectories(destination.parent)
-            Files.createDirectory(destination)
-            output = destination
-            val cancelled = AtomicBoolean()
-            val active = AtomicReference<RunContext?>()
-            shutdown.register { cancelled.set(true); active.get()?.cancel() }.use {
-                repeat(if (request.intervalSeconds == null) 1 else 2) { index ->
-                    if (index > 0) {
-                        // Use monotonic elapsed time, not wall time. The previous connection is already closed.
-                        val until = System.nanoTime() + Duration.ofSeconds(request.intervalSeconds!!).toNanos()
-                        while (System.nanoTime() < until) {
-                            if (cancelled.get()) throw AnalysisException(AnalysisError(ErrorCode.CANCELLED, "Observation cancelled."))
-                            waitMillis(minOf(100, ((until - System.nanoTime()) / 1_000_000).coerceAtLeast(1)))
-                        }
-                    }
-                    if (cancelled.get()) throw AnalysisException(AnalysisError(ErrorCode.CANCELLED, "Observation cancelled."))
-                    val context = RunContext(limits = RunLimits(commandTimeout = request.limits.timeout))
-                    active.set(context)
-                    if (cancelled.get()) context.cancel()
-                    val snapshot = try { collector.collect(request.sourceId, request.limits, context) }
-                    finally { active.set(null) }
-                    publish(destination.resolve("snapshot-${index + 1}.json"), TableSnapshotJson().render(snapshot))
-                    completed += snapshot
-                    out.println("snapshot-${index + 1}.json: ${if (snapshot.complete) "completed" else "partial"}")
-                }
-            }
-            val status = if (completed.all { it.complete } && compareTableSnapshots(completed).isEmpty()) "completed" else "partial"
-            summary(destination, completed, status, null, request.intervalSeconds)
-            return if (status == "completed") 0 else 3
-        } catch (error: Exception) {
-            val safe = when (error) {
-                is AnalysisException -> error.error
-                is InterruptedException -> {
-                    Thread.currentThread().interrupt()
-                    AnalysisError(ErrorCode.CANCELLED, "Observation interrupted.")
-                }
-                is IOException, is SecurityException -> AnalysisError(ErrorCode.EXPORT_FAILED, "Cannot publish statistics snapshots.")
-                else -> AnalysisError(ErrorCode.STATISTICS_READ_FAILED, "Cannot collect or publish statistics snapshots.")
-            }
-            // Never remove the first published snapshot when a second collection/wait fails.
-            output?.let { directory ->
-                try { summary(directory, completed, if (completed.isEmpty()) "failed" else "partial", safe.code.name, intervalSeconds) }
-                catch (_: Exception) { /* Published snapshots remain usable even if the manifest cannot be written. */ }
-            }
-            err.println("${safe.code.name}: ${safe.message}")
-            return if (completed.isNotEmpty()) 3 else safe.code.defaultExitCode
-        }
+        return SnapshotCaptureRunner(shutdown, waitMillis).execute<TableSnapshot>(
+            requestFactory = { parse(args) },
+            collect = { request, context -> collector.collect(request.sourceId, request.limits, context) },
+            render = { TableSnapshotJson().render(it) }, isComplete = { it.complete },
+            completionStatus = { snapshots -> if (snapshots.all { it.complete } && compareTableSnapshots(snapshots).isEmpty()) "completed" else "partial" },
+            manifest = ::manifest, out = out, err = err,
+        )
     }
 
-    private data class Request(val sourceId: UUID, val output: Path, val intervalSeconds: Long?, val limits: SnapshotLimits)
-
-    private fun parse(args: Array<String>): Request {
+    private fun parse(args: Array<String>): CaptureRequest {
         val mode = args.getOrNull(1)
         if (mode !in setOf("snapshot", "pair")) invalid("Expected table-stats snapshot or table-stats pair; see table-stats --help.")
         val values = linkedMapOf<String, String>()
@@ -108,14 +53,14 @@ class TableStatisticsCommand(
                 maxBytes = values["--max-bytes"]?.toInt() ?: 8 * 1024 * 1024,
                 timeout = Duration.ofSeconds(values["--timeout-seconds"]?.toLong() ?: 30),
             )
-            return Request(sourceId, path, interval, limits)
+            return CaptureRequest(sourceId, path, interval, limits)
         } catch (_: Exception) { invalid("Invalid statistics options or resource limits; see table-stats --help.") }
     }
 
-    private fun summary(path: Path, snapshots: List<TableSnapshot>, status: String, error: String?, interval: Long?) {
+    private fun manifest(snapshots: List<TableSnapshot>, status: String, error: String?, interval: Long?): ByteArray {
         val diagnostics = compareTableSnapshots(snapshots)
         val comparable = if (snapshots.size == 2) snapshots.all { it.complete } && diagnostics.isEmpty() else null
-        val bytes = JsonMapper.builder().build().writeValueAsBytes(linkedMapOf(
+        return JsonMapper.builder().build().writeValueAsBytes(linkedMapOf(
             "schema_version" to 1, "kind" to "pg_table_statistics_capture", "status" to status,
             "error" to error, "interval_seconds" to interval, "conditions_match" to comparable, "diagnostics" to diagnostics,
             "reset_detection" to "best_effort_pg16",
@@ -123,15 +68,6 @@ class TableStatisticsCommand(
                 "path" to "snapshot-${index + 1}.json", "snapshot_id" to snapshot.snapshotId.toString(),
                 "status" to if (snapshot.complete) "completed" else "partial") },
         ))
-        publish(path.resolve("capture.json"), bytes)
-    }
-
-    private fun publish(path: Path, bytes: ByteArray) {
-        val temp = Files.createTempFile(path.parent, ".snapshot-", ".tmp")
-        try {
-            Files.write(temp, bytes)
-            Files.move(temp, path, ATOMIC_MOVE)
-        } finally { Files.deleteIfExists(temp) }
     }
 
     private fun invalid(message: String): Nothing = throw AnalysisException(AnalysisError(ErrorCode.INVALID_INPUT, message))
