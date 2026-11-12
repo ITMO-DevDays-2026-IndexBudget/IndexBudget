@@ -1,0 +1,146 @@
+{
+  "id": "02-shop",
+  "version": 1,
+  "name": "Магазин и заказы",
+  "tag": "Связанные таблицы",
+  "description": "Клиенты, заказы и JOIN. Обычный день против большой распродажи.",
+  "accent": "sand",
+  "schema_sql": "CREATE TABLE public.customers (\n  id integer PRIMARY KEY,\n  region integer NOT NULL,\n  name text NOT NULL\n);\nCREATE TABLE public.orders (\n  id bigint PRIMARY KEY,\n  customer_id integer NOT NULL REFERENCES public.customers(id),\n  status integer NOT NULL,\n  total integer NOT NULL,\n  created_at timestamp NOT NULL\n);",
+  "seed_sql": "INSERT INTO public.customers\nSELECT i, i % 20, 'customer-' || i FROM generate_series(1, 2000) AS g(i);\nINSERT INTO public.orders\nSELECT i, (i % 2000 + 1)::integer, (i % 5)::integer,\n       ((i * 37) % 10000)::integer,\n       timestamp '2026-01-01' + i * interval '1 minute'\nFROM generate_series(1, 100000) AS g(i);",
+  "workload": {
+    "schema_version": 2,
+    "objective": "robust",
+    "analysis_mode": "normal",
+    "candidate_ranking": "frequency",
+    "queries": [
+      {
+        "id": "orders_by_customer",
+        "sql": "SELECT id, total FROM public.orders WHERE customer_id = 42 ORDER BY created_at DESC LIMIT 20"
+      },
+      {
+        "id": "orders_by_status",
+        "sql": "SELECT id, total FROM public.orders WHERE status = 1 ORDER BY created_at DESC LIMIT 20"
+      },
+      {
+        "id": "regional_orders",
+        "sql": "SELECT o.id, o.total FROM public.orders o INNER JOIN public.customers c ON o.customer_id = c.id WHERE c.region = 7 AND o.total >= 5000 ORDER BY o.created_at DESC LIMIT 20"
+      }
+    ],
+    "profiles": [
+      {
+        "id": "normal",
+        "weight": 9,
+        "calls_per_hour": {
+          "orders_by_customer": 3000,
+          "orders_by_status": 100,
+          "regional_orders": 100
+        }
+      },
+      {
+        "id": "campaign",
+        "weight": 1,
+        "calls_per_hour": {
+          "orders_by_customer": 100,
+          "orders_by_status": 2000,
+          "regional_orders": 1000
+        }
+      }
+    ],
+    "table_write_rates": {
+      "public.orders": {
+        "inserts_per_hour": 1000,
+        "updates_per_hour": 2000,
+        "deletes_per_hour": 100,
+        "source": "manual"
+      },
+      "public.customers": {
+        "inserts_per_hour": 100,
+        "updates_per_hour": 50,
+        "deletes_per_hour": 0,
+        "source": "manual"
+      }
+    },
+    "constraints": {
+      "storage_budget_bytes": 33554432,
+      "write_budget_units_per_hour": 12000,
+      "max_indexes": 5
+    }
+  },
+  "catalog": {
+    "tables": [
+      {
+        "name": "public.customers",
+        "columns": [
+          {
+            "name": "id",
+            "type": "integer",
+            "primary": true,
+            "nullable": false
+          },
+          {
+            "name": "region",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "name",
+            "type": "text",
+            "primary": false,
+            "nullable": false
+          }
+        ],
+        "rows": 2000,
+        "indexes": [
+          "CREATE UNIQUE INDEX customers_pkey ON public.customers USING btree (id)"
+        ]
+      },
+      {
+        "name": "public.orders",
+        "columns": [
+          {
+            "name": "id",
+            "type": "bigint",
+            "primary": true,
+            "nullable": false
+          },
+          {
+            "name": "customer_id",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "status",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "total",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "created_at",
+            "type": "timestamp",
+            "primary": false,
+            "nullable": false
+          }
+        ],
+        "rows": 100000,
+        "indexes": [
+          "CREATE UNIQUE INDEX orders_pkey ON public.orders USING btree (id)"
+        ]
+      }
+    ],
+    "relations": [
+      {
+        "from": "public.orders",
+        "to": "public.customers",
+        "label": "FOREIGN KEY (customer_id) REFERENCES customers(id)"
+      }
+    ]
+  }
+}
