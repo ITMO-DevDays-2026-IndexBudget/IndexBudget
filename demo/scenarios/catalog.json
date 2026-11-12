@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "kind": "demo_sql_catalog",
+  "dataset": {
+    "id": "records-groups-v1",
+    "seed": "demo/postgres/init/001-seed.sql",
+    "seed_version": "v1",
+    "postgres_version": "16.15",
+    "hypopg_version": "1.4.2",
+    "tables": {"public.records": 200000, "public.groups": 1000},
+    "nullable_columns": [],
+    "origin": "Детерминированный синтетический seed проекта, не пользовательская production-нагрузка."
+  },
+  "workload": "workload.json",
+  "series": ["storage-series.json", "write-series.json"],
+  "profiles": {
+    "normal": "Обычный день: чаще читается одна группа; относительный вес 9.",
+    "peak": "Пик: чаще ищут значение и меняют payload; относительный вес 1."
+  },
+  "examples": [
+    {"query_id": "records_by_group", "name": "Одна группа", "purpose": "Критический поиск группы, защищённый guard 1.05.", "syntax_hint": "Равенство; явная проекция id/value допускает ограниченный INCLUDE."},
+    {"query_id": "records_by_value", "name": "Поиск значения в пик", "purpose": "Конкурирующий доступ по другому ключу с большим весом в пиковом профиле.", "syntax_hint": "Равенство; payload — проекция, не самостоятельный ключ."},
+    {"query_id": "time_window", "name": "Минута истории", "purpose": "Фиксированный короткий временной интервал внутри seed, без зависимости от текущего времени.", "syntax_hint": "BETWEEN и явные casts timestamp; обе границы включены."},
+    {"query_id": "group_list", "name": "Три группы", "purpose": "Небольшой список искомых групп.", "syntax_hint": "IN с литералами, без подзапроса; не превращается в AND."},
+    {"query_id": "alternative_filters", "name": "Две альтернативы", "purpose": "Показать ветви условий и происхождение кандидатов.", "syntax_hint": "AND/OR и скобки; разные стороны OR не означают совместный фильтр."},
+    {"query_id": "category_join", "name": "Категория группы", "purpose": "Связать записи с названием группы, отфильтровать категорию и показать свежие строки.", "syntax_hint": "INNER JOIN по равенству колонок, WHERE, ORDER BY DESC и LIMIT."},
+    {"query_id": "all_records", "name": "Массовый фильтр", "purpose": "Контроль отсутствия пользы: условие охватывает все 200000 строк seed, SELECT * требует полные строки.", "syntax_hint": "Диапазон; звёздочка отключает INCLUDE. Отрицательный результат сохраняется, planner settings не меняются."},
+    {"query_id": "update_payload", "name": "Изменить payload", "purpose": "Оценить поиск строк для однотабличного UPDATE, не исполняя запись.", "syntax_hint": "Обязательный WHERE и литеральный SET; payload не порождает INCLUDE."},
+    {"query_id": "delete_recent", "name": "Удалить две ранние записи", "purpose": "Оценить поиск строк для DELETE на фиксированном небольшом подмножестве seed.", "syntax_hint": "Одна таблица, обязательный WHERE, timestamp cast и IN; без USING/RETURNING."}
+  ],
+  "unsupported_examples": [
+    {"id": "update_expression", "sql": "UPDATE public.records SET value = value + 1 WHERE id = 1", "error_code": "UNSUPPORTED_SQL", "reason": "SET допускает только скалярные литералы/NULL/casts, не выражение."},
+    {"id": "delete_without_where", "sql": "DELETE FROM public.records", "error_code": "UNSUPPORTED_SQL", "reason": "Для DML обязателен WHERE."},
+    {"id": "delete_using", "sql": "DELETE FROM public.records USING (SELECT id FROM public.records) other WHERE records.id = other.id", "error_code": "UNSUPPORTED_SQL", "reason": "USING и подзапросы не входят в поддержанный DML-поднабор."},
+    {"id": "tuple_set", "sql": "UPDATE public.records SET (value) = (1) WHERE id = 1", "error_code": "UNSUPPORTED_SQL", "reason": "Tuple SET запрещён даже с одной колонкой."},
+    {"id": "unknown_column", "sql": "SELECT missing FROM public.records WHERE id = 1", "error_code": "UNKNOWN_COLUMN", "reason": "В seed v1 нет колонки missing."}
+  ],
+  "benchmark_handoff": {
+    "status": "configuration_only_not_measurements",
+    "query_sql_and_calls": "workload.json: queries и profiles — единый источник SQL, литералов и частот вызовов/час.",
+    "write_rates": "workload.json: table_write_rates — независимые ручные изменения строк/час для всех таблиц, не сумма DML calls.",
+    "insert_template": "INSERT INTO public.records (id, group_id, value, created_at, payload) VALUES ($1, 42, 7, '2026-01-03 08:00:00'::timestamp, 'benchmark-only')",
+    "insert_id_start": 200001,
+    "insert_scope": "Только отдельный физический benchmark #110; последовательные уникальные id, не workload анализатора.",
+    "reset_policy": "Восстанавливать один и тот же seed перед baseline/selected и каждым повтором. Повтор DELETE без восстановления быстро становится no-op; это не измерение исходной смеси.",
+    "measurement_owner": "#109 подключает наблюдаемый write profile #107; #110 фиксирует длительность, конкурентность, warmup, три повтора и реальные измерения. Эти результаты здесь не заявлены."
+  }
+}
