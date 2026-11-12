@@ -59,6 +59,10 @@ class JsonReportWriter {
             "queries" to input?.queries?.map { query -> linkedMapOf(
                 "id" to query.id,
                 "sql" to query.sql,
+                "statement_kind" to report.statementKinds[query.id]?.name?.lowercase(),
+                "cost_interpretation" to report.statementKinds[query.id]?.let {
+                    if (it == StatementKind.SELECT) "planner_cost" else "row_search_and_preparation"
+                },
                 "baseline_cost" to comparisons[query.id]?.baselineCost,
                 "selected_cost" to comparisons[query.id]?.selectedCost,
                 "regression" to comparisons[query.id]?.regression,

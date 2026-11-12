@@ -6,7 +6,7 @@ import ru.itmo.indexbudget.domain.*
 internal class PostgresOperatorResolver(private val catalog: CatalogSnapshot, private val context: RunContext) {
     private fun facts() = catalog.semantics ?: fail(ErrorCode.CATALOG_ERROR, "Catalog is missing PostgreSQL operator facts.")
     private val types by lazy { facts().types.associate { context.checkDeadline(); it.oid to it } }
-    private val casts by lazy { facts().implicitCasts.mapTo(hashSetOf()) {
+    private val casts by lazy { facts().implicitCasts.filterNot { it.assignmentOnly }.mapTo(hashSetOf()) {
         context.checkDeadline(); it.sourceTypeOid to it.targetTypeOid
     } }
     private val operators by lazy { facts().operators.groupBy { context.checkDeadline(); it.name } }

@@ -513,6 +513,9 @@ class HtmlReportRenderer : ReportRenderer {
 
     private fun StringBuilder.queries(report: AnalysisReport, includeDetails: Boolean = false) {
         section("queries", "Каким запросам поможет выбранный набор", "Оценка одного выполнения запроса, planner cost")
+        if (report.statementKinds.values.any { it != StatementKind.SELECT }) {
+            append("<p class=\"notice\">Для UPDATE/DELETE cost описывает поиск и подготовку строк. ModifyTable не оценивает фактическую запись, WAL, блокировки или триггеры; это не прогноз времени изменения данных. Частота вызовов не заменяет write rates таблицы.</p>")
+        }
         append("<p>До — существующие индексы; с набором — они же и все предложенные. Меньшая оценка лучше.</p>")
         val baseline = report.result.baseline
         val selected = report.result.selected?.evaluation
@@ -570,6 +573,7 @@ class HtmlReportRenderer : ReportRenderer {
             append("<h3>Полный ID</h3>")
             pre(id)
             append("<dl class=\"values\">")
+            report.statementKinds[id]?.let { entry("Вид SQL", it.name) }
             entry("Baseline cost", number(baseline?.costByQueryId?.get(id)))
             entry("Selected cost", number(selected?.costByQueryId?.get(id)))
             entry("Снижение cost, %", effects[id]?.selected?.let { percent(it.gainPercent, it.baselineCost) } ?: "Нет данных")

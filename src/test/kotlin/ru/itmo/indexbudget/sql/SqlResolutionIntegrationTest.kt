@@ -41,9 +41,30 @@ class SqlResolutionIntegrationTest {
     fun cleanup() {
         if (::connection.isInitialized) connection.use {
             it.autoCommit = true
+            sql("SET default_transaction_read_only = off")
             if (::schema.isInitialized) sql("DROP SCHEMA IF EXISTS $schema CASCADE")
             if (::secondSchema.isInitialized) sql("DROP SCHEMA IF EXISTS $secondSchema CASCADE")
         }
+    }
+
+    @Test
+    fun `DML uses actual PostgreSQL assignment casts and original plans without changing rows`() {
+        sql("INSERT INTO records VALUES (1, 2, timestamp '2026-01-01')")
+        val update = "UPDATE records r SET value = CAST(3 AS bigint), created_at = NULL WHERE r.id = 1"
+        val resolved = resolve(update).queries.single()
+        assertEquals(StatementKind.UPDATE, resolved.statementKind)
+        assertEquals(setOf("value", "created_at"), resolved.modifiedColumns.map { it.name }.toSet())
+        assertEquals(update, resolved.sql)
+        val before = queryIds("SELECT value FROM records")
+        sql("SET default_transaction_read_only = on")
+        sql("EXPLAIN (FORMAT JSON) $update")
+        sql("EXPLAIN (FORMAT JSON) DELETE FROM records WHERE id = 1")
+        assertEquals("25006", assertThrows(java.sql.SQLException::class.java) { sql(update) }.sqlState)
+        assertEquals("25006", assertThrows(java.sql.SQLException::class.java) {
+            sql("EXPLAIN ANALYZE DELETE FROM records WHERE id = 1")
+        }.sqlState)
+        assertEquals(before, queryIds("SELECT value FROM records"))
+        sql("SET default_transaction_read_only = off")
     }
 
     @Test
