@@ -1,0 +1,107 @@
+{
+  "id": "01-records",
+  "version": 1,
+  "name": "Каталог записей",
+  "tag": "Быстрый старт",
+  "description": "Одна таблица, два сценария. Как частоты меняют выбор индексов.",
+  "accent": "mint",
+  "schema_sql": "CREATE TABLE public.records (\n  id bigint PRIMARY KEY,\n  group_id integer NOT NULL,\n  value integer NOT NULL,\n  created_at timestamp NOT NULL,\n  payload text NOT NULL\n);",
+  "seed_sql": "INSERT INTO public.records\nSELECT i, (i % 1000)::integer, ((i * 37) % 997)::integer,\n       timestamp '2026-01-01 00:00:00' + i * interval '1 second',\n       repeat(md5(i::text), 4)\nFROM generate_series(1, 200000) AS g(i);",
+  "workload": {
+    "schema_version": 2,
+    "objective": "robust",
+    "analysis_mode": "normal",
+    "queries": [
+      {
+        "id": "records_by_group",
+        "sql": "SELECT id, value FROM public.records WHERE group_id = 42 ORDER BY created_at DESC LIMIT 20"
+      },
+      {
+        "id": "records_by_value",
+        "sql": "SELECT id, value FROM public.records WHERE value = 7 ORDER BY created_at DESC LIMIT 20"
+      },
+      {
+        "id": "records_recent",
+        "sql": "SELECT id, value FROM public.records WHERE created_at >= '2026-01-03 00:00:00'::timestamp ORDER BY created_at DESC LIMIT 20"
+      }
+    ],
+    "profiles": [
+      {
+        "id": "normal",
+        "weight": 0.9,
+        "calls_per_hour": {
+          "records_by_group": 3000,
+          "records_by_value": 100,
+          "records_recent": 200
+        }
+      },
+      {
+        "id": "campaign",
+        "weight": 0.1,
+        "calls_per_hour": {
+          "records_by_group": 100,
+          "records_by_value": 3000,
+          "records_recent": 200
+        }
+      }
+    ],
+    "table_write_rates": {
+      "public.records": {
+        "inserts_per_hour": 1000,
+        "updates_per_hour": 3000,
+        "deletes_per_hour": 100,
+        "source": "manual"
+      }
+    },
+    "constraints": {
+      "storage_budget_bytes": 67108864,
+      "write_budget_units_per_hour": 10000,
+      "max_indexes": 5
+    },
+    "candidate_ranking": "frequency"
+  },
+  "catalog": {
+    "tables": [
+      {
+        "name": "public.records",
+        "columns": [
+          {
+            "name": "id",
+            "type": "bigint",
+            "primary": true,
+            "nullable": false
+          },
+          {
+            "name": "group_id",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "value",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "created_at",
+            "type": "timestamp",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "payload",
+            "type": "text",
+            "primary": false,
+            "nullable": false
+          }
+        ],
+        "rows": 200000,
+        "indexes": [
+          "CREATE UNIQUE INDEX records_pkey ON public.records USING btree (id)"
+        ]
+      }
+    ],
+    "relations": []
+  }
+}

@@ -1,0 +1,653 @@
+{
+  "id": "03-wide",
+  "version": 1,
+  "name": "Широкая таблица",
+  "tag": "Границы поиска",
+  "description": "100 колонок. Полный SQL и ограниченный набор кандидатов.",
+  "accent": "lavender",
+  "schema_sql": "CREATE TABLE public.wide_records (\n  c1 integer NOT NULL,\n  c2 integer NOT NULL,\n  c3 integer NOT NULL,\n  c4 integer NOT NULL,\n  c5 integer NOT NULL,\n  c6 integer NOT NULL,\n  c7 integer NOT NULL,\n  c8 integer NOT NULL,\n  c9 integer NOT NULL,\n  c10 integer NOT NULL,\n  c11 integer NOT NULL,\n  c12 integer NOT NULL,\n  c13 integer NOT NULL,\n  c14 integer NOT NULL,\n  c15 integer NOT NULL,\n  c16 integer NOT NULL,\n  c17 integer NOT NULL,\n  c18 integer NOT NULL,\n  c19 integer NOT NULL,\n  c20 integer NOT NULL,\n  c21 integer NOT NULL,\n  c22 integer NOT NULL,\n  c23 integer NOT NULL,\n  c24 integer NOT NULL,\n  c25 integer NOT NULL,\n  c26 integer NOT NULL,\n  c27 integer NOT NULL,\n  c28 integer NOT NULL,\n  c29 integer NOT NULL,\n  c30 integer NOT NULL,\n  c31 integer NOT NULL,\n  c32 integer NOT NULL,\n  c33 integer NOT NULL,\n  c34 integer NOT NULL,\n  c35 integer NOT NULL,\n  c36 integer NOT NULL,\n  c37 integer NOT NULL,\n  c38 integer NOT NULL,\n  c39 integer NOT NULL,\n  c40 integer NOT NULL,\n  c41 integer NOT NULL,\n  c42 integer NOT NULL,\n  c43 integer NOT NULL,\n  c44 integer NOT NULL,\n  c45 integer NOT NULL,\n  c46 integer NOT NULL,\n  c47 integer NOT NULL,\n  c48 integer NOT NULL,\n  c49 integer NOT NULL,\n  c50 integer NOT NULL,\n  c51 integer NOT NULL,\n  c52 integer NOT NULL,\n  c53 integer NOT NULL,\n  c54 integer NOT NULL,\n  c55 integer NOT NULL,\n  c56 integer NOT NULL,\n  c57 integer NOT NULL,\n  c58 integer NOT NULL,\n  c59 integer NOT NULL,\n  c60 integer NOT NULL,\n  c61 integer NOT NULL,\n  c62 integer NOT NULL,\n  c63 integer NOT NULL,\n  c64 integer NOT NULL,\n  c65 integer NOT NULL,\n  c66 integer NOT NULL,\n  c67 integer NOT NULL,\n  c68 integer NOT NULL,\n  c69 integer NOT NULL,\n  c70 integer NOT NULL,\n  c71 integer NOT NULL,\n  c72 integer NOT NULL,\n  c73 integer NOT NULL,\n  c74 integer NOT NULL,\n  c75 integer NOT NULL,\n  c76 integer NOT NULL,\n  c77 integer NOT NULL,\n  c78 integer NOT NULL,\n  c79 integer NOT NULL,\n  c80 integer NOT NULL,\n  c81 integer NOT NULL,\n  c82 integer NOT NULL,\n  c83 integer NOT NULL,\n  c84 integer NOT NULL,\n  c85 integer NOT NULL,\n  c86 integer NOT NULL,\n  c87 integer NOT NULL,\n  c88 integer NOT NULL,\n  c89 integer NOT NULL,\n  c90 integer NOT NULL,\n  c91 integer NOT NULL,\n  c92 integer NOT NULL,\n  c93 integer NOT NULL,\n  c94 integer NOT NULL,\n  c95 integer NOT NULL,\n  c96 integer NOT NULL,\n  c97 integer NOT NULL,\n  c98 integer NOT NULL,\n  c99 integer NOT NULL,\n  c100 integer NOT NULL\n);",
+  "seed_sql": "INSERT INTO public.wide_records\nSELECT (i * 1) % 1009, (i * 2) % 1009, (i * 3) % 1009, (i * 4) % 1009, (i * 5) % 1009, (i * 6) % 1009, (i * 7) % 1009, (i * 8) % 1009, (i * 9) % 1009, (i * 10) % 1009, (i * 11) % 1009, (i * 12) % 1009, (i * 13) % 1009, (i * 14) % 1009, (i * 15) % 1009, (i * 16) % 1009, (i * 17) % 1009, (i * 18) % 1009, (i * 19) % 1009, (i * 20) % 1009, (i * 21) % 1009, (i * 22) % 1009, (i * 23) % 1009, (i * 24) % 1009, (i * 25) % 1009, (i * 26) % 1009, (i * 27) % 1009, (i * 28) % 1009, (i * 29) % 1009, (i * 30) % 1009, (i * 31) % 1009, (i * 32) % 1009, (i * 33) % 1009, (i * 34) % 1009, (i * 35) % 1009, (i * 36) % 1009, (i * 37) % 1009, (i * 38) % 1009, (i * 39) % 1009, (i * 40) % 1009, (i * 41) % 1009, (i * 42) % 1009, (i * 43) % 1009, (i * 44) % 1009, (i * 45) % 1009, (i * 46) % 1009, (i * 47) % 1009, (i * 48) % 1009, (i * 49) % 1009, (i * 50) % 1009, (i * 51) % 1009, (i * 52) % 1009, (i * 53) % 1009, (i * 54) % 1009, (i * 55) % 1009, (i * 56) % 1009, (i * 57) % 1009, (i * 58) % 1009, (i * 59) % 1009, (i * 60) % 1009, (i * 61) % 1009, (i * 62) % 1009, (i * 63) % 1009, (i * 64) % 1009, (i * 65) % 1009, (i * 66) % 1009, (i * 67) % 1009, (i * 68) % 1009, (i * 69) % 1009, (i * 70) % 1009, (i * 71) % 1009, (i * 72) % 1009, (i * 73) % 1009, (i * 74) % 1009, (i * 75) % 1009, (i * 76) % 1009, (i * 77) % 1009, (i * 78) % 1009, (i * 79) % 1009, (i * 80) % 1009, (i * 81) % 1009, (i * 82) % 1009, (i * 83) % 1009, (i * 84) % 1009, (i * 85) % 1009, (i * 86) % 1009, (i * 87) % 1009, (i * 88) % 1009, (i * 89) % 1009, (i * 90) % 1009, (i * 91) % 1009, (i * 92) % 1009, (i * 93) % 1009, (i * 94) % 1009, (i * 95) % 1009, (i * 96) % 1009, (i * 97) % 1009, (i * 98) % 1009, (i * 99) % 1009, (i * 100) % 1009\nFROM generate_series(1, 10000) AS g(i);",
+  "workload": {
+    "schema_version": 2,
+    "objective": "robust",
+    "queries": [
+      {
+        "id": "wide_sparse",
+        "sql": "SELECT * FROM public.wide_records WHERE c1 = 42 ORDER BY c2 LIMIT 20"
+      },
+      {
+        "id": "wide_all",
+        "sql": "SELECT * FROM public.wide_records WHERE c1 >= 0 AND c2 >= 0 AND c3 >= 0 AND c4 >= 0 AND c5 >= 0 AND c6 >= 0 AND c7 >= 0 AND c8 >= 0 AND c9 >= 0 AND c10 >= 0 AND c11 >= 0 AND c12 >= 0 AND c13 >= 0 AND c14 >= 0 AND c15 >= 0 AND c16 >= 0 AND c17 >= 0 AND c18 >= 0 AND c19 >= 0 AND c20 >= 0 AND c21 >= 0 AND c22 >= 0 AND c23 >= 0 AND c24 >= 0 AND c25 >= 0 AND c26 >= 0 AND c27 >= 0 AND c28 >= 0 AND c29 >= 0 AND c30 >= 0 AND c31 >= 0 AND c32 >= 0 AND c33 >= 0 AND c34 >= 0 AND c35 >= 0 AND c36 >= 0 AND c37 >= 0 AND c38 >= 0 AND c39 >= 0 AND c40 >= 0 AND c41 >= 0 AND c42 >= 0 AND c43 >= 0 AND c44 >= 0 AND c45 >= 0 AND c46 >= 0 AND c47 >= 0 AND c48 >= 0 AND c49 >= 0 AND c50 >= 0 AND c51 >= 0 AND c52 >= 0 AND c53 >= 0 AND c54 >= 0 AND c55 >= 0 AND c56 >= 0 AND c57 >= 0 AND c58 >= 0 AND c59 >= 0 AND c60 >= 0 AND c61 >= 0 AND c62 >= 0 AND c63 >= 0 AND c64 >= 0 AND c65 >= 0 AND c66 >= 0 AND c67 >= 0 AND c68 >= 0 AND c69 >= 0 AND c70 >= 0 AND c71 >= 0 AND c72 >= 0 AND c73 >= 0 AND c74 >= 0 AND c75 >= 0 AND c76 >= 0 AND c77 >= 0 AND c78 >= 0 AND c79 >= 0 AND c80 >= 0 AND c81 >= 0 AND c82 >= 0 AND c83 >= 0 AND c84 >= 0 AND c85 >= 0 AND c86 >= 0 AND c87 >= 0 AND c88 >= 0 AND c89 >= 0 AND c90 >= 0 AND c91 >= 0 AND c92 >= 0 AND c93 >= 0 AND c94 >= 0 AND c95 >= 0 AND c96 >= 0 AND c97 >= 0 AND c98 >= 0 AND c99 >= 0 AND c100 >= 0 LIMIT 20"
+      }
+    ],
+    "profiles": [
+      {
+        "id": "wide",
+        "weight": 1,
+        "calls_per_hour": {
+          "wide_sparse": 100,
+          "wide_all": 1
+        }
+      }
+    ],
+    "constraints": {
+      "storage_budget_bytes": 67108864,
+      "write_budget_units_per_hour": null,
+      "max_indexes": 5
+    },
+    "analysis_mode": "normal",
+    "candidate_ranking": "frequency"
+  },
+  "catalog": {
+    "tables": [
+      {
+        "name": "public.wide_records",
+        "columns": [
+          {
+            "name": "c1",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c2",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c3",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c4",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c5",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c6",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c7",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c8",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c9",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c10",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c11",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c12",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c13",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c14",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c15",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c16",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c17",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c18",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c19",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c20",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c21",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c22",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c23",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c24",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c25",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c26",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c27",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c28",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c29",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c30",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c31",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c32",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c33",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c34",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c35",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c36",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c37",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c38",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c39",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c40",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c41",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c42",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c43",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c44",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c45",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c46",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c47",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c48",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c49",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c50",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c51",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c52",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c53",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c54",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c55",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c56",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c57",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c58",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c59",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c60",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c61",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c62",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c63",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c64",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c65",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c66",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c67",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c68",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c69",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c70",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c71",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c72",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c73",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c74",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c75",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c76",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c77",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c78",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c79",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c80",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c81",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c82",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c83",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c84",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c85",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c86",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c87",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c88",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c89",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c90",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c91",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c92",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c93",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c94",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c95",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c96",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c97",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c98",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c99",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "c100",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          }
+        ],
+        "rows": 10000,
+        "indexes": []
+      }
+    ],
+    "relations": []
+  }
+}
