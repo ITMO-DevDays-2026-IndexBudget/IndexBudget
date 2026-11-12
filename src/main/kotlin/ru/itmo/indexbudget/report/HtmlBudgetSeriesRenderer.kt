@@ -54,6 +54,11 @@ class HtmlBudgetSeriesRenderer {
         for (point in points) overviewResult(summary, point, candidates, saved[point.path("ordinal").intValue()], storage)
         if (points.isEmpty()) append("<p>Результаты вариантов ещё не сохранены.</p>")
         append("<p class=\"cost-definition\"><strong>Planner cost</strong> — оценка затрат PostgreSQL, не время выполнения. Снижение cost не гарантирует ускорения.</p>")
+        if (summary.path("settings").path("queries").any { it.path("statement_kind").isString && it.path("statement_kind").stringValue() in setOf("update", "delete") }
+            || saved.values.any { report -> report.statementKinds.values.any { it != StatementKind.SELECT } }) {
+            notice("В нагрузке есть UPDATE/DELETE: cost оценивает поиск и подготовку строк. Фактическая модификация таблицы не включена; это не прогноз полного ускорения DML.")
+        }
+        append(WriteProfileReport.render(summary.path("settings").path("table_write_rates"), summary.path("settings").path("table_write_rates_origin")))
         if (summary.path("status").stringValue() == "running") notice("Серия ещё выполняется. Не все точки рассчитаны.")
         if (points.any { usable(it) && !it.path("conditions_match").isTrue }) notice("Сопоставимость ограничена: условия изменились или не проверены. Разницу нельзя объяснять только бюджетом.")
         val comparable = points.filter { usable(it) && it.path("conditions_match").isTrue }.sortedBy { it.path("budget_value").decimalValue() }
@@ -84,7 +89,7 @@ class HtmlBudgetSeriesRenderer {
             }
             append(catalog.indexes()).append("</section><section id=\"series-workload\">")
             // Share identical observations/inputs; never substitute one point's changed provenance for another.
-            val groups = saved.entries.groupBy { (_, r) -> listOf(r.workloadProvenance, r.input?.queries, r.input?.profiles, r.input?.tableWriteRates) }
+            val groups = saved.entries.groupBy { (_, r) -> listOf(r.workloadProvenance, r.input?.queries, r.input?.profiles, r.input?.tableWriteRates, r.input?.tableWriteRatesOrigin) }
             for (group in groups.values) {
                 append("<div data-variants=\"").append(group.joinToString(",") { it.key.toString() }).append("\">")
                 append(renderer.renderSection(group.first().value, HtmlReportSection.PROVENANCE, "variant-${group.first().key}-"))
@@ -164,7 +169,7 @@ class HtmlBudgetSeriesRenderer {
         val provenance = report?.workloadProvenance
         if (provenance == null) {
             append(when (summary.path("source").path("workload_source").stringValue()) {
-                "manual_json" -> "Ручной workload.json. Период и охват неизвестны; репрезентативность не подтверждена."
+                "manual_json" -> "SQL и частоты вызовов заданы вручную. Их период и охват неизвестны; репрезентативность не подтверждена."
                 "pg_stat_statements" -> "pg_stat_statements. Период, полнота и охват наблюдений не сохранены."
                 else -> "Источник, период и охват неизвестны."
             })

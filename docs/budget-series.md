@@ -227,3 +227,7 @@ INDEXBUDGET_SERIES_TEST_OUTPUT="$PWD/build/budget-series-real-bars" bash demo/ch
 Hash (#115) использует тот же общий фиксированный пул, сводку v2 и точки report v4,
 включая пустой набор и failed/partial; метод сохраняется, direction/nulls равны null.
 Отдельных size-вызовов/refill в точках нет. [Контракт hash](hash.md).
+
+### Источник записи и SQL (#108)
+
+`settings.table_write_rates_origin` сохраняет происхождение единственного окна записи; `settings.queries[]` добавляет `statement_kind` и `cost_interpretation` из AST общей подготовки (null до её завершения). Поля добавочные, версии сводки не меняются. HTML показывает окно/полноту/rates и границы DML-cost даже без моделей точек. Старые сводки допускают отсутствие этих полей. [Подробности](write-profile-ui.md).

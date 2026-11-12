@@ -65,7 +65,7 @@ async function noPageOverflow(page, message) {
     await page.context().setOffline(true);
     const fixtures = process.argv[2]
       ? [['real', resolve(process.argv[2])]]
-      : [...['mixed', 'same', 'nonmonotonic', 'zero-baseline', 'no-write', 'write', 'regression']
+      : [...['mixed', 'same', 'nonmonotonic', 'zero-baseline', 'no-write', 'write', 'regression', 'observed-write']
         .map(name => [name, resolve(`build/report-previews/series-${name}`)]),
         ['recorded', resolve('build/report-previews/recorded-series')]];
     for (const [variant, source] of fixtures) {

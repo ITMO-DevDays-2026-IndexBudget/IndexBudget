@@ -97,7 +97,7 @@ function installTour() {
     {target:'.schema-panel', title:'Посмотрите на связи', text:'На карте — таблицы, колонки, внешние ключи и существующие индексы. Схема и данные фиксированы выбранным шаблоном. Подпись сообщает, проверена ли схема в PostgreSQL.'},
     {target:'.budget-panel', title:'Один запуск или серия бюджетов', text:'Выберите одиночный анализ или 3–5 значений одного бюджета. Серия сохраняет workload и общий подготовленный пул; единый отчёт покажет подробности вариантов. Для места в серии задавайте байты, для записи — ед./ч.'},
     {target:'.strategy-grid', title:'Выберите цель и глубину', text:'Robust учитывает худший сценарий, mean — средний с учётом весов. Глубина задаёт ресурсы поиска; больше времени не гарантирует лучший результат.'},
-    {target:'.advanced', advanced:true, title:'Тонкая настройка — по желанию', text:'Здесь доступны интенсивность записи, рейтинг кандидатов, ограничения ухудшения запросов и ручные индексы для сравнения. Для первого запуска достаточно значений шаблона.'},
+    {target:'.advanced', advanced:true, title:'Тонкая настройка — по желанию', text:'Выберите ручной профиль записи или загрузите рассчитанный workload.json из CLI. Строки/час отличаются от вызовов SQL. Здесь также доступны рейтинг кандидатов, ограничения ухудшения запросов и ручные индексы для сравнения. Для первого запуска достаточно значений шаблона.'},
     {target:'.launch-bar', title:'Запустите эксперимент', text:'После подготовки базы начнётся реальный анализ. Готовый отчёт откроется автоматически; частичный результат тоже сохранится с объяснением причин остановки.'}
   ];
   const layer = document.createElement('div');
@@ -220,7 +220,7 @@ function persist() {
   try {
     localStorage.setItem(draftKey, JSON.stringify({state: {
       template_id: state.template_id, template_version: state.template_version, workload: state.workload
-    }, guardsText, manualText, seriesUI: seriesSettings()}));
+    }, guardsText, manualText, writeSource: writeSource(), seriesUI: seriesSettings()}));
     $('saved').textContent = 'Черновик сохранён в этом браузере';
   } catch {
     $('saved').textContent = 'Браузер не позволяет сохранить черновик';
@@ -252,7 +252,7 @@ function restoreDraft(draft, availableTemplates) {
         && typeof p.calls_per_hour === 'object' && !Array.isArray(p.calls_per_hour))
       || (w.table_write_rates && (typeof w.table_write_rates !== 'object'
         || !Object.values(w.table_write_rates).every(r => r && typeof r === 'object')))) return null;
-  return {state: {...templateState(template), workload: clone(w)},
+  return {state: {...templateState(template), workload: clone(w), writeSource: draft.writeSource === 'observed' || w.table_write_rates_origin ? 'observed' : 'manual'},
     guardsText: typeof draft.guardsText === 'string' ? draft.guardsText : '',
     manualText: typeof draft.manualText === 'string' ? draft.manualText : ''};
 }
@@ -303,11 +303,50 @@ function updateObjective() {
     : 'Учитываем каждый сценарий независимо от его веса';
 }
 
+function writeSource() {
+  return state.writeSource || (state.workload.table_write_rates_origin || Object.values(state.workload.table_write_rates || {}).some(r => r.source === 'observed') ? 'observed' : 'manual');
+}
+
+function validateWriteProfile(w, required = false, source = null) {
+  const rates = w.table_write_rates, origin = w.table_write_rates_origin;
+  const observed = source === 'observed' || !!origin || Object.values(rates || {}).some(r => r?.source === 'observed');
+  const fix = 'Загрузите полный рассчитанный workload.json или явно выберите ручной источник и заполните строки/час.';
+  if (!rates || !Object.keys(rates).length) {
+    if (required || observed || rates) throw new Error(`Профиль записи не задан. ${fix}`);
+    return;
+  }
+  if (typeof rates !== 'object' || Array.isArray(rates)) throw new Error('Неверный профиль записи.');
+  for (const rate of Object.values(rates)) {
+    if (!rate || ['inserts_per_hour','updates_per_hour','deletes_per_hour'].some(k => typeof rate[k] !== 'number' || !Number.isFinite(rate[k]) || rate[k] < 0)) throw new Error(`Неизвестная или неверная интенсивность строк. ${fix}`);
+    if ((rate.source ?? 'manual') !== (observed ? 'observed' : 'manual')) throw new Error('Нельзя смешивать ручные и наблюдаемые rates.');
+  }
+  if (source === 'manual' && observed) throw new Error('Наблюдаемый профиль не является ручным.');
+  if (observed) {
+    if (origin?.kind !== 'observed' || typeof origin.complete !== 'boolean' || !Array.isArray(origin.reasons)
+        || !origin.reasons.every(r => typeof r === 'string') || !origin.window?.from || !origin.window?.to
+        || typeof origin.window.period_seconds !== 'number' || !Number.isFinite(origin.window.period_seconds) || origin.window.period_seconds <= 0) throw new Error(`Нет корректного происхождения окна. ${fix}`);
+    if (required && !origin.complete) throw new Error(`Наблюдение неполное: ${origin.reasons.join(', ') || 'причина не указана'}. ${fix}`);
+  }
+}
+
+function importWriteProfile(value) {
+  if (!value || value.schema_version !== 2) throw new Error('Загрузите workload.json v2 из import-workload.');
+  validateWriteProfile(value, false, 'observed');
+  // Copy the producer output; do not calculate rates or import SQL-call frequencies.
+  state.workload.table_write_rates = clone(value.table_write_rates);
+  state.workload.table_write_rates_origin = clone(value.table_write_rates_origin);
+  state.writeSource = 'observed';
+}
+
 function renderRates() {
-  const rows = Object.entries(state.workload.table_write_rates || {});
+  const w = state.workload, observed = writeSource() === 'observed', origin = w.table_write_rates_origin;
+  $('write-source').value = writeSource();
+  $('observed-upload').hidden = !observed;
+  $('write-origin').innerHTML = observed ? origin ? `<p><strong>${origin.complete ? 'Наблюдение полное' : 'Наблюдение неполное'}</strong> · ${escape(origin.window?.from)} — ${escape(origin.window?.to)} · ${escape(origin.window?.period_seconds)} с</p><p class="field-note">Источник: ${escape(origin.source?.source_id || 'не сохранён')}; БД OID: ${escape(origin.source?.database_oid ?? 'неизвестен')}; PostgreSQL ${escape(origin.source?.postgres_version || 'неизвестен')}. ${escape((origin.reasons || []).join('; '))}</p><p class="field-note">PG16 не позволяет надёжно обнаружить все адресные сбросы. HOT — историческая диагностика, из будущей цены индекса не вычитается.</p>` : '<p class="field-note">Наблюдаемый профиль ещё не загружен. Загрузите рассчитанный workload.json. Ручные значения не подставляются.</p>' : '<p class="field-note">Ручная модель изменения строк; окно наблюдения не задано.</p>';
+  const rows = Object.entries(w.table_write_rates || {});
   $('write-rates').innerHTML = `${rows.length ? '<div class="rate-row rate-head"><span>Таблица</span><span>INSERT</span><span>UPDATE</span><span>DELETE</span><span></span></div>' : '<p class="field-note">Профиль записи не задан. При включённом бюджете нужны данные для всех таблиц запросов.</p>'}
-    ${rows.map(([name, rate], i) => `<div class="rate-row"><span>${escape(name)}</span>${['inserts_per_hour','updates_per_hour','deletes_per_hour'].map(k => `<input type="number" min="0" step="any" value="${escape(rate[k])}" data-rate="${i}" data-rate-key="${k}" aria-label="${escape(name)} ${k}">`).join('')}<button type="button" data-remove-rate="${i}" aria-label="Удалить интенсивность записи ${escape(name)}">×</button></div>`).join('')}
-    <div class="rate-actions"><button type="button" class="quiet-button" id="add-rate">+ Таблица</button><button type="button" class="text-button" id="clear-rates">Очистить профиль записи</button></div>`;
+    ${rows.map(([name, rate], i) => `<div class="rate-row"><span>${escape(name)}</span>${['inserts_per_hour','updates_per_hour','deletes_per_hour'].map(k => observed ? `<span class="observed-rate">${escape(rate[k] ?? 'Неизвестно')}</span>` : `<input type="number" min="0" step="any" value="${escape(rate[k])}" data-rate="${i}" data-rate-key="${k}" aria-label="${escape(name)} ${k}">`).join('')}${observed ? '<span></span>' : `<button type="button" data-remove-rate="${i}" aria-label="Удалить интенсивность записи ${escape(name)}">×</button>`}</div>`).join('')}
+    ${observed ? '' : '<div class="rate-actions"><button type="button" class="quiet-button" id="add-rate">+ Таблица</button><button type="button" class="text-button" id="clear-rates">Очистить профиль записи</button></div>'}`;
 }
 
 function renderEditor() {
@@ -328,7 +367,7 @@ function renderQueries() {
   $('editor-content').innerHTML = `<div class="editor-toolbar"><div class="query-tabs">${queries.map((q,i) => `<button type="button" class="query-tab ${i===queryIndex ? 'active' : ''}" data-query="${i}" title="${escape(q.id)}" aria-pressed="${i===queryIndex}"><span>Q${String(i+1).padStart(2,'0')}</span> ${escape(q.id.replace(/^(records_|orders_|wide_)/,''))}</button>`).join('')}</div><button type="button" id="add-query" class="quiet-button" ${queries.length>=20?'disabled':''} aria-label="Добавить запрос">+ SQL</button></div>
     <div class="editor-meta"><label for="query-id">ID</label><input id="query-id" value="${escape(q.id)}" required><button type="button" id="delete-query" class="delete-button" ${queries.length<=1?'disabled':''}>Удалить запрос</button></div>
     <div class="code-editor"><div class="line-numbers" aria-hidden="true" id="line-numbers"></div><textarea id="sql-editor" spellcheck="false" aria-label="SQL запроса ${escape(q.id)}" required></textarea></div>
-    <div class="editor-footnote"><span>SELECT · без выполнения запроса · полный SQL передаётся в EXPLAIN</span><span class="dialect">POSTGRESQL</span></div>`;
+    <div class="editor-footnote"><span>SELECT / UPDATE / DELETE · без выполнения · исходный SQL передаётся в EXPLAIN</span><span class="dialect">POSTGRESQL</span></div><p class="field-note">Для UPDATE/DELETE cost оценивает поиск и подготовку строк; фактическая модификация таблицы не включена. Частоты вызовов не заменяют строки/час в профиле записи.</p>`;
   // HTML-парсер удаляет первый перевод строки внутри textarea; значение задаём без разбора HTML.
   $('sql-editor').value = q.sql;
   lineNumbers();
@@ -402,7 +441,7 @@ function renderDiagram() {
 function renderSummary() {
   const w = state.workload, t = templates.find(t=>t.id===state.template_id);
   $('summary-title').textContent = t.name;
-  const items = [['Общих SQL',w.queries.length],['Профилей нагрузки',w.profiles.length],['Бюджет места',format(w.constraints.storage_budget_bytes/1048576)+' MiB'],['Цель',w.objective==='mean'?'Средний результат':'Худший сценарий']];
+  const items = [['Общих SQL',w.queries.length],['Профилей нагрузки',w.profiles.length],['Бюджет места',format(w.constraints.storage_budget_bytes/1048576)+' MiB'],['Цель',w.objective==='mean'?'Средний результат':'Худший сценарий'],['Источник записи',writeSource()==='observed' ? (w.table_write_rates_origin?.complete ? 'Наблюдаемый · полный' : 'Наблюдаемый · требует проверки') : (w.table_write_rates ? 'Ручной' : 'Не задан')],['Лимит записи',w.constraints.write_budget_units_per_hour == null ? 'Выключен' : String(w.constraints.write_budget_units_per_hour)+' ед./ч']];
   $('summary').innerHTML = items.map(([k,v])=>`<div><dt>${escape(k)}</dt><dd>${escape(v)}</dd></div>`).join('');
 }
 
@@ -463,8 +502,8 @@ function requestSnapshot() {
   const invalid = [...$('workspace').querySelectorAll('input,textarea,select')].find(e=>!e.disabled && !e.checkValidity());
   if (invalid) { invalid.reportValidity(); throw new Error('Проверьте выделенное поле.'); }
   const series = seriesRequest();
-  if (series?.budget === 'write_budget_units_per_hour' && !workload.table_write_rates) throw new Error('Для серии записи нужен полный профиль записи.');
-  return {template_id: state.template_id, template_version: state.template_version, workload, ...(series ? {series} : {})};
+  validateWriteProfile(workload, workload.constraints.write_budget_units_per_hour != null || series?.budget === 'write_budget_units_per_hour', writeSource());
+  return {template_id: state.template_id, template_version: state.template_version, workload, ...(writeSource() === 'observed' ? {write_source: 'observed'} : {}), ...(series ? {series} : {})};
 }
 
 function setBusy(value) {
@@ -575,6 +614,7 @@ document.addEventListener('input', e => {
   if (d.frequencyProfile!==undefined) { w.profiles[+d.frequencyProfile].calls_per_hour[w.queries[+d.frequencyQuery].id]=el.valueAsNumber; updateProfiles(); }
   if (d.rate!==undefined) w.table_write_rates[Object.keys(w.table_write_rates)[+d.rate]][d.rateKey]=el.valueAsNumber;
   switch(el.id) {
+    case 'write-source': state.writeSource=el.value; delete w.table_write_rates; delete w.table_write_rates_origin; renderRates(); if(tab==='json') renderJson(); break;
     case 'sql-editor': w.queries[queryIndex].sql=el.value; lineNumbers(); break;
     case 'launch-mode': updateSeriesSettings(); break;
     case 'series-budget': case 'series-values': case 'series-timeout': break;
@@ -592,9 +632,20 @@ document.addEventListener('input', e => {
   changed();
 });
 
-document.addEventListener('change', e => {
+document.addEventListener('change', async e => {
   if (!state || busy) return;
   const el=e.target,w=state.workload;
+  if(el.id==='write-profile-file') {
+    const file = el.files?.[0], targetState = state;
+    if (!file) return;
+    try {
+      if (file.size > 1024*1024) throw new Error('Файл превышает 1 MiB.');
+      const value = JSON.parse(await file.text());
+      if (busy || state !== targetState || writeSource() !== 'observed') return;
+      importWriteProfile(value); renderRates(); if(tab==='json') renderJson(); changed(); error('');
+    } catch(e) { error(e.message); }
+    el.value = '';
+  }
   if(el.id==='query-id') {
     const old=w.queries[queryIndex].id, id=el.value.trim();
     if(!id || w.queries.some((q,i)=>i!==queryIndex&&q.id===id)) { error('ID запроса должен быть непустым и уникальным.'); el.value=old; return; }

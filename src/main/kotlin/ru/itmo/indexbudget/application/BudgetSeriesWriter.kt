@@ -2,6 +2,7 @@ package ru.itmo.indexbudget.application
 
 import ru.itmo.indexbudget.domain.*
 import ru.itmo.indexbudget.report.HtmlBudgetSeriesRenderer
+import ru.itmo.indexbudget.report.WriteProfileReport
 import tools.jackson.databind.DeserializationFeature
 import tools.jackson.databind.json.JsonMapper
 import java.nio.file.Files
@@ -37,11 +38,15 @@ internal class BudgetSeriesWriter(
                 "analysis_mode" to input.analysisMode.name.lowercase(), "candidate_ranking" to input.candidateRanking.wireName,
                 "index_methods" to input.indexMethods.sortedBy { it.ordinal }.map { it.wireName },
                 "constraints" to budgets(input.constraints),
-                "queries" to input.queries.map { mapOf("id" to it.id, "sql" to it.sql) },
+                "queries" to input.queries.map { query ->
+                    val kind = preparationContext?.statementKinds?.get(query.id)
+                    mapOf("id" to query.id, "sql" to query.sql,
+                        "statement_kind" to kind?.name?.lowercase(),
+                        "cost_interpretation" to kind?.let { if (it == StatementKind.SELECT) "planner_cost" else "row_search_and_preparation" })
+                },
                 "profiles" to input.profiles.map { mapOf("id" to it.id, "weight" to it.weight, "calls_per_hour" to it.callsPerHour) },
-                "table_write_rates" to input.tableWriteRates?.mapValues { (_, rates) -> mapOf(
-                    "inserts_per_hour" to rates.insertsPerHour, "updates_per_hour" to rates.updatesPerHour,
-                    "deletes_per_hour" to rates.deletesPerHour, "source" to rates.source.name.lowercase()) }),
+                "table_write_rates" to WriteProfileReport.rates(input),
+                "table_write_rates_origin" to WriteProfileReport.origin(input.tableWriteRatesOrigin)),
             "preparation" to preparationContext?.let { preparedContext -> mapOf(
                 "run_id" to preparedContext.runId, "statistics" to statistics(preparedContext.statistics()),
                 "limits" to limits(preparedContext.limits),

@@ -130,6 +130,43 @@ def valid_frequency(value):
             and (type(value) is int or value.is_integer()))
 
 
+def validate_write_profile(workload, required=False, source=None):
+    """Check shape and source, leaving SQL coverage and all calculations to the CLI."""
+    rates, origin = workload.get("table_write_rates"), workload.get("table_write_rates_origin")
+    fix = "Загрузите полный рассчитанный workload.json или явно выберите ручной источник и заполните строки/час."
+    if source not in (None, "manual", "observed"):
+        raise ValueError("Неизвестный источник записи.")
+    observed = source == "observed" or origin is not None or (isinstance(rates, dict) and
+        any(isinstance(r, dict) and r.get("source") == "observed" for r in rates.values()))
+    if rates is None:
+        if required or observed:
+            raise ValueError(f"Профиль записи не задан. {fix}")
+        return
+    if not isinstance(rates, dict) or not rates:
+        raise ValueError(f"Профиль записи должен содержать строки/час таблиц. {fix}")
+    for rate in rates.values():
+        if not isinstance(rate, dict) or any(not finite(rate.get(k)) for k in
+                ("inserts_per_hour", "updates_per_hour", "deletes_per_hour")):
+            raise ValueError(f"Неизвестная или неверная интенсивность строк. {fix}")
+        if rate.get("source", "manual") != ("observed" if observed else "manual"):
+            raise ValueError("Нельзя смешивать ручные и наблюдаемые rates.")
+    if source == "manual" and observed:
+        raise ValueError("Наблюдаемый профиль не является ручным.")
+    if observed:
+        if not isinstance(origin, dict):
+            raise ValueError(f"Нет происхождения наблюдаемого окна. {fix}")
+        window = origin.get("window")
+        if (origin.get("kind") != "observed" or type(origin.get("complete")) is not bool
+                or not isinstance(origin.get("reasons"), list)
+                or any(not isinstance(r, str) for r in origin["reasons"])
+                or not isinstance(window, dict) or not isinstance(window.get("from"), str)
+                or not window["from"] or not isinstance(window.get("to"), str) or not window["to"]
+                or not finite(window.get("period_seconds")) or window["period_seconds"] <= 0):
+            raise ValueError(f"Неверное происхождение наблюдаемого окна. {fix}")
+        if required and not origin["complete"]:
+            raise ValueError(f"Наблюдение неполное: {', '.join(origin['reasons'])}. {fix}")
+
+
 def validate_request(data, templates):
     """Проверка формы; SQL и полная семантика workload проверяются самим CLI."""
     if (not isinstance(data, dict) or not isinstance(data.get("template_id"), str)
@@ -219,6 +256,11 @@ def validate_request(data, templates):
                 if not isinstance(rate, dict) or any(not finite(rate.get(k)) for k in ("inserts_per_hour", "updates_per_hour", "deletes_per_hour")):
                     raise ValueError("Неполный профиль записи.")
         result["series"] = copy.deepcopy(series)
+    validate_write_profile(w, c.get("write_budget_units_per_hour") is not None
+                           or (series is not None and series["budget"] == "write_budget_units_per_hour"),
+                           data.get("write_source"))
+    if "write_source" in data:
+        result["write_source"] = data["write_source"]
     return result
 
 
