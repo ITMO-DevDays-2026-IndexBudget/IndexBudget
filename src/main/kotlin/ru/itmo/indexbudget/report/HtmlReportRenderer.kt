@@ -151,6 +151,13 @@ class HtmlReportRenderer : ReportRenderer {
         append("<section id=\"overview\" class=\"overview\"><div class=\"title-row\"><h1>Результат анализа</h1>")
         badge(statusLabel(result.status), result.status.name.lowercase(Locale.ROOT))
         append("</div>")
+        if (result.status != RunStatus.COMPLETED) {
+            append("<p class=\"notice warning\">")
+            text(if (result.status == RunStatus.PARTIAL) "Поиск остановлен досрочно. Сохранён лучший полный допустимый результат. " else "Анализ завершился ошибкой. ")
+            text(summary.stopReasons.joinToString { stopLabel(it) })
+            summary.errors.forEach { append("<br>").append(h(it.code.name)).append(": ").append(h(it.message)) }
+            append("</p>")
+        }
         if (report.environment.applicationVersion == "fixture") {
             append("<p class=\"demo muted\">Демонстрационные данные · синтетическая проверка представления.</p>")
         }
@@ -190,13 +197,6 @@ class HtmlReportRenderer : ReportRenderer {
         }
         if (summary.regressedQueryCount != null && summary.regressedQueryCount > 0) {
             append("<p class=\"error\"><a href=\"#queries\">Посмотреть ухудшения запросов</a></p>")
-        }
-        if (result.status == RunStatus.FAILED) {
-            append("<p class=\"notice warning\">")
-            text("Анализ завершился ошибкой. ")
-            text(summary.stopReasons.joinToString { stopLabel(it) })
-            summary.errors.forEach { append("<br>").append(h(it.code.name)).append(": ").append(h(it.message)) }
-            append("</p>")
         }
         workloadContext(report)
         append("</section>")

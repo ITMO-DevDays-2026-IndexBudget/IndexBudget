@@ -122,6 +122,22 @@ class HtmlRecommendationTest {
         assertFalse(html.contains("NaN"))
     }
 
+    @Test
+    fun `partial reason appears beside status before recommendation and effect`() {
+        val partial = ContractFixtures.partialResult()
+        val report = ContractFixtures.report().copy(result = partial.copy(diagnostics = partial.diagnostics.copy(
+            stopReasons = listOf(StopReason.REPAIR_LIMIT),
+            errors = listOf(AnalysisError(ErrorCode.REPAIR_LIMIT, "Repair attempt limit reached.")),
+        )))
+        val overview = section(renderer.render(report), "overview")
+        val reason = overview.indexOf("REPAIR_LIMIT")
+        assertTrue(reason >= 0)
+        assertTrue(reason < overview.indexOf("<h2>Предлагаемые индексы</h2>"))
+        assertTrue(reason < overview.indexOf("class=\"effect-sentence\""))
+        assertEquals(1, Regex("REPAIR_LIMIT").findAll(overview).count())
+        assertTrue(overview.contains("Сохранён лучший полный допустимый результат"))
+    }
+
     private fun section(html: String, id: String): String =
         html.substringAfter("<section id=\"$id\"").substringBefore("</section>")
 }
