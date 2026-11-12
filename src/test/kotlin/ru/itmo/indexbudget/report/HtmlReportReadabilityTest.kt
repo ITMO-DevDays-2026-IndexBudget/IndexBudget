@@ -58,7 +58,9 @@ class HtmlReportReadabilityTest {
         val visibleOverview = overview.substringBefore("<details")
         for (candidate in report.candidates.candidates) {
             val table = candidate.definition.table
-            assertTrue(overview.contains("${table.schema}.${table.name} · btree (value)"))
+            val row = overview.substringAfter("<th scope=\"row\"><code>${table.schema}.${table.name}</code></th>", "")
+                .substringBefore("</tr>")
+            assertTrue(row.contains("<code>btree (value)</code>"))
             assertFalse(visibleOverview.contains(candidate.id))
             assertTrue(html.contains(candidate.id))
         }

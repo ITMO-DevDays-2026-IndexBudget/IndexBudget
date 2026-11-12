@@ -783,13 +783,9 @@ footer {
 .recommended-indexes {
   list-style:none;
   padding:0;
-  display:flex;
-  flex-wrap:wrap;
-  gap:8px 20px;
-  margin:8px 0 12px;
-}
-.recommended-indexes code {
-  font-size:18px;
+  display:grid;
+  gap:8px;
+  margin:0;
 }
 .summary-facts {
   display:flex;
@@ -857,7 +853,7 @@ footer {
   font-size:13px;
   color:var(--muted);
 }
-.query-controls {
+.query-legend,.query-controls {
   font-size:13px;
   margin:12px 0;
 }

@@ -306,12 +306,13 @@ internal object ImportedHtmlAssertions {
         val provenance = requireNotNull(report.workloadProvenance)
         val summary = report.summary
         val overview = section(html, "overview")
-        val recommendation = overview.substringAfter("class=\"recommended-indexes\"").substringBefore("</ul>")
+        val recommendation = overview.substringBefore("class=\"effect-sentence\"")
         assertEquals(summary.selectedIndexIds?.size, Regex("<li>").findAll(recommendation).count())
         val displayedGain = Regex("Снижение на ([^%]+)%").find(overview)?.groupValues?.get(1)
         assertEquals(requireNotNull(summary.meanEffect.gainPercent), number(requireNotNull(displayedGain)), 0.05,
             "The main effect may round to one decimal; exact values stay in details")
-        assertTrue(overview.contains("<dt>Регрессии SQL</dt><dd>${summary.regressedQueryCount} из ${input.queries.size}</dd>"))
+        assertTrue(overview.contains(if (summary.regressedQueryCount == 0) "Регрессий SQL не обнаружено"
+            else "<dt>Регрессии SQL</dt><dd>${summary.regressedQueryCount} из ${input.queries.size}</dd>"))
         assertTrue(overview.contains("pg_stat_statements"))
         assertFalse(overview.contains("Полностью оценённые наборы"))
 

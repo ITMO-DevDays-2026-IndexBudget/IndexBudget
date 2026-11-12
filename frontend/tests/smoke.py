@@ -118,6 +118,17 @@ def main():
         template = next(t for t in templates if t['id'] == request['template_id'])
         assert config['template_id'] == template['id'] and config['template_version'] == template['version']
         assert config['schema_sql'] == template['schema_sql'] and config['seed_sql'] == template['seed_sql']
+        if template['id'] == '02-shop':
+            methods = {c['definition']['method'] for c in report['selected_indexes']}
+            assert {'btree', 'brin'} <= methods, report['selected_indexes']
+            assert any(c['definition']['method'] == 'brin'
+                       and c['definition']['table']['name'] == 'orders'
+                       and c['definition']['keys'][0]['column']['name'] == 'created_at'
+                       for c in report['selected_indexes']), report['selected_indexes']
+            assert report['selected']['cost_by_query_id']['orders_by_period'] < report['baseline']['cost_by_query_id']['orders_by_period']
+            assert report['selected']['metrics']['budget_usage']['budgeted_bytes'] <= actual['constraints']['storage_budget_bytes']
+            ddl = get(prefix + '/indexes.sql')
+            assert b'USING brin' in ddl and b'USING btree' in ddl
         if template['id'] == '04-events-brin':
             assert {c['definition']['method'] for c in report['selected_indexes']} == {'brin'}, report['selected_indexes']
             assert report['selected']['cost_by_query_id']['events_window'] < report['baseline']['cost_by_query_id']['events_window']

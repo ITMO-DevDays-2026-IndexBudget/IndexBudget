@@ -36,7 +36,7 @@ class HtmlBudgetSeriesRenderer {
             <div class="layout series-layout"><aside class="series-sidebar"><nav aria-label="Разделы отчёта">
             <a href="#overview">Вывод</a><a href="#points">Сравнение бюджетов</a>""")
         if (reports != null) append("<a href=\"#series-queries\">Влияние на запросы</a><a href=\"#series-resources\">Ресурсы и индексы</a><a href=\"#series-workload\">Исходная нагрузка</a>")
-        else append("<a href=\"#series-query-catalog\">SQL и планы</a><a href=\"#series-index-catalog\">Индексы и DDL</a>")
+        else append("<a href=\"#series-query-catalog\">Подробности по запросам</a><a href=\"#series-index-catalog\">Индексы и DDL</a>")
         append("<a href=\"#conditions\">Методика и ограничения</a><a href=\"#next\">Следующие шаги</a></nav></aside><main id=\"main\">")
         append("<section id=\"overview\" class=\"overview\"><h1>Индексы при разных бюджетах ").append(if (storage) "места" else "записи").append("</h1>")
         append(if (storage) "<p class=\"budget-definition\">Бюджет места — лимит размера дополнительных индексов с запасом.</p>"
@@ -53,7 +53,6 @@ class HtmlBudgetSeriesRenderer {
         }
         for (point in points) overviewResult(summary, point, candidates, saved[point.path("ordinal").intValue()], storage)
         if (points.isEmpty()) append("<p>Результаты вариантов ещё не сохранены.</p>")
-        append("<p class=\"cost-definition\"><strong>Planner cost</strong> — оценка затрат PostgreSQL, не время выполнения. Снижение cost не гарантирует ускорения.</p>")
         if (summary.path("settings").path("queries").any { it.path("statement_kind").isString && it.path("statement_kind").stringValue() in setOf("update", "delete") }
             || saved.values.any { report -> report.statementKinds.values.any { it != StatementKind.SELECT } }) {
             notice("В нагрузке есть UPDATE/DELETE: cost оценивает поиск и подготовку строк. Фактическая модификация таблицы не включена; это не прогноз полного ускорения DML.")
@@ -154,18 +153,30 @@ class HtmlBudgetSeriesRenderer {
         when {
             !usable(point) -> append("<p>Пригодная рекомендация не сохранена.</p>")
             ids(point).isEmpty() -> append("<p>Выбран пустой набор: оставь существующие индексы.</p>")
-            else -> append("<p class=\"recommendation\">").append(ids(point).joinToString(" + ") { id -> "<a href=\"#series-index-catalog\"><code>${h(shortDefinition(candidates[id], candidates.values, "Определение неизвестно"))}</code></a>" }).append("</p>")
+            else -> {
+                val groups = ids(point).groupBy { id ->
+                    candidates[id]?.let { it.path("schema").stringValue() to it.path("table").stringValue() }
+                }
+                append("<div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Предлагаемые индексы\"><table class=\"recommended-table\"><thead><tr><th scope=\"col\">Таблица</th><th scope=\"col\">Индекс</th></tr></thead><tbody>")
+                for ((table, indexes) in groups.entries.sortedWith(compareBy({ it.key?.second }, { it.key?.first }))) {
+                    val ambiguous = table != null && groups.keys.any { it?.second == table.second && it.first != table.first }
+                    val label = table?.let { if (ambiguous) "${it.first}.${it.second}" else it.second } ?: "Таблица неизвестна"
+                    append("<tr><th scope=\"row\"><code>").append(h(label)).append("</code></th><td><ul class=\"recommended-indexes\">")
+                    for (id in indexes) append("<li><a href=\"#series-index-catalog\"><code>")
+                        .append(h(shortIndexDefinition(candidates[id], "Определение неизвестно"))).append("</code></a></li>")
+                    append("</ul></td></tr>")
+                }
+                append("</tbody></table></div>")
+            }
         }
         append("<p class=\"effect-sentence\">Оценочная стоимость запросов с учётом частот: ")
         val profiles = if (usable(point)) point.path("metrics").path("profiles").toList() else emptyList()
         if (profiles.isEmpty()) append("Эффект не определён")
         else append(profiles.joinToString("; ") { profile -> (if (profiles.size > 1) h(profile.path("profile_id").stringValue()) + " — " else "") + h(effectLabel(profile)) })
         append(" по сравнению с существующими индексами.</p><p class=\"muted\">").append(h(statusLabel(point.path("status").stringValue())))
-        append(". Рост стоимости: ").append(h(report?.summary?.regressedQueryCount?.let { "$it из ${report.input?.queries?.size ?: report.result.baseline?.costByQueryId?.size ?: "нет данных"} SQL" } ?: "нет данных")).append(".</p>")
-        if (point.path("status").stringValue() == "partial") append("<p class=\"warning-text\">Поиск остановлен досрочно; сохранён промежуточный результат.</p>")
+        if (report?.summary?.regressedQueryCount == 0) append(". Регрессий SQL не обнаружено.</p>")
+        else append(". Рост стоимости: ").append(h(report?.summary?.regressedQueryCount?.let { "$it из ${report.input?.queries?.size ?: report.result.baseline?.costByQueryId?.size ?: "нет данных"} SQL" } ?: "нет данных")).append(".</p>")
         append("<div class=\"workload-context\"><strong>Основа вывода</strong><p>")
-        val count = report?.input?.queries?.size ?: summary.path("settings").path("queries").takeIf { it.isArray }?.size()
-        append(count ?: "Нет данных").append(" SQL · профилей частот: ").append(summary.path("settings").path("profiles").size()).append(". ")
         val provenance = report?.workloadProvenance
         if (provenance == null) {
             append(when (summary.path("source").path("workload_source").stringValue()) {
@@ -296,11 +307,15 @@ class HtmlBudgetSeriesRenderer {
         val schema = candidate.path("schema").stringValue()
         val ambiguous = candidates.any { it.path("table").stringValue() == name && it.path("schema").stringValue() != schema }
         val label = if (ambiguous) "$schema.$name" else name
+        return label + " · " + shortIndexDefinition(candidate, fallback)
+    }
+    private fun shortIndexDefinition(candidate: JsonNode?, fallback: String): String {
+        if (candidate == null) return fallback
         val keys = candidate.path("keys").joinToString(", ") { it.path("column").stringValue() }
         val include = candidate.path("included_columns").takeIf { it.isArray && !it.isEmpty }
             ?.joinToString(", ", " INCLUDE (", ")") { it.stringValue() }.orEmpty()
         val method = candidate.path("method").takeIf { it.isString }?.stringValue() ?: "btree"
-        return label + " · $method " + "($keys)$include"
+        return "$method ($keys)$include"
     }
     private fun StringBuilder.entry(label: String, value: String) {
         append("<div><dt>").append(h(label)).append("</dt><dd>").append(h(value)).append("</dd></div>")
