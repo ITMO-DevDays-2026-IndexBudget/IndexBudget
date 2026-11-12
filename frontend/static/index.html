@@ -12,16 +12,15 @@
   <a href="#workspace" class="skip">Перейти к настройке</a>
   <header class="topbar">
     <a class="brand" href="/" aria-label="IndexBudget — главная"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>Index<span>Budget</span><span class="lab">LAB</span></a>
-    <div class="header-right"><a href="/reports/">Отчёты <span aria-hidden="true">↗</span></a><span class="local-badge"><i></i> Локальная среда</span></div>
+    <div class="header-right"><button type="button" id="start-tour" class="help-trigger" aria-label="Как это работает" title="Как это работает" disabled>?</button><a href="/reports/">Отчёты <span aria-hidden="true">↗</span></a><span class="local-badge"><i></i> Локальная среда</span></div>
   </header>
   <main>
-    <div class="intro"><div><div class="eyebrow">POSTGRESQL · ПОДБОР ИНДЕКСОВ</div><h1>Подбери индексы<br><span>под свою нагрузку.</span></h1><p>Укажи запросы, частоты и бюджеты.<br class="desktop"> Сравни варианты и посмотри, как изменятся планы PostgreSQL.</p></div><div class="flow" aria-label="Порядок работы"><span class="current"><b>01</b> Выбери базу</span><span><b>02</b> Настрой нагрузку</span><span><b>03</b> Изучи отчёт</span></div></div>
-    <button type="button" id="start-tour" class="tour-launch" disabled><span aria-hidden="true">?</span> Как это работает</button>
-    <div id="connection" class="connection" role="status">Проверяем локальное окружение…</div>
+    <h1 class="sr-only">Настройка анализа индексов</h1>
+    <div id="connection" class="connection" role="status" hidden>Проверяем локальное окружение…</div>
     <div id="error" class="error" role="alert" hidden></div>
     <fieldset id="workspace" class="workspace" disabled>
       <legend class="sr-only">Настройки анализа</legend>
-      <div class="section-heading"><h2><span class="step">01</span> Демо-база</h2><span class="hint">Готовые схемы и данные в PostgreSQL</span></div>
+      <div class="section-heading"><h2><span class="step">01</span> Демо-база</h2></div>
       <div id="templates" class="template-grid"></div>
       <div class="section-heading configuration-heading"><h2><span class="step">02</span> Настройки анализа</h2><button type="button" id="reset" class="text-button">↺ Сбросить к шаблону</button></div>
       <div class="workspace-grid">
@@ -31,8 +30,7 @@
             <div id="editor-content" role="tabpanel" aria-labelledby="tab-queries"></div>
           </section>
           <section class="panel budget-panel">
-            <div class="panel-heading"><h3>В пределах бюджета</h3><span class="hint">Только для новых индексов</span></div>
-            <p class="field-note">Демо сравнивает B-tree, BRIN и hash в пределах бюджета. Список методов можно посмотреть во вкладке JSON.</p>
+            <div class="panel-heading"><h3>Бюджет</h3></div>
             <label for="launch-mode">Тип запуска</label><select id="launch-mode"><option value="single">Одиночный анализ</option><option value="series">Серия бюджетов</option></select>
             <div id="series-settings" hidden><label for="series-budget">Меняемый бюджет</label><select id="series-budget" disabled><option value="storage_budget_bytes">Место · байты</option><option value="write_budget_units_per_hour">Запись · ед./ч</option></select><label for="series-values">3–5 различных значений через запятую</label><input id="series-values" value="0, 16777216, 67108864" disabled><label for="series-timeout">Общий предел серии, секунд</label><input id="series-timeout" type="number" min="1" max="86400" value="600" disabled><p class="field-note">SQL, частоты и исходный пул индексов одинаковы для всех бюджетов. Результаты собраны в одном отчёте.</p></div>
             <div class="budget-grid">
@@ -40,7 +38,7 @@
               <div><label for="max-indexes">Новых индексов <span>макс.</span></label><div class="stepper"><button type="button" data-step="-1" aria-label="Уменьшить число индексов">−</button><input id="max-indexes" type="number" min="0" max="5" step="1" required><button type="button" data-step="1" aria-label="Увеличить число индексов">+</button></div><p class="field-note">От 0 до 5 в выбранном наборе</p></div>
               <div><label class="toggle-label" for="write-enabled">Бюджет записи <input id="write-enabled" type="checkbox" role="switch"></label><div class="input-suffix"><input id="write-budget" type="number" min="0" step="any" aria-label="Бюджет записи"><span>ед./ч</span></div><p class="field-note">Условные затраты на обслуживание новых индексов</p></div>
             </div>
-            <div class="strategy-grid"><div><label for="objective">Что оптимизируем</label><select id="objective"><option value="robust">Худший сценарий · robust</option><option value="mean">Средний результат · mean</option></select><p id="objective-note" class="field-note"></p></div><div><label for="mode">Глубина анализа</label><select id="mode"><option value="fast">Быстрый · бюджет 30 с</option><option value="normal">Обычный · бюджет 90 с</option><option value="deep">Глубокий · бюджет 300 с</option></select><p class="field-note">Лимит работы CLI. Подготовка базы и сохранение файлов могут увеличить время запуска.</p></div></div>
+            <div class="strategy-grid"><div><label for="objective">Что оптимизируем</label><select id="objective"><option value="robust">Худший сценарий · robust</option><option value="mean">Средний результат · mean</option></select></div><div><label for="mode">Глубина анализа</label><select id="mode"><option value="fast">Быстрый · бюджет 30 с</option><option value="normal">Обычный · бюджет 90 с</option><option value="deep">Глубокий · бюджет 300 с</option></select></div></div>
             <details class="advanced"><summary>Дополнительные параметры <span>Рейтинг, запись, ограничения, ручные индексы</span></summary><div class="advanced-content"><label for="ranking">Рейтинг кандидатов</label><select id="ranking"><option value="frequency">Частоты запросов · frequency</option><option value="baseline_cost">Частоты × baseline cost · экспериментальный</option></select><div class="subheading"><h4>Интенсивность записи</h4><span class="hint">Строк в час</span></div><label for="write-source">Источник интенсивности записи</label><select id="write-source"><option value="manual">Ручной профиль</option><option value="observed">Из статистики БД · observed</option></select><p class="field-note">Это число изменённых строк в час, а не число вызовов SQL. При смене источника текущие значения очищаются.</p><div id="observed-upload" hidden><label for="write-profile-file">Рассчитанный workload.json</label><input id="write-profile-file" type="file" accept=".json,application/json"><p class="field-note">Загрузи workload.json из import-workload с table_write_window. Из него возьмём профиль записи и сведения об окне наблюдения. SQL и частоты в форме сохранятся. Эти rates описывают прошлую нагрузку источника и применяются к выбранному демо-датасету.</p></div><div id="write-origin" aria-live="polite"></div><div id="write-rates"></div><label for="guards">Пределы ухудшения запросов · JSON</label><textarea id="guards" class="code small-code" spellcheck="false" placeholder='{"query_id": 1.1}'></textarea><p class="field-note">1.0 запрещает рост planner cost; 1.1 допускает рост до 10%. Это ограничение оценки, не времени. Оставь поле пустым, чтобы отключить проверку.</p><label for="manual">Ручной набор индексов для сравнения · JSON</label><textarea id="manual" class="code small-code" spellcheck="false" placeholder='[{"schema":"public","table":"records","keys":[{"column":"group_id"}]}]'></textarea><p class="field-note">Оценим весь ручной набор отдельно. Автоматическая рекомендация сохранится. Пустое поле отключает сравнение.</p></div></details>
           </section>
         </div>
@@ -53,7 +51,7 @@
     </fieldset>
     <section class="launch-bar" aria-label="Запуск анализа"><div><span class="launch-dot" id="launch-dot"></span><div><strong id="run-title">Готово к анализу</strong><p id="run-description">Выбери запросы и бюджеты, затем запусти анализ.</p></div></div><button type="button" id="analyze" class="primary" disabled>Запустить анализ <span aria-hidden="true">↗</span></button></section>
     <div id="run-progress" class="run-progress" role="status" aria-live="polite" hidden></div>
-    <footer><span>IndexBudget <span class="footer-divider">/</span> Лаборатория индексов</span><span>SQL, бюджеты и сравнение планов PostgreSQL.</span></footer>
+    <footer><span>IndexBudget</span></footer>
   </main>
 </body>
 </html>
