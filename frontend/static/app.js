@@ -95,7 +95,7 @@ function installTour() {
     {target:'.editor-panel', tab:'queries', title:'Опишите запросы', text:'Здесь редактируются общие SQL: можно добавить запрос или удалить лишний. Вкладка JSON показывает точный вход анализа и позволяет его скачать.'},
     {target:'.editor-panel', tab:'profiles', title:'Задайте сценарии нагрузки', text:'Частоты — модель вызовов SQL за час, от 0 до 1 000 000 целыми числами. Указанное число запросов не выполняется. Веса задают долю сценариев.'},
     {target:'.schema-panel', title:'Посмотрите на связи', text:'На карте — таблицы, колонки, внешние ключи и существующие индексы. Схема и данные фиксированы выбранным шаблоном. Подпись сообщает, проверена ли схема в PostgreSQL.'},
-    {target:'.budget-grid', title:'Ограничьте новые индексы', text:'Укажите доступное место, максимальное число индексов и, при необходимости, бюджет записи. Существующие индексы уже входят в исходный план.'},
+    {target:'.budget-panel', title:'Один запуск или серия бюджетов', text:'Выберите одиночный анализ или 3–5 значений одного бюджета. Серия сохраняет workload и общий подготовленный пул; единый отчёт покажет подробности вариантов. Для места в серии задавайте байты, для записи — ед./ч.'},
     {target:'.strategy-grid', title:'Выберите цель и глубину', text:'Robust учитывает худший сценарий, mean — средний с учётом весов. Глубина задаёт ресурсы поиска; больше времени не гарантирует лучший результат.'},
     {target:'.advanced', advanced:true, title:'Тонкая настройка — по желанию', text:'Здесь доступны интенсивность записи, рейтинг кандидатов, ограничения ухудшения запросов и ручные индексы для сравнения. Для первого запуска достаточно значений шаблона.'},
     {target:'.launch-bar', title:'Запустите эксперимент', text:'После подготовки базы начнётся реальный анализ. Готовый отчёт откроется автоматически; частичный результат тоже сохранится с объяснением причин остановки.'}
@@ -220,7 +220,7 @@ function persist() {
   try {
     localStorage.setItem(draftKey, JSON.stringify({state: {
       template_id: state.template_id, template_version: state.template_version, workload: state.workload
-    }, guardsText, manualText}));
+    }, guardsText, manualText, seriesUI: seriesSettings()}));
     $('saved').textContent = 'Черновик сохранён в этом браузере';
   } catch {
     $('saved').textContent = 'Браузер не позволяет сохранить черновик';
@@ -430,13 +430,41 @@ function validateWorkload(workload) {
   if (ids.some(id => !profiles.some(p => p.calls_per_hour[id] > 0))) throw new Error('Каждый запрос должен использоваться хотя бы в одном профиле.');
 }
 
+function seriesSettings() {
+  return Object.fromEntries(['launch-mode','series-budget','series-values','series-timeout'].map(id => [id, $(id).value]));
+}
+function updateSeriesSettings() {
+  const enabled = $('launch-mode').value === 'series';
+  $('series-settings').hidden = !enabled;
+  for (const id of ['series-budget','series-values','series-timeout']) $(id).disabled = !enabled;
+}
+function seriesRequest() {
+  if ($('launch-mode').value !== 'series') return null;
+  const parts = $('series-values').value.split(',').map(v => v.trim());
+  const values = parts.map(v => {
+    if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(v)) return NaN;
+    const value = Number(v);
+    const nonzero = /[1-9]/.test(v.split(/e/i)[0]);
+    if ((value === 0 && nonzero) || (v.startsWith('-') && nonzero)) return NaN;
+    return value;
+  });
+  if (values.length < 3 || values.length > 5 || values.some(v => !Number.isFinite(v) || v < 0) || new Set(values).size !== values.length) throw new Error('Задайте 3–5 различных неотрицательных бюджетов.');
+  const budget = $('series-budget').value;
+  if (budget === 'storage_budget_bytes' && values.some(v => !Number.isSafeInteger(v))) throw new Error('Для места задайте точные целые байты.');
+  const timeout = Number($('series-timeout').value);
+  if (!Number.isInteger(timeout) || timeout < 1 || timeout > 86400) throw new Error('Предел серии: 1–86400 секунд.');
+  return {schema_version: 1, budget, values, timeout_seconds: timeout};
+}
+
 function requestSnapshot() {
   // Проверяем всю матрицу и SQL, даже если их вкладка сейчас не открыта.
   const workload = materialize();
   validateWorkload(workload);
   const invalid = [...$('workspace').querySelectorAll('input,textarea,select')].find(e=>!e.disabled && !e.checkValidity());
   if (invalid) { invalid.reportValidity(); throw new Error('Проверьте выделенное поле.'); }
-  return {template_id: state.template_id, template_version: state.template_version, workload};
+  const series = seriesRequest();
+  if (series?.budget === 'write_budget_units_per_hour' && !workload.table_write_rates) throw new Error('Для серии записи нужен полный профиль записи.');
+  return {template_id: state.template_id, template_version: state.template_version, workload, ...(series ? {series} : {})};
 }
 
 function setBusy(value) {
@@ -466,7 +494,7 @@ function showProgress(job) {
   const labels = {queued:'В очереди',preparing:'Подготовка базы',analyzing:'Анализ нагрузки',publishing:'Публикация отчёта',completed:'Готово',partial:'Получен частичный результат',failed:'Запуск остановлен'};
   const details = {queued:`Позиция в очереди: ${job.queue_position || 1}. База используется одним запуском за раз.`,preparing:'Создаём схему, загружаем данные и собираем статистику.',analyzing:'CLI оценивает наборы гипотетических индексов через EXPLAIN.',publishing:'Сохраняем HTML, JSON и SQL в отдельный каталог.',completed:job.kind==='schema'?'Диаграмма обновлена из каталога PostgreSQL.':'Открываем готовый отчёт.',partial:'Открываем отчёт с причинами остановки.',failed:'Введённые настройки сохранены. Исправьте ошибку и повторите запуск.'};
   $('run-title').textContent = labels[job.status];
-  $('run-description').textContent = details[job.status];
+  $('run-description').textContent = details[job.status] + (job.points ? ' ' + job.points.map(p => `Вариант ${p.ordinal}: ${p.budget_value} · ${p.status}`).join('; ') : '');
   $('run-progress').hidden = false;
   $('run-progress').textContent = `${labels[job.status]} · ${job.run_id}${job.started_at ? ' · '+ Math.max(0, Math.floor(Date.now()/1000-job.started_at))+' с' : ''}`;
 }
@@ -548,6 +576,8 @@ document.addEventListener('input', e => {
   if (d.rate!==undefined) w.table_write_rates[Object.keys(w.table_write_rates)[+d.rate]][d.rateKey]=el.valueAsNumber;
   switch(el.id) {
     case 'sql-editor': w.queries[queryIndex].sql=el.value; lineNumbers(); break;
+    case 'launch-mode': updateSeriesSettings(); break;
+    case 'series-budget': case 'series-values': case 'series-timeout': break;
     case 'storage': w.constraints.storage_budget_bytes=Math.round(el.valueAsNumber*1048576); $('storage-range').value=Math.min(256,el.valueAsNumber); break;
     case 'storage-range': w.constraints.storage_budget_bytes=el.valueAsNumber*1048576; $('storage').value=el.value; break;
     case 'max-indexes': w.constraints.max_indexes=el.valueAsNumber; break;
@@ -597,6 +627,8 @@ async function init() {
     templates=await api('/api/templates');
     let draft;
     try { draft=JSON.parse(localStorage.getItem(draftKey)); } catch {}
+    if (draft?.seriesUI) for (const id of ['launch-mode','series-budget','series-values','series-timeout']) if (typeof draft.seriesUI[id] === 'string') $(id).value = draft.seriesUI[id];
+    updateSeriesSettings();
     const restored = restoreDraft(draft, templates);
     if (restored) {
       ({state, guardsText, manualText} = restored); renderAll(); persist();
