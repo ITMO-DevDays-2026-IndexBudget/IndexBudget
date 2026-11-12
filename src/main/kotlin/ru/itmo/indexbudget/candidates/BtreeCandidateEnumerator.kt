@@ -31,11 +31,14 @@ class BtreeCandidateEnumerator : CandidateEnumerator {
                 val contexts = contextsByQuery.getValue(query.id)
                 val brin = if (IndexMethod.BRIN in workload.input.indexMethods)
                     brinVariants(query, table, shortlist.retainedColumns, contexts, context) else emptyList()
+                val hash = if (IndexMethod.HASH in workload.input.indexMethods)
+                    hashVariants(query, table, shortlist.retainedColumns, contexts, context) else emptyList()
+                val additional = brin + hash
                 val ordinary = if (IndexMethod.BTREE in workload.input.indexMethods)
-                    variants(query, table, shortlist.retainedColumns, features, contexts, context, 976 - brin.size)
+                    variants(query, table, shortlist.retainedColumns, features, contexts, context, 976 - additional.size)
                     else BoundedVariants(emptyList(), 0)
                 val variants = ordinary.variants
-                val covering = coveringVariants(query, table, variants, context, brin.size)
+                val covering = coveringVariants(query, table, variants, context, additional.size)
                 val methodDecisions = if (ordinary.omitted == 0) emptyList() else listOf(CandidateDecision(
                     CandidateReason.METHOD_VARIANT_LIMIT, queryId = query.id, table = table, phase = AnalysisPhase.CANDIDATES,
                     details = mapOf("omitted_btree_variants" to ordinary.omitted.toString(), "limit" to "976")))
@@ -49,7 +52,7 @@ class BtreeCandidateEnumerator : CandidateEnumerator {
                     discoveredColumns = features.size,
                     retainedColumns = shortlist.retainedColumns,
                     excludedColumns = shortlist.excludedColumns,
-                    variants = variants + brin + covering.variants,
+                    variants = variants + additional + covering.variants,
                     decisions = shortlist.decisions + methodDecisions + covering.decisions,
                     warnings = shortlist.warnings + covering.warnings + methodWarnings + if (tableIndex == 0) contexts.warnings() else emptyList(),
                 ))
@@ -232,6 +235,21 @@ class BtreeCandidateEnumerator : CandidateEnumerator {
         }
         if (leaves.isEmpty) null else CandidateVariant(IndexDefinition(table, listOf(IndexKey(column)), method = "brin"),
             setOf(query.id), setOf(GenerationReason.BRIN_RANGE), contexts.branches(leaves, false))
+    }
+
+    private fun hashVariants(query: ResolvedQuery, table: TableRef, retained: List<ColumnRef>,
+        contexts: PredicateContexts, context: RunContext): List<CandidateVariant> = retained.sortedWith(columnOrder).mapNotNull { column ->
+        context.checkDeadline()
+        val leaves = BitSet()
+        query.predicates.forEachIndexed { index, predicate ->
+            context.checkDeadline()
+            if (predicate.leftColumn == column && predicate.rightColumn == null &&
+                predicate.source == PredicateSource.WHERE && predicate.operator == ComparisonOperator.EQUAL) {
+                leaves.set(index)
+            }
+        }
+        if (leaves.isEmpty) null else CandidateVariant(IndexDefinition(table, listOf(IndexKey(column)), method = "hash"),
+            setOf(query.id), setOf(GenerationReason.HASH_EQUALITY), contexts.branches(leaves, false))
     }
 
     private data class CoveringVariants(

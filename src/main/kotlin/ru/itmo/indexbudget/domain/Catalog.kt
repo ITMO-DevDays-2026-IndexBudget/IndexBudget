@@ -99,7 +99,7 @@ data class IndexKey(
     val operatorClass: String? = null,
 )
 
-/** B-tree: 1–2 keys with optional payload; BRIN: one key, defaults, no payload. */
+/** B-tree: 1–2 keys with optional payload; BRIN/hash: one key, defaults, no payload. */
 data class IndexDefinition(
     val table: TableRef,
     val keys: List<IndexKey>,

@@ -21,8 +21,10 @@ class IndexMethodsReaderTest {
     fun `old inputs retain B-tree and methods must be explicitly valid`() {
         assertEquals(setOf(IndexMethod.BTREE), read().indexMethods)
         assertEquals(setOf(IndexMethod.BRIN), read(",\"index_methods\":[\"brin\"]").indexMethods)
-        assertEquals(IndexMethod.entries.toSet(), read(",\"index_methods\":[\"brin\",\"btree\"]").indexMethods)
-        for (value in listOf("null", "[]", "{}", "42", "[\"hash\"]", "[\"BRIN\"]", "[\"brin\",\"brin\"]")) {
+        assertEquals(setOf(IndexMethod.BTREE, IndexMethod.BRIN), read(",\"index_methods\":[\"brin\",\"btree\"]").indexMethods)
+        assertEquals(setOf(IndexMethod.HASH), read(",\"index_methods\":[\"hash\"]").indexMethods)
+        assertEquals(IndexMethod.entries.toSet(), read(",\"index_methods\":[\"hash\",\"brin\",\"btree\"]").indexMethods)
+        for (value in listOf("null", "[]", "{}", "42", "[\"gin\"]", "[\"BRIN\"]", "[\"brin\",\"brin\"]", "[\"hash\",\"hash\"]")) {
             assertThrows(AnalysisException::class.java, { read(",\"index_methods\":$value") }, value)
         }
     }
@@ -35,9 +37,11 @@ class IndexMethodsReaderTest {
         for (invalid in listOf(manual.replace("\"column\":\"a\"", "\"column\":\"a\",\"direction\":\"asc\""),
             manual.replace("\"column\":\"a\"", "\"column\":\"a\",\"nulls\":\"last\""),
             manual.replace("\"keys\":", "\"include\":[\"b\"],\"keys\":"),
-            manual.replace("[{\"column\":\"a\"}]", "[{\"column\":\"a\"},{\"column\":\"b\"}]"),
-            manual.replace("\"brin\"", "\"hash\""))) {
-            assertThrows(AnalysisException::class.java) { read(invalid) }
+            manual.replace("[{\"column\":\"a\"}]", "[{\"column\":\"a\"},{\"column\":\"b\"}]"))) {
+            for (method in listOf("brin", "hash")) {
+                assertThrows(AnalysisException::class.java) { read(invalid.replace("\"brin\"", "\"$method\"")) }
+            }
         }
+        assertEquals("hash", read(manual.replace("\"brin\"", "\"hash\"")).manualIndexes!!.single().method)
     }
 }

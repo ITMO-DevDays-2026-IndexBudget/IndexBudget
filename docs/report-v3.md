@@ -26,7 +26,7 @@ HTML поясняет, что ModifyTable cost не включает факти�
 
 | Поле | Тип и смысл |
 | --- | --- |
-| `schema_version`, `spec_version` | `3` для B-tree-only, `4` при разрешённом или ручном BRIN; spec `"0.2"` |
+| `schema_version`, `spec_version` | `3` для B-tree-only, `4` при разрешённом или ручном BRIN/hash; spec `"0.2"` |
 | `run_id` | ID одного запуска, общий для JSON/HTML/SQL |
 | `input_hash` | SHA-256 исходного валидированного JSON; `null`, если hash не был получен при failed |
 | `duration_millis` | Длительность до сборки модели; время записи файлов сюда не входит |
@@ -34,7 +34,7 @@ HTML поясняет, что ModifyTable cost не включает факти�
 | `status` | `completed`, `partial` или `failed` |
 | `analysis_mode` | Эффективный режим `fast`, `normal` или `deep`, с учётом приоритета CLI над JSON; доступен и для failed |
 | `candidate_ranking` | Эффективный рейтинг `frequency` или экспериментальный `baseline_cost` с учётом CLI; сохраняется при completed/partial/failed и раннем завершении до shortlist |
-| `index_methods` | Эффективные автоматические методы: непустой массив `btree`/`brin` в стабильном порядке; старый отчёт без поля означает только B-tree |
+| `index_methods` | Эффективные автоматические методы: непустой массив `btree`/`brin`/`hash` в стабильном порядке; старый отчёт без поля означает только B-tree |
 | `write_proxy_note` | Разъяснение: одинаковое число колонок разных методов не доказывает равную реальную цену записи |
 | `selected_objective` | `robust` или `mean`, критерий, управлявший поиском |
 | `comparison_scope` | Всегда `evaluated_sets`: оба incumbents из одного исследованного пула |
@@ -439,7 +439,7 @@ run ID и `input_hash: null`, исходные идентификаторы и S
 
 ## BRIN и несовместимость readers (#114)
 
-Report v4 имеет структуру v3, но допускает `definition.method: "brin"` и
+Report v4 имеет структуру v3, но допускает `definition.method: "brin"` / `"hash"` и
 `direction: null`, `nulls: null` у его ключа: сортировка неприменима. Поле `method`
 обязательно также в `manual_requested_indexes`. BRIN — одна колонка, стандартные
 параметры, default opclass метода, без INCLUDE. Readers, умеющие только v3,
@@ -448,3 +448,9 @@ Report v4 имеет структуру v3, но допускает `definition.
 которая пытается записать BRIN под schema_version 3. B-tree-only остаётся v3.
 Диагностика добавляет `BRIN_RANGE`, `NO_BRIN_OPERATOR_CLASS` и
 `METHOD_VARIANT_LIMIT`. [Подробности и сохранённый прогон](brin.md).
+
+Hash (#115) использует тот же method-aware v4, в том числе для failed/partial и
+пустого набора; `direction`/`nulls` равны null. `HASH_EQUALITY` и
+`NO_HASH_OPERATOR_CLASS` обозначают происхождение и отсутствие default opclass.
+Reader, не понимающий hash, обязан отклонить метод, не подменять его B-tree.
+[Ограничения и воспроизводимый пример](hash.md).

@@ -114,7 +114,7 @@ class BrinCandidatesTest {
                 ResolvedPredicate(it, ComparisonOperator.GREATER_THAN, PredicateSource.WHERE))
         }, listOf(OrderByColumn(refs[0]), OrderByColumn(refs[0], SortDirection.DESC)), projectedColumns = refs.toSet())
         val input = WorkloadInput(listOf(QueryInput("q", query.sql)), listOf(Profile("p", 1.0, mapOf("q" to 1.0))),
-            Constraints(Long.MAX_VALUE, null), indexMethods = IndexMethod.entries.toSet())
+            Constraints(Long.MAX_VALUE, null), indexMethods = setOf(IndexMethod.BTREE, IndexMethod.BRIN))
         val catalog = CatalogSnapshot(listOf(CatalogTable(table, refs.map { columns.single().copy(name = it.name) })))
         val result = ProfileAwareCandidateGenerator().generate(ResolvedWorkload(input, listOf(query)), catalog, RunContext())
         val stats = result.diagnostics.localScopes.single()
@@ -154,7 +154,7 @@ class BrinCandidatesTest {
             ResolvedPredicate(it, ComparisonOperator.GREATER_THAN, PredicateSource.WHERE)
         }, emptyList())
         val input = WorkloadInput(listOf(QueryInput("q", query.sql)), listOf(Profile("p", 1.0, mapOf("q" to 1.0))),
-            Constraints(Long.MAX_VALUE, null), indexMethods = IndexMethod.entries.toSet())
+            Constraints(Long.MAX_VALUE, null), indexMethods = setOf(IndexMethod.BTREE, IndexMethod.BRIN))
         val catalog = CatalogSnapshot(listOf(CatalogTable(table, refs.map {
             CatalogColumn(it.name, "int4", defaultOperatorClass = "pg_catalog.int4_ops",
                 defaultOperatorClasses = mapOf("brin" to "pg_catalog.int4_minmax_ops"))

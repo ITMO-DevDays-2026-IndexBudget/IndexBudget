@@ -56,9 +56,9 @@ class BtreeCandidateCanonicalizer(
             require(key.column.table == table.ref) { "Index key must belong to its table" }
             val column = columns.getValue(table.ref)[key.column.name]
                 ?: catalogError("Candidate column is absent from catalog")
-            if (definition.method == "brin" && key.operatorClass != null &&
-                qualifiedIdentifier(key.operatorClass) != column.operatorClassFor("brin")?.let(::qualifiedIdentifier)) {
-                catalogError("BRIN requires the catalog-default operator class")
+            if (definition.method != "btree" && key.operatorClass != null &&
+                qualifiedIdentifier(key.operatorClass) != column.operatorClassFor(definition.method)?.let(::qualifiedIdentifier)) {
+                catalogError("BRIN/hash require the catalog-default operator class")
             }
             key.copy(
                 collation = key.collation ?: column.collation,
@@ -106,7 +106,7 @@ class BtreeCandidateCanonicalizer(
         for ((entry, count) in unindexableColumns.toSortedMap(compareBy({ it.first }, { it.second.name }))) {
             val (method, column) = entry
             context.checkDeadline()
-            decisions += CandidateDecision(if (method == "brin") CandidateReason.NO_BRIN_OPERATOR_CLASS else CandidateReason.NO_BTREE_OPERATOR_CLASS,
+            decisions += CandidateDecision(missingOperatorClassReason(method),
                 queryId = scope.queryId, table = scope.table, phase = AnalysisPhase.CANDIDATES,
                 details = mapOf("method" to method, "column" to column.name, "affected_variants" to count.toString()))
         }
@@ -114,7 +114,7 @@ class BtreeCandidateCanonicalizer(
             WarningCode.CANDIDATE_REJECTED,
             "Варианты с колонками без подходящего $method opclass исключены; анализ остальных продолжается.",
             queryId = scope.queryId, details = mapOf("schema" to scope.table.schema, "table" to scope.table.name,
-                "reason" to (if (method == "brin") CandidateReason.NO_BRIN_OPERATOR_CLASS else CandidateReason.NO_BTREE_OPERATOR_CLASS).name,
+                "reason" to missingOperatorClassReason(method).name,
                 "unindexable_variants" to count.toString()),
         ) }
         val retained = grouped.values.sortedBy { it.id }.filter { candidate ->
@@ -167,13 +167,13 @@ class BtreeCandidateCanonicalizer(
         val result = mutableMapOf<IndexDefinition, MutableList<String>>()
         for (index in tables[table]?.existingIndexes.orEmpty()) {
             context.checkDeadline()
-            if (index.table != table || index.method !in setOf("btree", "brin") || !index.valid || !index.ready || !index.accessible ||
+            if (index.table != table || index.method !in setOf("btree", "brin", "hash") || !index.valid || !index.ready || !index.accessible ||
                 index.predicate != null || index.expressions.isNotEmpty() || index.includedColumns.size > 2 ||
                 index.includedColumns.distinct().size != index.includedColumns.size ||
                 index.includedColumns.any { it.table != table || it.name !in columns.getValue(table) || it in index.keys.map(IndexKey::column) } ||
                 index.keys.size !in 1..2 || index.keys.map { it.column }.distinct().size != index.keys.size
             ) continue
-            if (index.method == "brin" && (index.keys.size != 1 || index.includedColumns.isNotEmpty() ||
+            if (index.method != "btree" && (index.keys.size != 1 || index.includedColumns.isNotEmpty() ||
                 !index.defaultStorageParameters)) continue
             // Missing metadata is not evidence of equality. Never substitute defaults for real keys.
             if (index.keys.any { key ->
@@ -185,6 +185,12 @@ class BtreeCandidateCanonicalizer(
             result.getOrPut(definition) { mutableListOf() }.add(index.name)
         }
         return result.mapValues { (_, names) -> names.distinct().sorted() }
+    }
+
+    private fun missingOperatorClassReason(method: String): CandidateReason = when (method) {
+        "brin" -> CandidateReason.NO_BRIN_OPERATOR_CLASS
+        "hash" -> CandidateReason.NO_HASH_OPERATOR_CLASS
+        else -> CandidateReason.NO_BTREE_OPERATOR_CLASS
     }
 
     private fun catalogError(message: String): Nothing = throw AnalysisException(AnalysisError(ErrorCode.CATALOG_ERROR, message))

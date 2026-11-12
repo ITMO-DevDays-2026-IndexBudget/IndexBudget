@@ -29,7 +29,7 @@ indexbudget analyze --workload <path> --output-dir <path> [--analysis-mode fast|
 | `objective` | `robust` по умолчанию либо `mean` |
 | `analysis_mode` | Необязательные `fast`/`normal`/`deep`, default `normal`; явный `null` и неверное значение — `INVALID_INPUT`; CLI `--analysis-mode` имеет приоритет |
 | `candidate_ranking` | Необязательные `frequency`/`baseline_cost`, default `frequency`; новый рейтинг экспериментален; `null`/неверное значение — `INVALID_INPUT`; CLI `--candidate-ranking` имеет приоритет |
-| `index_methods` | Необязательный непустой массив уникальных `btree`/`brin`, default `["btree"]`; BRIN только для скалярного диапазонного WHERE |
+| `index_methods` | Необязательный непустой массив уникальных `btree`/`brin`/`hash`, default `["btree"]`; BRIN только для скалярного диапазонного WHERE |
 | `storage_budget_bytes` | Обязательное неотрицательное целое, относится только к новым индексам |
 | `max_indexes` | Целое 0–5; ноль означает baseline и пустой результат без генерации/поиска |
 | `write_budget_units_per_hour` | Конечное неотрицательное число либо явный `null` |
@@ -154,7 +154,7 @@ RunContext общий для стадий: монотонное время, dead
 
 ## AnalysisReport и завершение процесса
 
-`report.json` содержит `schema_version: 3` для B-tree-only или `4` при разрешённом/ручном BRIN (#114), `spec_version: "0.2"`, run ID, hash входа, версии/длительность, objective, эффективные `analysis_mode` и `candidate_ranking`, все эффективные лимиты, нормированные веса, бюджеты/write profile, baseline, выбранный набор, costs/plans по SQL, профильные метрики, обе оценки размера, warnings и счётчики.
+`report.json` содержит `schema_version: 3` для B-tree-only или `4` при разрешённом/ручном BRIN или hash (#114), `spec_version: "0.2"`, run ID, hash входа, версии/длительность, objective, эффективные `analysis_mode` и `candidate_ranking`, все эффективные лимиты, нормированные веса, бюджеты/write profile, baseline, выбранный набор, costs/plans по SQL, профильные метрики, обе оценки размера, warnings и счётчики.
 
 Hash — SHA-256 от UTF-8 JSON с рекурсивной сортировкой ключей без пробелов, с сохранением строк SQL и порядка массивов. Нормализация для hash не переписывает SQL и не включает применённые defaults или CLI-переопределения режима/рейтинга. JSON/HTML/SQL относятся к одному run ID/hash и выбранному набору.
 
@@ -199,4 +199,4 @@ HTML автономен, без CDN; он отображает метрики о
 
 HTTP/OpenAPI-контракт не вводится: в текущем MVP соответствующих endpoints нет.
 
-BRIN делит прежние caps/EXPLAIN/бюджеты с B-tree и не создаёт INCLUDE/пары. Write proxy не измеряет разницу методов. Сводка серии с BRIN — v2, точки — report v4; B-tree-only остаётся v1/v3. [Полный контракт BRIN](../docs/brin.md).
+BRIN и hash делят прежние caps/EXPLAIN/бюджеты с B-tree и не создают INCLUDE/пары. Hash (#115) порождается только простым скалярным WHERE `=`, не IN/null-test/JOIN/ORDER BY. Write proxy не измеряет разницу методов. При BRIN/hash сводка серии — v2, точки — report v4, включая failed/partial/пустой набор; B-tree-only остаётся v1/v3. [BRIN](../docs/brin.md), [hash](../docs/hash.md).

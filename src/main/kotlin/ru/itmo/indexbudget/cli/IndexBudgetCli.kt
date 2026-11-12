@@ -177,9 +177,10 @@ class IndexBudgetCli(
               indexbudget import-workload --help
 
             Validates JSON v2, shared queries, frequency profiles and budgets.
-            Optional index_methods: ["btree"] (default), ["brin"], or ["btree", "brin"]; shared limits.
-            Optional manual_indexes: 1–5 structured B-tree/BRIN definitions; method defaults to btree.
+            Optional index_methods: nonempty subset of ["btree", "brin", "hash"]; default ["btree"], shared limits.
+            Optional manual_indexes: 1–5 structured B-tree/BRIN/hash definitions; method defaults to btree.
             BRIN: one range WHERE column, default parameters/opclass, no INCLUDE or sort options.
+            Hash: one simple equality WHERE column, default parameters/opclass, no INCLUDE or sort options.
             Use a new or empty output directory for each run.
             Runs SQL resolution, bounded shortlist, HypoPG, greedy + repair and HTML/JSON/SQL export.
             Requires a prepared PostgreSQL database with HypoPG; analysis creates no physical indexes.
