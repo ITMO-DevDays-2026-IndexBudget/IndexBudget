@@ -20,6 +20,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote, urlsplit
 from uuid import UUID, uuid4
 
+from scenarios import load_templates
+
 ROOT = Path(__file__).resolve().parent
 REPO = ROOT.parent
 TERMINAL = {"completed", "partial", "failed"}
@@ -130,6 +132,43 @@ def valid_frequency(value):
             and (type(value) is int or value.is_integer()))
 
 
+def validate_write_profile(workload, required=False, source=None):
+    """Check shape and source, leaving SQL coverage and all calculations to the CLI."""
+    rates, origin = workload.get("table_write_rates"), workload.get("table_write_rates_origin")
+    fix = "Загрузите полный рассчитанный workload.json или явно выберите ручной источник и заполните строки/час."
+    if source not in (None, "manual", "observed"):
+        raise ValueError("Неизвестный источник записи.")
+    observed = source == "observed" or origin is not None or (isinstance(rates, dict) and
+        any(isinstance(r, dict) and r.get("source") == "observed" for r in rates.values()))
+    if rates is None:
+        if required or observed:
+            raise ValueError(f"Профиль записи не задан. {fix}")
+        return
+    if not isinstance(rates, dict) or not rates:
+        raise ValueError(f"Профиль записи должен содержать строки/час таблиц. {fix}")
+    for rate in rates.values():
+        if not isinstance(rate, dict) or any(not finite(rate.get(k)) for k in
+                ("inserts_per_hour", "updates_per_hour", "deletes_per_hour")):
+            raise ValueError(f"Неизвестная или неверная интенсивность строк. {fix}")
+        if rate.get("source", "manual") != ("observed" if observed else "manual"):
+            raise ValueError("Нельзя смешивать ручные и наблюдаемые rates.")
+    if source == "manual" and observed:
+        raise ValueError("Наблюдаемый профиль не является ручным.")
+    if observed:
+        if not isinstance(origin, dict):
+            raise ValueError(f"Нет происхождения наблюдаемого окна. {fix}")
+        window = origin.get("window")
+        if (origin.get("kind") != "observed" or type(origin.get("complete")) is not bool
+                or not isinstance(origin.get("reasons"), list)
+                or any(not isinstance(r, str) for r in origin["reasons"])
+                or not isinstance(window, dict) or not isinstance(window.get("from"), str)
+                or not window["from"] or not isinstance(window.get("to"), str) or not window["to"]
+                or not finite(window.get("period_seconds")) or window["period_seconds"] <= 0):
+            raise ValueError(f"Неверное происхождение наблюдаемого окна. {fix}")
+        if required and not origin["complete"]:
+            raise ValueError(f"Наблюдение неполное: {', '.join(origin['reasons'])}. {fix}")
+
+
 def validate_request(data, templates):
     """Проверка формы; SQL и полная семантика workload проверяются самим CLI."""
     if (not isinstance(data, dict) or not isinstance(data.get("template_id"), str)
@@ -219,6 +258,11 @@ def validate_request(data, templates):
                 if not isinstance(rate, dict) or any(not finite(rate.get(k)) for k in ("inserts_per_hour", "updates_per_hour", "deletes_per_hour")):
                     raise ValueError("Неполный профиль записи.")
         result["series"] = copy.deepcopy(series)
+    validate_write_profile(w, c.get("write_budget_units_per_hour") is not None
+                           or (series is not None and series["budget"] == "write_budget_units_per_hour"),
+                           data.get("write_source"))
+    if "write_source" in data:
+        result["write_source"] = data["write_source"]
     return result
 
 
@@ -242,6 +286,7 @@ class LocalRunner:
         self.compose = ["docker", "compose", "-f", str(ROOT / "compose.yaml")]
         self.cli = Path(os.environ.get("FRONTEND_CLI", str(REPO / "build/install/indexbudget/bin/indexbudget")))
         self.deployment_revision = os.environ.get("FRONTEND_REVISION")
+        self.analysis_role = "frontend_reader"
 
     def command(self, args, input=None, timeout=120, env=None):
         process = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -280,6 +325,11 @@ class LocalRunner:
 
     def prepare(self, request):
         # schema_sql/seed_sql — снимок доверенного шаблона, созданный Jobs.submit.
+        # Очередь последовательная: выбранная роль живёт до завершения этого анализа.
+        role = request.get("analysis_role", "frontend_reader")
+        if role not in {"frontend_reader", "frontend_scenarios"}:
+            raise ValueError("Неизвестная роль доверенного frontend-датасета.")
+        self.analysis_role = role
         self.db("DROP DATABASE IF EXISTS frontend_demo WITH (FORCE);\nCREATE DATABASE frontend_demo;", "postgres")
         self.db("CREATE EXTENSION hypopg;\n" + request["schema_sql"])
         self.db(request["seed_sql"])
@@ -298,6 +348,16 @@ DO $$ DECLARE s record; BEGIN
    EXECUTE format('GRANT SELECT ON ALL TABLES IN SCHEMA %I TO frontend_reader', s.nspname);
  END LOOP;
 END $$;""")
+        if role == "frontend_scenarios":
+            # Только собственная пересозданная demo-БД. SELECT-only роль не расширяется.
+            self.db("""DO $$ BEGIN
+ IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'frontend_scenarios') THEN
+   CREATE ROLE frontend_scenarios LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION;
+ END IF;
+END $$;
+GRANT frontend_reader TO frontend_scenarios;
+GRANT UPDATE (payload), DELETE ON public.records TO frontend_scenarios;
+ALTER ROLE frontend_scenarios SET default_transaction_read_only = on;""")
         return json.loads(self.db((ROOT / "catalog.sql").read_text()))
 
     def analyze(self, workload, output, series=None):
@@ -306,7 +366,7 @@ END $$;""")
         env = os.environ.copy()
         port = int(env.get("FRONTEND_DB_PORT", "55433"))
         # Никогда не наследуем адрес общей БД из окружения пользователя.
-        env["INDEXBUDGET_DATABASE_URL"] = f"jdbc:postgresql://127.0.0.1:{port}/frontend_demo?user=frontend_reader"
+        env["INDEXBUDGET_DATABASE_URL"] = f"jdbc:postgresql://127.0.0.1:{port}/frontend_demo?user={self.analysis_role}"
         args = [str(self.cli), "analyze-series" if series else "analyze", "--workload", str(workload), "--output-dir", str(output)]
         timeout = 360
         if series:
@@ -366,6 +426,7 @@ class Jobs:
         # а обновление шаблонов не изменяет уже принятый запуск и его артефакты.
         template = self.templates[request["template_id"]]
         request.update({key: copy.deepcopy(template[key]) for key in ("schema_sql", "seed_sql")})
+        request["analysis_role"] = template.get("analysis_role", "frontend_reader")
         id = str(uuid4())
         item = {"run_id": id, "kind": kind, "status": "queued", "created_at": time.time(),
                 "template_id": request["template_id"], "launch_mode": "series" if "series" in request else "single", "report_url": None, "error": None}
@@ -543,7 +604,7 @@ def main():
     parser.add_argument("--port", type=int, default=8090)
     parser.add_argument("--host", default="127.0.0.1")
     args = parser.parse_args()
-    templates = {t["id"]: t for t in (read_json(p) for p in sorted((ROOT / "templates").glob("*.json")))}
+    templates = load_templates(ROOT)
     directory = data_directory()
     # Один исполнитель на рабочую БД, даже если случайно запустили второй сервер.
     import fcntl

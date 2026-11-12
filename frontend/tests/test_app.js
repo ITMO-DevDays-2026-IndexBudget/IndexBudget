@@ -10,6 +10,23 @@ const source = fs.readFileSync(path.join(__dirname, '../static/app.js'), 'utf8')
 const templates = fs.readdirSync(path.join(__dirname, '../templates')).sort()
   .map(file => JSON.parse(fs.readFileSync(path.join(__dirname, '../templates', file), 'utf8')));
 const copy = value => JSON.parse(JSON.stringify(value));
+const scenarios = JSON.parse(fs.readFileSync(path.join(__dirname, '../../demo/scenarios/workload.json'), 'utf8'));
+const catalog = JSON.parse(fs.readFileSync(path.join(__dirname, '../../demo/scenarios/catalog.json'), 'utf8'));
+const initialIds = ['records_by_group', 'records_by_value', 'category_join'];
+const scenarioTemplate = {...copy(templates[0]), id: '04-scenarios', name: 'Чтение и запись', workload: copy(scenarios),
+  examples: catalog.examples.map(item => {
+    const query = scenarios.queries.find(query => query.id === item.query_id);
+    return {...query, name: item.name, purpose: item.purpose, syntax_hint: item.syntax_hint,
+      statement_kind: query.sql.split(' ')[0].toLowerCase(),
+      calls_per_hour: Object.fromEntries(scenarios.profiles.map(profile => [profile.id, profile.calls_per_hour[query.id]])),
+      cost_guard: scenarios.constraints.query_cost_guards?.[query.id],
+      tables: query.id === 'category_join' ? ['public.records', 'public.groups'] : ['public.records']};
+  })};
+scenarioTemplate.workload.queries = scenarioTemplate.workload.queries.filter(query => initialIds.includes(query.id));
+scenarioTemplate.workload.profiles.forEach(profile => {
+  profile.calls_per_hour = Object.fromEntries(Object.entries(profile.calls_per_hour).filter(([id]) => initialIds.includes(id)));
+});
+templates.push(scenarioTemplate);
 
 function app() {
   const elements = new Map();
@@ -22,7 +39,7 @@ function app() {
     return elements.get(id);
   };
   const context = vm.createContext({console, TextEncoder, Blob, URL, setTimeout, clearTimeout,
-    document: {getElementById: element, querySelectorAll: () => [],
+    document: {getElementById: element, querySelectorAll: () => [], querySelector: () => null,
       addEventListener: (type, listener) => {
         if (!listeners.has(type)) listeners.set(type, []);
         listeners.get(type).push(listener);
@@ -43,7 +60,7 @@ function check(workload) {
   return () => ui.run('validateWorkload(testWorkload)');
 }
 
-test('все три шаблона и обе границы частоты допустимы', () => {
+test('все шаблоны и обе границы частоты допустимы', () => {
   for (const template of templates) assert.doesNotThrow(check(copy(template.workload)));
   for (const value of [0, 1000000, 1000000.0]) {
     const workload = copy(templates[0].workload);
@@ -148,6 +165,135 @@ test('просмотр схемы не создаёт редакторы DDL/see
   assert.doesNotMatch(markup, /<textarea|id="(?:schema-sql|seed-sql)"/);
   assert.match(markup, /&lt;script&gt;/);
   assert.match(markup, /только просмотр/);
+  assert.doesNotMatch(markup, /preview-schema|Проверить схему/);
+});
+
+function scenarioApp() {
+  const ui = app();
+  ui.run('renderAll = () => {}; renderEditor = () => {}; renderSummary = () => {}; loadTemplate("04-scenarios");');
+  return ui;
+}
+
+test('шаблон сохраняет guard, ручной набор и исходные частоты в точном workload', () => {
+  const ui = scenarioApp();
+  assert.deepEqual(JSON.parse(ui.run('JSON.stringify(materialize())')), scenarioTemplate.workload);
+});
+
+test('все девять примеров добавляются с исходным SQL, ID и частотами без замены настроек', () => {
+  const ui = scenarioApp();
+  ui.run('state.workload.constraints.storage_budget_bytes = 123; state.workload.profiles[0].calls_per_hour.records_by_group = 987;');
+  for (const example of scenarioTemplate.examples) {
+    ui.set('exampleId', example.id);
+    ui.run('addExample(exampleId)');
+  }
+  const workload = JSON.parse(ui.run('JSON.stringify(materialize())'));
+  assert.equal(workload.queries.length, 9);
+  for (const query of scenarios.queries) assert.deepEqual(workload.queries.find(item => item.id === query.id), query);
+  assert.equal(workload.constraints.storage_budget_bytes, 123);
+  assert.equal(workload.profiles[0].calls_per_hour.records_by_group, 987);
+  assert.equal(workload.profiles[1].calls_per_hour.delete_recent, 20);
+  assert.deepEqual(workload.table_write_rates, scenarios.table_write_rates);
+  assert.deepEqual(workload.manual_indexes, scenarios.manual_indexes);
+  assert.doesNotThrow(() => ui.run('validateWorkload(materialize())'));
+});
+
+test('добавление сохраняет отредактированный SQL с тем же ID, повтор не дублирует пример', () => {
+  const ui = scenarioApp();
+  ui.run('state.workload.queries[0].sql = "SELECT id FROM public.records WHERE id = 8";');
+  const result = ui.run('addExample("records_by_group")');
+  assert.equal(result.id, 'records_by_group_2');
+  assert.equal(result.renamed, true);
+  assert.equal(ui.run('state.workload.queries[0].sql'), 'SELECT id FROM public.records WHERE id = 8');
+  assert.equal(ui.run('JSON.parse(guardsText).records_by_group_2'), 1.05);
+  assert.equal(ui.run('addExample("records_by_group").alreadyAdded'), true);
+  assert.equal(ui.run('state.workload.queries.length'), 4);
+});
+
+test('новые профили получают явно обозначенную частоту обычного дня без изменения старых', () => {
+  const ui = scenarioApp();
+  ui.run('state.workload.profiles.push({id:"custom", weight:1, calls_per_hour:Object.fromEntries(state.workload.queries.map(q=>[q.id,1]))});');
+  assert.equal(ui.run('addExample("update_payload").fallback'), true);
+  assert.equal(ui.run('state.workload.profiles[2].calls_per_hour.update_payload'), 30);
+  assert.equal(ui.run('state.workload.profiles[1].calls_per_hour.update_payload'), 120);
+  assert.doesNotThrow(() => ui.run('validateWorkload(materialize())'));
+});
+
+test('неподходящий датасет, лимит 20 и сломанный guard JSON не изменяют нагрузку', () => {
+  const legacy = app();
+  assert.throws(() => legacy.run('addExample("update_payload")'), /датасете/);
+  const ui = scenarioApp();
+  ui.run('guardsText = "broken";');
+  const before = ui.run('JSON.stringify(state.workload)');
+  assert.throws(() => ui.run('addExample("update_payload")'), /исправьте JSON/);
+  assert.equal(ui.run('JSON.stringify(state.workload)'), before);
+  ui.run('guardsText = ""; while (state.workload.queries.length < 20) state.workload.queries.push({id:"custom_"+state.workload.queries.length,sql:"SELECT id FROM public.records"});');
+  assert.throws(() => ui.run('addExample("delete_recent")'), /20 запросов/);
+  assert.equal(ui.run('state.workload.queries.length'), 20);
+});
+
+test('удаление и переименование запроса согласуют guard и каждый профиль', () => {
+  const ui = scenarioApp();
+  ui.run('queryIndex = 0;');
+  ui.listeners.get('change')[0]({target: {id: 'query-id', value: 'renamed_group', dataset: {}}});
+  let workload = JSON.parse(ui.run('JSON.stringify(materialize())'));
+  assert.equal(workload.constraints.query_cost_guards.renamed_group, 1.05);
+  assert.equal(Object.hasOwn(workload.constraints.query_cost_guards, 'records_by_group'), false);
+  for (const profile of workload.profiles) assert.equal(Object.hasOwn(profile.calls_per_hour, 'records_by_group'), false);
+  ui.listeners.get('click')[0]({target: {closest: () => ({id:'delete-query',dataset:{},disabled:false})}});
+  workload = JSON.parse(ui.run('JSON.stringify(materialize())'));
+  assert.equal(workload.constraints.query_cost_guards, undefined);
+  for (const profile of workload.profiles) assert.equal(Object.hasOwn(profile.calls_per_hour, 'renamed_group'), false);
+  assert.equal(ui.run('addExample("records_by_group").id'), 'records_by_group');
+  assert.equal(ui.run('materialize().constraints.query_cost_guards.records_by_group'), 1.05);
+});
+
+test('удаление JOIN фильтрует rates только в экспорте, повторное добавление возвращает точные значения', () => {
+  const ui = scenarioApp();
+  ui.run('queryIndex = state.workload.queries.findIndex(q=>q.id==="category_join");');
+  ui.listeners.get('click')[0]({target: {closest: () => ({id:'delete-query',dataset:{},disabled:false})}});
+  assert.deepEqual(Object.keys(ui.run('materialize().table_write_rates')), ['public.records']);
+  assert.deepEqual(JSON.parse(ui.run('JSON.stringify(state.workload.table_write_rates)')), scenarios.table_write_rates);
+  ui.run('addExample("category_join")');
+  assert.deepEqual(JSON.parse(ui.run('JSON.stringify(materialize().table_write_rates)')), scenarios.table_write_rates);
+  ui.run('state.workload.queries = [{id:"custom",sql:"SELECT id FROM public.records"}];');
+  assert.deepEqual(JSON.parse(ui.run('JSON.stringify(materialize().table_write_rates)')), scenarios.table_write_rates);
+});
+
+test('библиотека экранирует названия и SQL, показывает смысл, частоты и действия', () => {
+  const ui = scenarioApp();
+  ui.run('templates.find(t=>t.id==="04-scenarios").examples[0].name = "<img src=x>"; renderExamples();');
+  const markup = ui.element('editor-content').innerHTML;
+  assert.match(markup, /&lt;img src=x&gt;/);
+  assert.doesNotMatch(markup, /<img src=x>/);
+  assert.match(markup, /Добавить в нагрузку/);
+  assert.match(markup, /Уже в нагрузке/);
+  assert.match(markup, /частота обычного дня/);
+  assert.match(markup, /SQL и условия/);
+  ui.run('state = templateState(templates[0]); renderExamples();');
+  assert.match(ui.element('editor-content').innerHTML, /Открыть «Чтение и запись»/);
+});
+
+test('новый датасет виден первым, но рендер не переключает прежний черновик', () => {
+  const ui = app();
+  ui.run('renderTemplates()');
+  const markup = ui.element('templates').innerHTML;
+  assert.ok(markup.indexOf('data-template="04-scenarios"') < markup.indexOf('data-template="01-records"'));
+  assert.equal(ui.run('state.template_id'), '01-records');
+});
+
+test('переключение датасета требует явного подтверждения потери изменённой нагрузки', () => {
+  const ui = scenarioApp();
+  ui.run('state.workload.queries[0].sql = "SELECT id FROM public.records WHERE id=99";');
+  const before = ui.run('JSON.stringify(state.workload)');
+  let confirmations = 0;
+  ui.set('confirm', () => { confirmations++; return false; });
+  ui.run('switchTemplate("01-records")');
+  assert.equal(confirmations, 1);
+  assert.equal(ui.run('state.template_id'), '04-scenarios');
+  assert.equal(ui.run('JSON.stringify(state.workload)'), before);
+  ui.set('confirm', () => true);
+  ui.run('switchTemplate("01-records")');
+  assert.equal(ui.run('state.template_id'), '01-records');
 });
 
 test('серия сохраняет workload и передаёт 3–5 исходных бюджетов в CLI-контракте', () => {
@@ -208,4 +354,98 @@ test('init восстанавливает серию до первого persist
     renderAll = () => {}; tour = {maybeStart(){}}; location = {search:''}; document.querySelector = () => ({});`);
   await second.run('init()');
   assert.deepEqual(JSON.parse(second.stored.values().next().value).seriesUI, draft.seriesUI);
+});
+
+function observedWorkload() {
+  return {schema_version: 2, table_write_rates: {'public.records': {
+    inserts_per_hour: .000125, updates_per_hour: 2000000.5, deletes_per_hour: 0, source: 'observed'}},
+    table_write_rates_origin: {kind: 'observed', window: {from: '2026-11-12T10:00:00Z', to: '2026-11-12T12:00:00Z', period_seconds: 7200},
+      complete: true, reasons: [], source: {source_id: '<script>source</script>', database_oid: 16384, postgres_version: '16.15'}}};
+}
+
+test('импорт наблюдаемой записи сохраняет дроби, окно и SQL-частоты без пересчёта', () => {
+  const ui = app(), observed = observedWorkload();
+  ui.set('observed', observed);
+  const profiles = ui.run('JSON.stringify(state.workload.profiles)');
+  const queries = ui.run('JSON.stringify(state.workload.queries)');
+  ui.run('importWriteProfile(observed); renderRates(); persist()');
+  const actual = ui.run('requestSnapshot()');
+  assert.deepEqual(JSON.parse(JSON.stringify(actual.workload.table_write_rates)), observed.table_write_rates);
+  assert.deepEqual(JSON.parse(JSON.stringify(actual.workload.table_write_rates_origin)), observed.table_write_rates_origin);
+  assert.equal(ui.run('JSON.stringify(state.workload.profiles)'), profiles);
+  assert.equal(ui.run('JSON.stringify(state.workload.queries)'), queries);
+  assert.equal(actual.write_source, 'observed');
+  assert.match(ui.element('write-rates').innerHTML, /0.000125/);
+  assert.doesNotMatch(ui.element('write-rates').innerHTML, /data-rate=/);
+  assert.match(ui.element('write-origin').innerHTML, /&lt;script&gt;/);
+  const draft = JSON.parse(ui.stored.values().next().value);
+  ui.set('draft', draft);
+  assert.equal(ui.run('state = restoreDraft(draft, templates).state; writeSource()'), 'observed');
+});
+
+test('неполное окно можно изучить, но нельзя использовать с лимитом или write-серией', () => {
+  const ui = app(), observed = observedWorkload();
+  observed.table_write_rates_origin.complete = false;
+  observed.table_write_rates_origin.reasons = ['INCOMPLETE_SNAPSHOT'];
+  ui.set('observed', observed);
+  ui.run('importWriteProfile(observed); state.workload.constraints.write_budget_units_per_hour = 0;');
+  assert.throws(() => ui.run('requestSnapshot()'), /Наблюдение неполное/);
+  ui.run('state.workload.constraints.write_budget_units_per_hour = null;');
+  assert.doesNotThrow(() => ui.run('requestSnapshot()'));
+  ui.element('launch-mode').value = 'series';
+  ui.element('series-budget').value = 'write_budget_units_per_hour';
+  ui.element('series-values').value = '0, 1, 2';
+  ui.element('series-timeout').value = '600';
+  assert.throws(() => ui.run('requestSnapshot()'), /Наблюдение неполное/);
+});
+
+test('смена источника не превращает observed в manual и сохраняет незаполненный выбор', () => {
+  const ui = app();
+  ui.run('changed = () => {};');
+  ui.listeners.get('input')[0]({target: {id: 'write-source', value: 'observed', dataset: {}}});
+  assert.equal(ui.run('state.workload.table_write_rates'), undefined);
+  assert.throws(() => ui.run('requestSnapshot()'), /Профиль записи не задан/);
+  ui.run('persist()');
+  ui.set('draft', JSON.parse(ui.stored.values().next().value));
+  assert.equal(ui.run('state = restoreDraft(draft, templates).state; writeSource()'), 'observed');
+  ui.listeners.get('input')[0]({target: {id: 'write-source', value: 'manual', dataset: {}}});
+  assert.equal(ui.run('state.workload.table_write_rates_origin'), undefined);
+});
+
+test('добавление примера и удаление JOIN сохраняют весь observed snapshot и выбор write-серии', () => {
+  const ui = scenarioApp(), observed = observedWorkload();
+  observed.table_write_rates['public.groups'] = {inserts_per_hour: .5, updates_per_hour: .25, deletes_per_hour: 0, source: 'observed'};
+  ui.set('observed', observed);
+  ui.run('importWriteProfile(observed); queryIndex = state.workload.queries.findIndex(q=>q.id==="category_join");');
+  ui.element('launch-mode').value = 'series';
+  ui.element('series-budget').value = 'write_budget_units_per_hour';
+  ui.element('series-values').value = '0, 10000, 60000';
+  ui.element('series-timeout').value = '120';
+  ui.listeners.get('click')[0]({target: {closest: () => ({id:'delete-query',dataset:{},disabled:false})}});
+  ui.run('addExample("update_payload"); persist();');
+  const request = JSON.parse(ui.run('JSON.stringify(requestSnapshot())'));
+  assert.equal(request.write_source, 'observed');
+  assert.deepEqual(request.workload.table_write_rates, observed.table_write_rates);
+  assert.deepEqual(request.workload.table_write_rates_origin, observed.table_write_rates_origin);
+  assert.deepEqual(request.series, {schema_version: 1, budget: 'write_budget_units_per_hour', values: [0, 10000, 60000], timeout_seconds: 120});
+  assert.equal(ui.run('writeSource()'), 'observed');
+  const saved = JSON.parse(ui.stored.values().next().value);
+  assert.equal(saved.writeSource, 'observed');
+  assert.deepEqual(saved.state.workload.table_write_rates_origin, observed.table_write_rates_origin);
+  assert.equal(saved.seriesUI['launch-mode'], 'series');
+  ui.run('renderJson()');
+  assert.match(ui.element('editor-content').innerHTML, /Наблюдаемый профиль и окно передаются без изменения/);
+  assert.doesNotMatch(ui.element('editor-content').innerHTML, /В JSON включаются ручные частоты/);
+});
+
+test('добавление примера после очистки observed не подставляет ручные rates или окно', () => {
+  const ui = scenarioApp();
+  ui.set('observed', observedWorkload());
+  ui.run('importWriteProfile(observed); changed = () => {};');
+  ui.listeners.get('input')[0]({target: {id:'write-source',value:'manual',dataset:{}}});
+  ui.run('addExample("delete_recent")');
+  assert.equal(ui.run('writeSource()'), 'manual');
+  assert.equal(ui.run('materialize().table_write_rates'), undefined);
+  assert.equal(ui.run('materialize().table_write_rates_origin'), undefined);
+  assert.throws(() => ui.run('requestSnapshot()'), /Профиль записи не задан/);
 });

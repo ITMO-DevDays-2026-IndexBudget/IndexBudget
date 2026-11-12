@@ -1,0 +1,65 @@
+{
+  "schema_version": 2,
+  "queries": [
+    {
+      "id": "read",
+      "sql": "SELECT id, value FROM public.records WHERE group_id = 42"
+    },
+    {
+      "id": "update",
+      "sql": "UPDATE public.records r SET value = 7 WHERE r.group_id = 42"
+    },
+    {
+      "id": "delete",
+      "sql": "DELETE FROM public.records WHERE group_id = 43 AND value < 10"
+    }
+  ],
+  "profiles": [
+    {
+      "id": "day",
+      "weight": 2,
+      "calls_per_hour": {
+        "read": 100,
+        "update": 10,
+        "delete": 1
+      }
+    },
+    {
+      "id": "night",
+      "weight": 1,
+      "calls_per_hour": {
+        "read": 5,
+        "update": 100,
+        "delete": 20
+      }
+    }
+  ],
+  "constraints": {
+    "storage_budget_bytes": 8388608,
+    "write_budget_units_per_hour": null,
+    "max_indexes": 3
+  },
+  "table_write_rates": {
+    "public.records": {
+      "inserts_per_hour": 0.000125,
+      "updates_per_hour": 2.5,
+      "deletes_per_hour": 0,
+      "source": "observed"
+    }
+  },
+  "table_write_rates_origin": {
+    "kind": "observed",
+    "window": {
+      "from": "2026-11-12T10:00:00Z",
+      "to": "2026-11-12T12:00:00Z",
+      "period_seconds": 7200
+    },
+    "complete": true,
+    "reasons": [],
+    "source": {
+      "source_id": "11111111-1111-1111-1111-111111111111",
+      "database_oid": 16384,
+      "postgres_version": "16.15"
+    }
+  }
+}

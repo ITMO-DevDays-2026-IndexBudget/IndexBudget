@@ -17,6 +17,9 @@ import time
 from urllib.request import urlopen
 
 SERVICE = "indexbudget-frontend.service"
+# Меняет identity при расширении состава bundle, включая уже подготовленные
+# прежним updater релизы того же CLI SHA.
+BUNDLE_VERSION = 2
 
 
 def read_json(path):
@@ -178,6 +181,7 @@ class Deployer:
         metadata = {key: self.config[key] for key in
                     ("data_dir", "java_home", "host", "port", "db_port", "compose_project")}
         metadata.update(revision=revision, cli_release=str(cli_release), cli_path=str(cli_path),
+                        bundle_version=BUNDLE_VERSION,
                         image="indexbudget-frontend-db:" + tree_hash(source / "demo/postgres")[:24])
         identity = hashlib.sha256(json.dumps(metadata, sort_keys=True).encode()).hexdigest()[:12]
         release = self.root / "releases" / f"{revision}-{identity}"
@@ -194,6 +198,10 @@ class Deployer:
             ignore = shutil.ignore_patterns(".local", "__pycache__", "*.pyc", ".git")
             shutil.copytree(source / "frontend", temporary / "source/frontend", ignore=ignore)
             shutil.copytree(source / "demo/postgres", temporary / "source/demo/postgres")
+            # Сценарии — runtime-источник SQL и частот frontend, из того же CLI SHA.
+            # Старые успешные CLI-релизы до библиотеки остаются устанавливаемыми.
+            if (source / "demo/scenarios").is_dir():
+                shutil.copytree(source / "demo/scenarios", temporary / "source/demo/scenarios", ignore=ignore)
             (temporary / "source/frontend/.local").symlink_to(metadata["data_dir"], target_is_directory=True)
             write_json(temporary / "metadata.json", metadata)
             temporary.rename(release)

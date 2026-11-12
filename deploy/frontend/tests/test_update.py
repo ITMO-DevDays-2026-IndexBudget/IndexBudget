@@ -5,6 +5,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -126,6 +127,12 @@ class UpdateTests(unittest.TestCase):
         (report / 'indexes.sql').write_text('-- saved recommendation\n')
         return contents(self.data)
 
+    def copy_scenario_library(self, release):
+        canonical = MODULE_PATH.parents[2] / 'demo/scenarios'
+        target = release / 'source/demo/scenarios'
+        shutil.copytree(canonical, target)
+        return canonical, target
+
     def test_a_to_b_pins_cli_image_and_preserves_report_files(self):
         self.deployer.update()
         first = self.deployer.current.resolve()
@@ -161,6 +168,51 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual((self.root / 'deployed.json').read_bytes(), deployed)
         self.assertFalse(any(args[:3] == ['python3', '-m', 'unittest']
                              for args, _, _ in self.deployer.commands))
+
+    def test_canonical_scenario_library_is_pinned_and_does_not_overwrite_reports(self):
+        self.deployer.update()
+        before = self.preserve_report()
+        second_cli = self.cli_release(B)
+        canonical, source_library = self.copy_scenario_library(second_cli)
+        expected = contents(canonical)
+        self.assertIn('workload.json', expected)
+        self.assertIn('catalog.json', expected)
+        self.set_cli(B)
+        self.deployer.update()
+        staged = self.deployer.current.resolve() / 'source/demo/scenarios'
+        self.assertEqual(contents(staged), expected)
+        self.assertEqual(contents(self.data), before)
+        # Это отдельный immutable-снимок, не ссылка на изменяемую рабочую копию.
+        (source_library / 'workload.json').write_text('{"changed_after_stage": true}')
+        source, release, metadata = self.deployer.snapshot()
+        self.deployer.stage(source, release, metadata)
+        self.assertEqual(contents(staged), expected)
+        self.assertEqual(contents(self.data), before)
+
+    def test_bundle_upgrade_rebuilds_same_cli_revision_without_rewriting_old_bundle(self):
+        cli_release = self.cli / 'releases' / A
+        canonical, _ = self.copy_scenario_library(cli_release)
+        source, _, metadata = self.deployer.snapshot()
+        # Прежний updater мог подготовить этот CLI SHA, пропустив runtime library.
+        previous = self.root / 'releases' / (A + '-before-library')
+        shutil.copytree(source / 'frontend', previous / 'source/frontend',
+                        ignore=shutil.ignore_patterns('.local'))
+        shutil.copytree(source / 'demo/postgres', previous / 'source/demo/postgres')
+        old_metadata = {key: value for key, value in metadata.items() if key != 'bundle_version'}
+        update.write_json(previous / 'metadata.json', old_metadata)
+        update.switch_link(self.deployer.current, previous)
+        self.deployer.service_active = True
+        before = self.preserve_report()
+        previous_contents = contents(previous)
+
+        self.deployer.update()
+
+        current = self.deployer.current.resolve()
+        self.assertNotEqual(current, previous)
+        self.assertEqual(update.read_json(current / 'metadata.json')['revision'], A)
+        self.assertEqual(contents(current / 'source/demo/scenarios'), contents(canonical))
+        self.assertEqual(contents(previous), previous_contents)
+        self.assertEqual(contents(self.data), before)
 
     def test_failed_tests_leave_previous_process_database_and_reports_untouched(self):
         self.deployer.update()
@@ -284,6 +336,8 @@ class UpdateTests(unittest.TestCase):
         staged = list((self.root / 'releases').iterdir())
         self.assertEqual(len(staged), 1)
         self.assertTrue((staged[0] / 'source/frontend/.local').is_symlink())
+        # Обратная совместимость с успешными CLI-релизами до demo/scenarios.
+        self.assertFalse((staged[0] / 'source/demo/scenarios').exists())
 
     def test_unmanaged_journal_path_is_rejected_before_any_mutation(self):
         self.deployer.update()

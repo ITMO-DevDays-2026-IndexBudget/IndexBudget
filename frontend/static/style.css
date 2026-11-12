@@ -42,3 +42,42 @@
 
 /* Схема доступна только для чтения; длинный DDL прокручивается внутри блока. */
 .schema-content pre.code{padding:15px;border:1px solid var(--line);border-radius:7px;max-height:360px;margin:12px 0 0}
+
+#write-origin, .observed-rate { overflow-wrap: anywhere; min-width: 0; }
+#write-profile-file { max-width: 100%; }
+
+/* Библиотека сценариев: имена и смысл перед SQL, одна явная операция добавления. */
+.template-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+.query-library-link{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:15px 20px 0;color:#576b5a;font-size:11px}
+.query-library-link .text-button{color:var(--green);text-decoration:underline;text-underline-offset:3px;white-space:nowrap}
+.query-purpose{margin:0 20px 13px;color:#576b5a;font-size:11px;line-height:1.7;max-width:70ch}
+.editor-toolbar,.query-tabs{min-width:0}
+.editor-toolbar>.quiet-button{flex-shrink:0}
+.examples-content{padding:22px 20px}
+.examples-content h3{font-size:18px;letter-spacing:-.02em}
+.examples-intro{max-width:68ch;margin-top:8px;color:#526653;font-size:12px;line-height:1.75}
+.examples-dataset,.examples-frequency-note{margin-top:14px;color:#526653;font-size:11px;line-height:1.75;max-width:72ch}
+.examples-switch{padding:16px 0;margin-top:12px;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.examples-switch p{font-size:12px;line-height:1.75;color:#526653;max-width:68ch;margin-bottom:10px}
+.examples-switch .quiet-button{font-size:11px;min-height:36px}
+.example-list{margin-top:18px}
+.example-item{padding:20px 0;border-top:1px solid var(--line)}
+.example-item:last-child{padding-bottom:0}
+.example-heading{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+.example-heading h4{font-size:15px;line-height:1.4}
+.example-kind{font:11px var(--mono);color:#526653;text-transform:uppercase;flex-shrink:0}
+.example-purpose{font-size:12px;line-height:1.75;color:#526653;margin-top:7px;max-width:68ch}
+.example-frequencies{font-size:11px;color:#526653;line-height:1.7;margin-top:9px;font-variant-numeric:tabular-nums}
+.example-frequencies strong{font-weight:600;color:var(--ink)}
+.example-sql{margin-top:11px}
+.example-sql summary{font-size:11px;color:var(--green);cursor:pointer;min-height:24px}
+.example-sql pre{white-space:pre-wrap;overflow-wrap:anywhere;font:11px/1.8 var(--mono);background:#f6f8f3;color:#34583e;padding:14px;margin:10px 0;border-radius:7px;max-height:250px;overflow:auto}
+.example-sql p{font-size:11px;line-height:1.75;color:#526653;max-width:70ch;margin-top:7px}
+.example-actions{display:flex;align-items:center;gap:12px;margin-top:12px;flex-wrap:wrap}
+.add-example{min-height:36px;font-size:11px;color:var(--green);border-color:#b5c9af}
+.add-example:disabled{opacity:1;cursor:default;color:#647164;border-color:var(--line);background:#f6f8f3}
+.example-added{font-size:11px;color:#526653}
+.examples-limit,.example-status:not(:empty){font-size:12px;line-height:1.7;margin-top:15px;padding:12px;background:#eaf1e5;color:#34583e;border-radius:7px}
+.example-status:empty{margin:0}
+@media(min-width:1200px){.template-grid{grid-template-columns:repeat(4,minmax(0,1fr))}.template-card p{max-width:none}}
+@media(max-width:540px){.template-grid{grid-template-columns:1fr}.query-library-link{padding:14px 14px 0;align-items:flex-start;flex-direction:column;gap:3px}.query-purpose{margin:0 14px 12px}.examples-content{padding:18px 14px}.examples-content h3{font-size:17px}.example-heading h4{font-size:14px}.example-item{padding:18px 0}.example-actions .add-example,.examples-switch .quiet-button{min-height:44px}.example-sql summary{padding:6px 0;min-height:32px}.example-actions{gap:8px}.tabs{gap:15px}}

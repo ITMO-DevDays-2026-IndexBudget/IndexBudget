@@ -23,6 +23,28 @@ object HtmlReportFixtures {
         }))
     }
 
+    fun observedWrite(complete: Boolean = true): AnalysisReport {
+        val source = completed()
+        val original = requireNotNull(source.input)
+        val input = original.copy(
+            queries = original.queries.mapIndexed { i, q -> if (i == 1) q.copy(sql = "UPDATE public.records SET payload = '<observed>' WHERE value = 7") else q },
+            constraints = original.constraints.copy(writeBudgetUnitsPerHour = if (complete) 10000.0 else null),
+            tableWriteRates = mapOf("public.records" to TableWriteRates(0.000125, 2.5, 0.0, WriteRateSource.OBSERVED)),
+            tableWriteRatesOrigin = WriteRatesOrigin("2026-11-12T10:00:00Z", "2026-11-12T12:00:00Z", 7200.0,
+                complete, if (complete) emptyList() else listOf("INCOMPLETE_SNAPSHOT"),
+                "11111111-1111-1111-1111-111111111111", 16384, "16.15"),
+        )
+        val calculator = MetricsCalculatorImpl()
+        fun configuration(value: EvaluatedConfiguration) = value.copy(metrics = calculator.calculate(input,
+            requireNotNull(source.result.baseline), value.evaluation, calculator.assessBudget(
+                source.candidates.candidates.filter { it.id in value.evaluation.candidateIds }, input).usage))
+        val result = source.result as SearchResult.Completed
+        return source.copy(input = input, result = result.copy(bestRobust = configuration(result.bestRobust),
+            bestMean = configuration(result.bestMean)), candidates = source.candidates.copy(candidates = source.candidates.candidates.map {
+                it.copy(writeUnitsPerHour = calculator.assessBudget(listOf(it), input).usage.writeUnitsPerHour)
+            })).rebuild().copy(statementKinds = input.queries.mapIndexed { i, q -> q.id to if (i == 1) StatementKind.UPDATE else StatementKind.SELECT }.toMap())
+    }
+
     fun covering(): AnalysisReport {
         val report = completed(sameIncumbents = true)
         val selected = requireNotNull(report.result.selected)
@@ -264,6 +286,8 @@ object HtmlReportFixtures {
         "long-names" to longNames(),
         "recorded-import" to RecordedHtmlReportFixture.report(),
         "different" to completed(),
+        "observed-write" to observedWrite(),
+        "incomplete-write" to observedWrite(complete = false),
         "fractional" to fractional(),
         "include" to covering(),
         "imported" to imported(),

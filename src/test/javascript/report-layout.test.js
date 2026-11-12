@@ -8,7 +8,7 @@ const {chromium} = require('playwright');
 const preview = name => pathToFileURL(resolve(`build/report-previews/${name}.html`)).href;
 const fixture = name => JSON.parse(readFileSync(`build/report-previews/${name}.json`, 'utf8'));
 const cases = ['fractional', 'one-profile', 'different', 'three-profiles', 'same', 'empty', 'regression',
-  'zero-baseline', 'no-write', 'partial', 'failed', 'long-names', 'wide', 'recorded-import',
+  'zero-baseline', 'no-write', 'observed-write', 'incomplete-write', 'partial', 'failed', 'long-names', 'wide', 'recorded-import',
   'tiny-decrease', 'tiny-increase', 'recorded-series-0', 'recorded-series-1', 'recorded-series-2'];
 const optionalNumber = value => value === '' || value === undefined ? null : Number(value);
 

@@ -26,6 +26,14 @@ python3 deploy/frontend/install.py
 или PR-ветки не попадают на стенд. CLI updater не ждёт GitHub Actions: проверки
 `main`, включая `frontend-contract-and-smoke`, должны быть обязательными перед merge.
 
+Перед первым релизом с библиотекой SQL-примеров нужно установить updater с
+поддержкой bundle v2: он переносит `demo/scenarios/` из того же проверенного CLI
+вместе с frontend. Прежний updater этот каталог не копирует. Версия bundle входит
+в identity релиза, поэтому повторная установка создаёт полный каталог даже для
+того же CLI SHA, если прежний updater уже подготовил неполный кандидат. Старые
+CLI без `demo/scenarios/` остаются совместимыми. История в `shared/` при этом не
+перекопируется и не очищается.
+
 По умолчанию используются `~/indexbudget` для CLI, `~/indexbudget-frontend` для
 frontend, порт HTTP 3000, loopback PostgreSQL 55433, Compose-проект
 `indexbudget-frontend`. Настройки сохраняются в `config.json`; повторный install
@@ -36,9 +44,10 @@ frontend, порт HTTP 3000, loopback PostgreSQL 55433, Compose-проект
 
 1. Updater берёт `update.lock`, сначала восстанавливает незавершённое переключение
    из `pending.json`, затем один раз разрешает реальный путь успешного CLI-релиза.
-2. Подготавливает отдельный каталог с frontend, Docker build context, точным SHA
+2. Подготавливает отдельный каталог с frontend, `demo/scenarios/` (если он есть
+   в исходном CLI), Docker build context, точным SHA
    и абсолютным путём к CLI. Из исходников не копируются `.local` и Python caches.
-   Настройки портов/образа также входят в идентификатор релиза.
+   Настройки портов/образа и версия состава bundle также входят в идентификатор релиза.
 3. Запускает Python-тесты frontend, CLI `--help`/`--version`, Compose validation.
    Installer дополнительно проверяет units через `systemd-analyze --user verify`
    до остановки действующего сервиса.

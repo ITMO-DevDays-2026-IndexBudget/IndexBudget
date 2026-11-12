@@ -196,7 +196,7 @@ class HtmlReportRenderer : ReportRenderer {
         text("SQL: ${queryCount(report) ?: "нет данных"} · профилей частот: ${report.input?.profiles?.size ?: "нет данных"}. ")
         val provenance = report.workloadProvenance
         if (provenance == null) {
-            append("Источник, период и охват неизвестны; репрезентативность не подтверждена.</p>")
+            append("Для SQL и частот вызовов источник, период и охват неизвестны; репрезентативность не подтверждена.</p>")
         } else {
             append("Источник — pg_stat_statements, разница снимков.</p><ul class=\"observation-windows\">")
             provenance.windows.forEach { window ->
@@ -208,6 +208,15 @@ class HtmlReportRenderer : ReportRenderer {
             append("</ul><p class=\"muted\">Репрезентативность нагрузки требует отдельной проверки. ")
             append("<a href=\"#provenance\">Интервалы, охват и историческое время</a></p>")
         }
+        if (report.statementKinds.values.any { it != StatementKind.SELECT }) {
+            append("<p class=\"notice\">В нагрузке есть UPDATE/DELETE: снижение planner cost относится к поиску и подготовке строк. Фактическая модификация таблицы не включена; полного ускорения DML эта оценка не предсказывает.</p>")
+        }
+        append("<p>Источник записи: ").append(h(when {
+            report.input?.tableWriteRatesOrigin != null -> if (report.input.tableWriteRatesOrigin.complete) "наблюдаемый · полный" else "наблюдаемый · неполный"
+            report.input?.tableWriteRates == null -> "не задан · расход неизвестен"
+            report.input.tableWriteRates.values.any { it.source == WriteRateSource.OBSERVED } -> "наблюдаемый · полнота неизвестна"
+            else -> "ручной"
+        })).append(". <a href=\"#provenance\">Строки/час и происхождение</a></p>")
         val warnings = (report.result.diagnostics.warnings + report.candidates.diagnostics.warnings).distinct()
         if (warnings.isNotEmpty()) {
             append("<p class=\"warning-text\">Ограничения данных: ")
@@ -394,7 +403,7 @@ class HtmlReportRenderer : ReportRenderer {
         writeProfile(report)
         val provenance = report.workloadProvenance
         if (provenance == null) {
-            append("<p>Происхождение не задано. Для ручного workload источник и охват наблюдений неизвестны.</p></section>")
+            append("<p>Происхождение SQL и частот вызовов не задано. Их источник и охват наблюдений неизвестны.</p></section>")
             return
         }
         append("<dl class=\"values\">")
@@ -501,14 +510,7 @@ class HtmlReportRenderer : ReportRenderer {
     }
 
     private fun StringBuilder.writeProfile(report: AnalysisReport) {
-        append("<details><summary>Исходный профиль записи</summary>")
-        val rates = report.input?.tableWriteRates
-        if (rates == null) append("<p>Профиль записи не задан. Неизвестные write units не заменяются нулём.</p>") else {
-            table(listOf("Таблица", "INSERT/час", "UPDATE/час", "DELETE/час", "Источник")) {
-                rates.toSortedMap().forEach { (table, rate) -> row(table, number(rate.insertsPerHour), number(rate.updatesPerHour), number(rate.deletesPerHour), rate.source.name.lowercase(Locale.ROOT)) }
-            }
-        }
-        append("</details>")
+        append(WriteProfileReport.render(report.input))
     }
 
     private fun StringBuilder.queries(report: AnalysisReport, includeDetails: Boolean = false) {
@@ -540,7 +542,9 @@ class HtmlReportRenderer : ReportRenderer {
                     .append("\" data-gain=\"").append(h(effect?.gainPercent ?: ""))
                     .append("\" data-cost=\"").append(h(after ?: "")).append("\"")
                 if (regression) append(" class=\"regression\"")
-                append("><th scope=\"row\"><a href=\"#query-").append(index).append("\">SQL ").append(index + 1).append("</a></th>")
+                append("><th scope=\"row\"><a href=\"#query-").append(index).append("\">SQL ").append(index + 1).append("</a>")
+                report.statementKinds[id]?.let { append("<br><span class=\"muted\">").append(h(it.name)).append("</span>") }
+                append("</th>")
                 cell(compactNumber(before))
                 cell(compactNumber(after))
                 cell(effect?.let(::effectLabel) ?: when {
@@ -567,7 +571,8 @@ class HtmlReportRenderer : ReportRenderer {
         val effects = report.queryEffects.associateBy { it.id }
         val queryIds = (report.input?.queries.orEmpty().map { it.id } + baseline?.costByQueryId.orEmpty().keys + selected?.costByQueryId.orEmpty().keys).distinct()
         queryIds.forEachIndexed { index, id ->
-            append("<details class=\"query-detail\" id=\"query-").append(index).append("\"><summary>SQL ").append(index + 1).append(" · текст, точные значения и планы</summary>")
+            append("<details class=\"query-detail\" id=\"query-").append(index).append("\"><summary>SQL ").append(index + 1).append(" · ").append(h(report.statementKinds[id]?.name ?: "Тип не сохранён")).append(" · текст, точные значения и планы</summary>")
+            if (report.statementKinds[id]?.let { it != StatementKind.SELECT } == true) append("<p>Cost оценивает поиск и подготовку строк. Фактическая модификация таблицы и сопровождение индексов не включены.</p>")
             append("<h3>Исходный SQL</h3>")
             copyable(report.input?.queries?.firstOrNull { it.id == id }?.sql ?: "Исходный SQL отсутствует в модели.", "copy-sql-$index", "Скопировать SQL")
             append("<h3>Полный ID</h3>")
