@@ -23,9 +23,17 @@ rate = Δcounter × 3600 / Δseconds
 (`MetricsCalculator`) и не зависит от источника rates: одинаковые ручные и наблюдаемые числа
 дают одинаковые расходы и решения бюджетов.
 
-## Снимки: `pg_stat_user_tables_snapshot` v1
+## Снимки окна
 
-Пара файлов `before`/`after` — JSON вида:
+`table_write_window` принимает два совместимых формата пары `before`/`after`:
+
+- **`pg_table_statistics_snapshot` v1** — выход настоящего коллектора [#102](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/issues/102)
+  (`JdbcTableStatisticsCollector` + `TableSnapshotJson`): читает `pg_stat_user_tables` по всей
+  текущей БД с ограничениями строк/байт/времени. При чтении конвертируется в окно #107: таблицы
+  без доступных счётчиков (`null`-counter'ы, `COUNTERS_UNAVAILABLE`) не получают rate —
+  uncovered-таблица workload затем честно ломает импорт; `TRACK_COUNTS_OFF`/`RESET_DETECTED`
+  сохраняются как причины неполноты, эпоха `stats_reset` берётся по окончанию чтения;
+- **`pg_stat_user_tables_snapshot` v1** — ручной экспорт того же смысла:
 
 ```json
 {

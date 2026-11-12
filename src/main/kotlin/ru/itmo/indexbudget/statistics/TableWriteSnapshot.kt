@@ -3,7 +3,13 @@ package ru.itmo.indexbudget.statistics
 import java.util.UUID
 
 /** Why a table write snapshot is partial; mirrors the statements snapshot reason set where applicable. */
-enum class TableWriteSnapshotReason { ROW_LIMIT, BYTE_LIMIT, DEADLINE_EXCEEDED, CANCELLED, READ_FAILED }
+enum class TableWriteSnapshotReason {
+    ROW_LIMIT, BYTE_LIMIT, DEADLINE_EXCEEDED, CANCELLED, READ_FAILED,
+    /** Collector could not read counters for at least one table (e.g. statistics row absent). */
+    COUNTERS_UNAVAILABLE,
+    /** A reset happened while the collector was reading (#102 snapshot, best-effort PG16 detection). */
+    RESET_DETECTED,
+}
 
 /** One row of pg_stat_user_tables for the observed database; counters are cumulative rows, not calls. */
 data class TableWriteEntry(

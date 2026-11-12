@@ -4,6 +4,7 @@ import ru.itmo.indexbudget.domain.AnalysisError
 import ru.itmo.indexbudget.domain.AnalysisException
 import ru.itmo.indexbudget.domain.ErrorCode
 import ru.itmo.indexbudget.domain.RunContext
+import tools.jackson.databind.JsonNode
 import tools.jackson.databind.json.JsonMapper
 import java.nio.file.Path
 import java.util.UUID
@@ -15,6 +16,8 @@ import java.util.UUID
  */
 object TableWriteSnapshotJson {
     const val KIND = "pg_stat_user_tables_snapshot"
+    /** Output kind of the #102 table statistics collector, accepted at import as window input. */
+    const val COLLECTOR_KIND = "pg_table_statistics_snapshot"
     private val mapper = JsonMapper.builder().build()
 
     fun render(value: TableWriteSnapshot): ByteArray = mapper.writeValueAsBytes(linkedMapOf(
@@ -50,6 +53,97 @@ object TableWriteSnapshotJson {
 
     fun read(path: Path, maxBytes: Int = 64 * 1024 * 1024, context: RunContext = RunContext()): TableWriteSnapshot {
         val root = ImportJson.read(path, maxBytes, context)
+        return when (ImportJson.text(root, "kind")) {
+            KIND -> readManual(root, context)
+            COLLECTOR_KIND -> readCollector(root)
+            else -> ImportJson.fail("Expected $KIND or $COLLECTOR_KIND v1.")
+        }
+    }
+
+    /** The #102 `pg_table_statistics_snapshot` output converted to the #107 window input. */
+    private fun readCollector(root: JsonNode): TableWriteSnapshot {
+        ImportJson.fields(root, setOf("schema_version", "kind", "snapshot_id", "source_id",
+            "database_oid", "reader_userid", "postgres_version", "track_counts", "scope",
+            "started_at", "finished_at", "database_stats_reset_before", "database_stats_reset_after",
+            "postmaster_started_at", "reset_detection", "status", "reasons", "limits", "row_count", "entries"))
+        if (ImportJson.long(root, "schema_version") != 1L) ImportJson.fail("Expected $COLLECTOR_KIND v1.")
+        val databaseOid = ImportJson.long(root, "database_oid")
+        val readerUserid = ImportJson.long(root, "reader_userid")
+        val postgresVersion = ImportJson.text(root, "postgres_version")
+        if (databaseOid <= 0 || readerUserid <= 0 || !postgresVersion.startsWith("16.")) {
+            ImportJson.fail("A PostgreSQL 16 source with a known database and reader is required.")
+        }
+        if (ImportJson.bool(root, "track_counts") != true) {
+            ImportJson.fail("track_counts must be present and enabled (true) to observe table write counters.")
+        }
+        val reasonNames = ImportJson.array(root, "reasons").map { it.asString() }
+        val reasons = reasonNames.map { name ->
+            when (TableSnapshotReason.valueOf(name)) {
+                TableSnapshotReason.ROW_LIMIT -> TableWriteSnapshotReason.ROW_LIMIT
+                TableSnapshotReason.BYTE_LIMIT -> TableWriteSnapshotReason.BYTE_LIMIT
+                TableSnapshotReason.DEADLINE_EXCEEDED -> TableWriteSnapshotReason.DEADLINE_EXCEEDED
+                TableSnapshotReason.CANCELLED -> TableWriteSnapshotReason.CANCELLED
+                TableSnapshotReason.READ_FAILED -> TableWriteSnapshotReason.READ_FAILED
+                // Both mean the counters of this snapshot are not trustworthy as observations.
+                TableSnapshotReason.TRACK_COUNTS_OFF, TableSnapshotReason.COUNTERS_UNAVAILABLE ->
+                    TableWriteSnapshotReason.COUNTERS_UNAVAILABLE
+                TableSnapshotReason.RESET_DETECTED -> TableWriteSnapshotReason.RESET_DETECTED
+            }
+        }.distinct()
+        val entries = ImportJson.array(root, "entries").mapIndexedNotNull { index, row ->
+            ImportJson.fields(row, setOf("relation_oid", "schema", "name", "select_access",
+                "n_tup_ins", "n_tup_upd", "n_tup_del", "n_tup_hot_upd"))
+            // Tables whose statistics row is absent carry null counters: their rate is unknown,
+            // never zero. They stay out of the entries; an uncovered workload table then fails
+            // import explicitly instead of silently receiving a fabricated rate.
+            if (row.get("n_tup_ins").isNull || row.get("n_tup_upd").isNull || row.get("n_tup_del").isNull) {
+                return@mapIndexedNotNull null
+            }
+            val entry = TableWriteEntry(
+                ImportJson.long(row, "relation_oid"),
+                ImportJson.text(row, "schema"),
+                ImportJson.text(row, "name"),
+                ImportJson.long(row, "n_tup_ins"),
+                ImportJson.long(row, "n_tup_upd"),
+                ImportJson.long(row, "n_tup_del"),
+                row.get("n_tup_hot_upd")?.takeUnless { it.isNull }?.let { ImportJson.long(row, "n_tup_hot_upd") },
+            )
+            if (entry.tableOid <= 0 || entry.schemaName.isBlank() || entry.tableName.isBlank()) {
+                ImportJson.fail("Table snapshot entry ${if (entry.tableName.isBlank()) index else entry.tableName} needs a positive OID and nonblank names.")
+            }
+            if (entry.inserts < 0 || entry.updates < 0 || entry.deletes < 0 || (entry.hotUpdates ?: 0L) < 0L) {
+                throw AnalysisException(AnalysisError(ErrorCode.NUMERIC_ERROR,
+                    "Table write counters must be nonnegative.", details = mapOf("table" to "${entry.schemaName}.${entry.tableName}")))
+            }
+            entry
+        }
+        val byOid = entries.associateBy { it.tableOid }
+        if (byOid.size != entries.size) ImportJson.fail("Table snapshot entries must have unique OIDs.")
+        if (entries.map { it.schemaName to it.tableName }.distinct().size != entries.size) {
+            ImportJson.fail("Table snapshot entries must have unique schema-qualified names.")
+        }
+        val complete = ImportJson.text(root, "status") == "completed"
+        // A reset inside one reading window already invalidates that snapshot's counters; the
+        // epoch carried forward for pair comparison is the one the reading ended in.
+        val statsReset = root.get("database_stats_reset_after")?.takeUnless { it.isNull }
+            ?.let { ImportJson.text(root, "database_stats_reset_after") }
+        val snapshot = TableWriteSnapshot(
+            snapshotId = UUID.fromString(ImportJson.text(root, "snapshot_id")),
+            source = TableWriteSource(UUID.fromString(ImportJson.text(root, "source_id")),
+                databaseOid, readerUserid, trackCounts = true, postgresVersion, statsReset),
+            startedAt = ImportJson.text(root, "started_at"),
+            finishedAt = ImportJson.text(root, "finished_at"),
+            entries = entries,
+            complete = complete && reasons.isEmpty(),
+            reasons = reasons,
+        )
+        if (ImportJson.text(root, "status") != if (complete) "completed" else "partial") {
+            ImportJson.fail("Inconsistent table snapshot status.")
+        }
+        return snapshot
+    }
+
+    private fun readManual(root: JsonNode, context: RunContext): TableWriteSnapshot {
         ImportJson.fields(root, setOf("schema_version", "kind", "snapshot_id", "source_id", "scope",
             "postgres_version", "track_counts", "stats_reset", "started_at", "finished_at",
             "status", "reasons", "row_count", "entries"))

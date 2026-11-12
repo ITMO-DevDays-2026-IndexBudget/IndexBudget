@@ -65,27 +65,10 @@ class ObservedImportIntegrationTest {
             statement.execute("ANALYZE $schema.orders")
         } }
 
-        data class Counters(val inserts: Long, val updates: Long, val deletes: Long, val hot: Long, val oid: Long)
-        fun counters(table: String): Counters = connection().use { c -> c.createStatement().use { statement ->
-            statement.executeQuery(
-                "SELECT t.n_tup_ins, t.n_tup_upd, t.n_tup_del, t.n_tup_hot_upd, t.relid " +
-                    "FROM pg_catalog.pg_stat_user_tables t " +
-                    "WHERE t.schemaname OPERATOR(pg_catalog.=) '$schema' AND t.relname OPERATOR(pg_catalog.=) '$table'"
-            ).use { rows ->
-                check(rows.next())
-                Counters(rows.getLong(1), rows.getLong(2), rows.getLong(3), rows.getLong(4), rows.getLong(5))
-            }
-        } }
-        fun databaseOid(): Long = connection().use { c -> c.createStatement().use { statement ->
-            statement.executeQuery(
-                "SELECT oid FROM pg_catalog.pg_database " +
-                    "WHERE datname OPERATOR(pg_catalog.=) pg_catalog.current_database()"
-            ).use { rows -> check(rows.next()); rows.getLong(1) }
-        } }
-
-        val recordsBefore = counters("records")
-        val ordersBefore = counters("orders")
-        val beforeAt = Instant.now()
+        // The write window is collected by the real #102 collector over the whole database:
+        // records, the untouched orders table and everything else the instance contains.
+        val tableCollector = JdbcTableStatisticsCollector({ connection() })
+        val writeBefore = tableCollector.collect(source, SnapshotLimits(), RunContext())
         connection().use { c -> c.createStatement().use { statement ->
             repeat(10) { statement.execute("INSERT INTO $schema.records VALUES (1000 + $it, $it)") }
             repeat(5) { statement.execute("UPDATE $schema.records SET value = -value WHERE id OPERATOR(pg_catalog.=) ${it + 1}") }
@@ -93,10 +76,9 @@ class ObservedImportIntegrationTest {
             // Activity on a table outside the workload: it must stay out of the exported rates.
             repeat(3) { statement.execute("INSERT INTO $schema.orders VALUES ($it, $it)") }
         } }
-        val recordsAfter = counters("records")
-        val ordersAfter = counters("orders")
-        val afterAt = Instant.now()
-        val databaseOid = databaseOid()
+        val writeAfter = tableCollector.collect(source, SnapshotLimits(), RunContext())
+        Files.write(directory.resolve("write-before.json"), TableSnapshotJson().render(writeBefore))
+        Files.write(directory.resolve("write-after.json"), TableSnapshotJson().render(writeAfter))
         // Statements window for the read side: one stable query executed between two real collections.
         val collector = JdbcStatisticsCollector({ connection() })
         // Stable initial counter: never invent a missing starting observation.
@@ -115,20 +97,6 @@ class ObservedImportIntegrationTest {
         val exampleKey = StatisticsKey(source, statementRow.dbid, statementRow.userid,
             requireNotNull(statementRow.queryid), statementRow.toplevel)
 
-        fun tableSnapshot(at: Instant, records: Counters, orders: Counters) = TableWriteSnapshot(
-            snapshotId = UUID.nameUUIDFromBytes((source.toString() + at).toByteArray()),
-            source = TableWriteSource(source, databaseOid, statementRow.userid, trackCounts = true,
-                postgresVersion = "16.8", statsReset = null),
-            startedAt = at.toString(), finishedAt = at.toString(),
-            entries = listOf(
-                TableWriteEntry(records.oid, schema, "records",
-                    records.inserts, records.updates, records.deletes, records.hot),
-                TableWriteEntry(orders.oid, schema, "orders",
-                    orders.inserts, orders.updates, orders.deletes, orders.hot)))
-        Files.write(directory.resolve("write-before.json"),
-            TableWriteSnapshotJson.render(tableSnapshot(beforeAt, recordsBefore, ordersBefore)))
-        Files.write(directory.resolve("write-after.json"),
-            TableWriteSnapshotJson.render(tableSnapshot(afterAt, recordsAfter, ordersAfter)))
         Files.write(directory.resolve("write-examples.json"), ImportJson.mapper.writeValueAsBytes(mapOf(
             "schema_version" to 1, "kind" to "pg_stat_statements_examples",
             "examples" to listOf(mapOf("key" to ImportJson.key(exampleKey),
@@ -167,10 +135,18 @@ class ObservedImportIntegrationTest {
         val rates = requireNotNull(input.tableWriteRates)
         assertEquals(setOf("$schema.records"), rates.keys)
         assertEquals(WriteRateSource.OBSERVED, rates.getValue("$schema.records").source)
-        val elapsedSeconds = Duration.between(beforeAt, afterAt).toNanos() / 1.0e9
-        assertEquals(10.0 * 3600.0 / elapsedSeconds, rates.getValue("$schema.records").insertsPerHour, 0.5)
-        assertEquals(5.0 * 3600.0 / elapsedSeconds, rates.getValue("$schema.records").updatesPerHour, 0.5)
-        assertEquals(2.0 * 3600.0 / elapsedSeconds, rates.getValue("$schema.records").deletesPerHour, 0.5)
+        fun midpoint(snapshot: TableSnapshot): Instant {
+            val start = Instant.parse(snapshot.startedAt)
+            return start.plus(Duration.between(start, Instant.parse(snapshot.finishedAt)).dividedBy(2))
+        }
+        val elapsedSeconds = Duration.between(midpoint(writeBefore), midpoint(writeAfter)).toNanos() / 1.0e9
+        // Real collector intervals are short but not instant; compare within a relative tolerance.
+        assertEquals(10.0 * 3600.0 / elapsedSeconds, rates.getValue("$schema.records").insertsPerHour,
+            10.0 * 3600.0 / elapsedSeconds * 0.1)
+        assertEquals(5.0 * 3600.0 / elapsedSeconds, rates.getValue("$schema.records").updatesPerHour,
+            5.0 * 3600.0 / elapsedSeconds * 0.1)
+        assertEquals(2.0 * 3600.0 / elapsedSeconds, rates.getValue("$schema.records").deletesPerHour,
+            2.0 * 3600.0 / elapsedSeconds * 0.1)
         val origin = requireNotNull(input.tableWriteRatesOrigin)
         assertEquals(true, origin.complete)
         assertEquals(source.toString(), origin.sourceId)
@@ -190,9 +166,13 @@ class ObservedImportIntegrationTest {
 
         // A counter decrease on the workload table with an enabled budget fails honestly; it never
         // falls back to manual values.
-        val decreased = Files.readString(directory.resolve("write-after.json"))
-            .replaceFirst(Regex("\"n_tup_ins\":(\\d+)"), "\"n_tup_ins\":1")
-        Files.write(directory.resolve("write-decreased.json"), decreased.toByteArray())
+        val decreasedTree = ImportJson.mapper.readTree(Files.readAllBytes(directory.resolve("write-after.json")))
+        // The collector snapshot covers every user table of the database, including schemas left
+        // over from other scenarios: address the workload table by its full name.
+        (decreasedTree["entries"].toList()
+            .single { it["schema"].asString() == schema && it["name"].asString() == "records" }
+            as tools.jackson.databind.node.ObjectNode).put("n_tup_ins", 1L)
+        Files.write(directory.resolve("write-decreased.json"), ImportJson.mapper.writeValueAsBytes(decreasedTree))
         val incompleteConfig = config("write-incomplete.json", "table_write_window" to
             mapOf("before" to "write-before.json", "after" to "write-decreased.json"),
             writeBudget = 100)

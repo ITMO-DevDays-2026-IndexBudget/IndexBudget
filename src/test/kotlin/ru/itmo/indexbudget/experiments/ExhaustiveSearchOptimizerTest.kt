@@ -174,6 +174,44 @@ class ExhaustiveSearchOptimizerTest {
     }
 
     @Test
+    fun `verification continues after the caller command and search deadlines expire`() {
+        val fixture = fixture()
+        val workload = resolved(fixture.input)
+        var now = 0L
+        val clock = NanoClock { now }
+        val caller = RunContext(clock = clock).also { it.startSearch() }
+        val baseline = fixture.evaluator.evaluate(emptyList(), workload, caller)
+        val optimizer = ExhaustiveSearchOptimizer(verificationTimeout = Duration.ofMinutes(10), clock = clock)
+        // Both NORMAL deadlines expire after the first subset, while verification still has
+        // eight minutes left. Subsequent evaluator calls must retain usable SQL timeouts.
+        val delayed = delayingEvaluator(fixture, jumpOn = setOf(listOf("i"))) {
+            now = Duration.ofMinutes(2).toNanos()
+        }
+        val evaluator = object : ConfigurationEvaluator by delayed {
+            override fun evaluate(
+                candidates: List<IndexCandidate>,
+                workload: ResolvedWorkload,
+                context: RunContext,
+            ): EvaluationResult {
+                assertEquals(Duration.ofSeconds(2), context.explainTimeLimit())
+                assertEquals(Duration.ofSeconds(5), context.connectionTimeLimit())
+                return delayed.evaluate(candidates, workload, context)
+            }
+        }
+
+        val result = optimizer.search(workload, fixture.candidates, baseline, evaluator, metrics, comparator, caller)
+
+        assertTrue(caller.remainingTime().isZero)
+        assertTrue(caller.remainingCommandTime().isZero)
+        assertTrue(result.complete)
+        assertTrue(result.verifiedOptimum)
+        assertNull(result.stopReason)
+        assertEquals(7, result.evaluatedSets)
+        assertEquals(14, result.statistics.explainAttempts)
+        assertEquals(listOf("j", "k"), result.bestMean.evaluation.candidateIds)
+    }
+
+    @Test
     fun `cancellation between evaluations keeps saved incumbents and an honest incomplete flag`() {
         val fixture = fixture()
         val workload = resolved(fixture.input)

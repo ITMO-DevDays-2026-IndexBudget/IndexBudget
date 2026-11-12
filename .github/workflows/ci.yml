@@ -176,6 +176,18 @@ jobs:
       - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
       - name: Evaluate exact sets on a disposable PostgreSQL and HypoPG backend
         run: bash demo/check-hypopg.sh
+      - name: Verify published demo SQL scenarios on exact seed v1
+        run: bash demo/check-scenarios.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: demo-scenarios-verification
+          path: |
+            build/scenarios-verification/
+            build/scenario-runs-*/
+            build/test-results/test/
+            build/reports/tests/test/
+          if-no-files-found: warn
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
@@ -203,4 +215,23 @@ jobs:
           path: |
             build/test-results/test/
             build/reports/tests/test/
+          if-no-files-found: warn
+
+  table-statistics-integration:
+    name: postgres-table-statistics-integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78
+        with:
+          distribution: temurin
+          java-version: '25'
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c
+      - run: bash demo/check-table-statistics.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: table-statistics-test-results
+          path: build/test-results/test/
           if-no-files-found: warn
