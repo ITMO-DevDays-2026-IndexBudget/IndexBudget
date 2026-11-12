@@ -22,8 +22,8 @@ const cli = path.resolve(process.env.FRONTEND_CLI || 'build/install/indexbudget/
       await page.locator('#workspace:not([disabled])').waitFor();
       const skip = page.locator('[data-tour="skip"]');
       if (await skip.isVisible()) await skip.click();
-      // This parity test intentionally uses the original SELECT-only dataset and reader role.
-      await page.locator('[data-template="01-records"]').click();
+      // Для сравнения оставляем один SELECT объединённого датасета.
+      await page.locator('[data-template="04-scenarios"]').click();
       // A small supported workload keeps this acceptance deterministic within the normal budget.
       await page.evaluate(() => {
         const first = state.workload.queries[0];
@@ -62,7 +62,7 @@ const cli = path.resolve(process.env.FRONTEND_CLI || 'build/install/indexbudget/
       }
       try {
         await promisify(execFile)(cli, args, {timeout: 720000, maxBuffer: 8 * 1024 * 1024,
-          env: {...process.env, INDEXBUDGET_DATABASE_URL: `jdbc:postgresql://127.0.0.1:${process.env.FRONTEND_DB_PORT || '55433'}/frontend_demo?user=frontend_reader`}});
+          env: {...process.env, INDEXBUDGET_DATABASE_URL: `jdbc:postgresql://127.0.0.1:${process.env.FRONTEND_DB_PORT || '55433'}/frontend_demo?user=frontend_scenarios`}});
       } catch (error) { if (error.code !== 3) throw error; }
       const file = mode === 'single' ? 'report.json' : 'series.json';
       const remote = await (await page.request.get(reportBase + file)).json();

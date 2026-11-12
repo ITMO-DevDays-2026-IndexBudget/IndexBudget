@@ -10,21 +10,21 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from server import make_handler, http_json, series_result, report_artifact, Jobs, LocalRunner, ROOT, read_json, write_json, validate_request
-TEMPLATES = {t['id']: t for t in (read_json(p) for p in (ROOT / 'templates').glob('*.json'))}
+from server import make_handler, http_json, series_result, report_artifact, Jobs, LocalRunner, ROOT, read_json, write_json, validate_request, load_templates
+TEMPLATES = load_templates(ROOT)
 def request():
-    t = TEMPLATES['01-records']
+    t = TEMPLATES['04-scenarios']
     return dict(template_id=t['id'], template_version=t['version'], workload=copy.deepcopy(t['workload']),
                 series=dict(schema_version=1, budget='storage_budget_bytes', values=[0, 16777216, 67108864], timeout_seconds=60))
 
 class SeriesTests(unittest.TestCase):
     def test_series_fixture_keeps_write_profile_regardless_of_template_order(self):
         reordered = {key: TEMPLATES[key] for key in sorted(TEMPLATES, reverse=True)}
-        self.assertNotEqual(next(iter(reordered)), '01-records')
+        self.assertNotEqual(next(iter(reordered)), '04-scenarios')
         with patch.dict(TEMPLATES, reordered, clear=True):
             data = request()
-            self.assertEqual(data['template_id'], '01-records')
-            self.assertEqual(data['workload']['table_write_rates'], TEMPLATES['01-records']['workload']['table_write_rates'])
+            self.assertEqual(data['template_id'], '04-scenarios')
+            self.assertEqual(data['workload']['table_write_rates'], TEMPLATES['04-scenarios']['workload']['table_write_rates'])
             data['series']['budget'] = 'write_budget_units_per_hour'
             validate_request(data, TEMPLATES)
 

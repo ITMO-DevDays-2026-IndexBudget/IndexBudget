@@ -32,7 +32,7 @@ def seed_statements(source, table):
     return tuple(statements)
 
 
-def scenario_template(repository, records_template):
+def scenario_template(repository):
     directory = Path(repository) / "demo/scenarios"
     catalog = read_json(directory / "catalog.json")
     workload = read_json(directory / "workload.json")
@@ -73,8 +73,17 @@ def scenario_template(repository, records_template):
         profile["calls_per_hour"] = {id: profile["calls_per_hour"][id] for id in INITIAL_QUERY_IDS}
     initial["constraints"]["query_cost_guards"] = {
         id: limit for id, limit in guards.items() if id in INITIAL_QUERY_IDS}
-    records_catalog = copy.deepcopy(records_template["catalog"]["tables"][0])
-    records_catalog["rows"] = catalog["dataset"]["tables"]["public.records"]
+    records_catalog = {
+        "name": "public.records", "rows": catalog["dataset"]["tables"]["public.records"],
+        "columns": [
+            {"name": "id", "type": "bigint", "primary": True, "nullable": False},
+            {"name": "group_id", "type": "integer", "primary": False, "nullable": False},
+            {"name": "value", "type": "integer", "primary": False, "nullable": False},
+            {"name": "created_at", "type": "timestamp", "primary": False, "nullable": False},
+            {"name": "payload", "type": "text", "primary": False, "nullable": False},
+        ],
+        "indexes": ["CREATE UNIQUE INDEX records_pkey ON public.records USING btree (id)"],
+    }
     groups_catalog = {
         "name": "public.groups", "rows": catalog["dataset"]["tables"]["public.groups"],
         "columns": [
@@ -85,7 +94,7 @@ def scenario_template(repository, records_template):
         "indexes": ["CREATE UNIQUE INDEX groups_pkey ON public.groups USING btree (id)"],
     }
     return {
-        "id": SCENARIO_TEMPLATE_ID, "version": 1, "name": "Чтение и запись", "tag": "Библиотека SQL",
+        "id": SCENARIO_TEMPLATE_ID, "version": 1, "name": "Чтение и запись", "tag": "Быстрый старт",
         "description": "Записи и группы. Девять примеров SELECT, UPDATE и DELETE для обычного дня и пика.",
         "accent": "mint", "schema_sql": records_schema + "\n\n" + groups_schema,
         "seed_sql": records_seed + "\n\n" + groups_seed,
@@ -101,5 +110,5 @@ def load_templates(frontend):
     frontend = Path(frontend)
     templates = {template["id"]: template for template in
                  (read_json(path) for path in sorted((frontend / "templates").glob("*.json")))}
-    templates[SCENARIO_TEMPLATE_ID] = scenario_template(frontend.parent, templates["01-records"])
+    templates = {SCENARIO_TEMPLATE_ID: scenario_template(frontend.parent), **templates}
     return templates

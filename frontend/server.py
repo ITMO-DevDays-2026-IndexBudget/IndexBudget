@@ -572,6 +572,8 @@ def make_handler(jobs, templates):
                     self.send(404, {"error": "Файл не найден."})
             elif path in ("/", "/index.html", "/app.js", "/style.css", "/drop-table.jpg"):
                 self.file(ROOT / "static" / ("index.html" if path == "/" else path[1:]))
+            elif path in {f"/diagrams/{t['id']}-v{t['version']}.svg" for t in templates.values()}:
+                self.file(ROOT / "static" / path[1:])
             else:
                 self.send(404, {"error": "Страница не найдена."})
 
