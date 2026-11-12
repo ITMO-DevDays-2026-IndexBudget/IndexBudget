@@ -1,9 +1,9 @@
 {
   "id": "02-shop",
-  "version": 2,
+  "version": 3,
   "name": "Интернет-магазин",
   "tag": "7 связанных таблиц",
-  "description": "Каталог, покупки, оплата и доставка. Обычный день, распродажа и обработка доставок: 12 запросов на 2 млн строк.",
+  "description": "Каталог, покупки, оплата и доставка. 12 запросов на 2 млн строк: B-tree и компактный BRIN для заказов за сутки при бюджете 8 MiB.",
   "accent": "sand",
   "schema_sql": "CREATE TABLE public.customers (\n  id integer PRIMARY KEY,\n  region integer NOT NULL,\n  segment integer NOT NULL,\n  name text NOT NULL\n);\n\nCREATE TABLE public.categories (\n  id integer PRIMARY KEY,\n  name text NOT NULL\n);\n\nCREATE TABLE public.products (\n  id integer PRIMARY KEY,\n  category_id integer NOT NULL REFERENCES public.categories(id),\n  price integer NOT NULL,\n  stock integer NOT NULL,\n  name text NOT NULL\n);\n\nCREATE TABLE public.orders (\n  id bigint PRIMARY KEY,\n  customer_id integer NOT NULL REFERENCES public.customers(id),\n  status integer NOT NULL,\n  total integer NOT NULL,\n  created_at timestamp NOT NULL\n);\n\nCREATE TABLE public.order_items (\n  id bigint PRIMARY KEY,\n  order_id bigint NOT NULL REFERENCES public.orders(id),\n  product_id integer NOT NULL REFERENCES public.products(id),\n  quantity integer NOT NULL,\n  unit_price integer NOT NULL\n);\n\nCREATE TABLE public.payments (\n  id bigint PRIMARY KEY,\n  order_id bigint NOT NULL REFERENCES public.orders(id),\n  payer_id integer NOT NULL REFERENCES public.customers(id),\n  status integer NOT NULL,\n  method integer NOT NULL,\n  created_at timestamp NOT NULL\n);\n\nCREATE TABLE public.shipments (\n  id bigint PRIMARY KEY,\n  order_id bigint NOT NULL REFERENCES public.orders(id),\n  recipient_id integer NOT NULL REFERENCES public.customers(id),\n  status integer NOT NULL,\n  region integer NOT NULL,\n  created_at timestamp NOT NULL\n);",
   "seed_sql": "INSERT INTO public.customers\nSELECT i, (i % 20)::integer, ((i / 20) % 4)::integer, 'customer-' || i\nFROM generate_series(1, 20000) AS g(i);\nINSERT INTO public.categories\nSELECT i, 'category-' || i FROM generate_series(1, 100) AS g(i);\nINSERT INTO public.products\nSELECT i, (i % 100 + 1)::integer, ((i * 37) % 10000 + 100)::integer,\n       ((i / 100) % 50)::integer, 'product-' || i\nFROM generate_series(1, 20000) AS g(i);\nINSERT INTO public.orders\nSELECT i, ((i * 73) % 20000 + 1)::integer, ((i / 20000) % 5)::integer,\n       ((i * 37) % 10000 + 500)::integer,\n       timestamp '2026-01-01' + i * interval '30 seconds'\nFROM generate_series(1, 300000) AS g(i);\nINSERT INTO public.order_items\nSELECT i, ((i - 1) / 4 + 1)::bigint, ((i * 97 + i / 20000) % 20000 + 1)::integer,\n       (i % 3 + 1)::integer, ((i * 37) % 10000 + 100)::integer\nFROM generate_series(1, 1200000) AS g(i);\nINSERT INTO public.payments\nSELECT id, id, customer_id, ((id / 1000 + id / 20000) % 4)::integer, ((id / 7) % 3)::integer,\n       created_at + interval '5 minutes'\nFROM public.orders;\nINSERT INTO public.shipments\nSELECT id, id, customer_id, ((id / 1000 + id / 20000) % 4)::integer, ((id * 73 + id / 20000) % 20)::integer,\n       created_at + interval '1 day'\nFROM public.orders WHERE id <= 210000;",
@@ -23,8 +23,8 @@
         "sql": "SELECT o.id, o.total, c.name FROM public.orders o INNER JOIN public.customers c ON o.customer_id = c.id WHERE c.id = 42 ORDER BY o.created_at DESC LIMIT 20"
       },
       {
-        "id": "orders_by_status",
-        "sql": "SELECT id, customer_id, total FROM public.orders WHERE status = 1 ORDER BY created_at DESC LIMIT 50"
+        "id": "orders_by_period",
+        "sql": "SELECT id, customer_id, total FROM public.orders WHERE created_at >= '2026-04-10'::timestamp AND created_at < '2026-04-11'::timestamp"
       },
       {
         "id": "regional_orders",
@@ -73,7 +73,7 @@
         "weight": 7,
         "calls_per_hour": {
           "orders_by_customer": 4000,
-          "orders_by_status": 300,
+          "orders_by_period": 300,
           "regional_orders": 100,
           "category_products": 6000,
           "low_stock": 100,
@@ -91,7 +91,7 @@
         "weight": 2,
         "calls_per_hour": {
           "orders_by_customer": 2000,
-          "orders_by_status": 1500,
+          "orders_by_period": 1500,
           "regional_orders": 600,
           "category_products": 18000,
           "low_stock": 5000,
@@ -109,7 +109,7 @@
         "weight": 1,
         "calls_per_hour": {
           "orders_by_customer": 300,
-          "orders_by_status": 6000,
+          "orders_by_period": 18000,
           "regional_orders": 2500,
           "category_products": 200,
           "low_stock": 300,
@@ -168,7 +168,7 @@
       }
     },
     "constraints": {
-      "storage_budget_bytes": 134217728,
+      "storage_budget_bytes": 8388608,
       "write_budget_units_per_hour": 120000,
       "max_indexes": 5
     }
@@ -504,19 +504,19 @@
       }
     },
     {
-      "id": "orders_by_status",
-      "name": "Очередь заказов",
-      "purpose": "Новые заказы для обработки оператором.",
-      "sql": "SELECT id, customer_id, total FROM public.orders WHERE status = 1 ORDER BY created_at DESC LIMIT 50",
+      "id": "orders_by_period",
+      "name": "Заказы за сутки",
+      "purpose": "Выборка заказов за сутки для обработки доставок. Время растёт вместе с порядком строк: при малом бюджете места полезен компактный BRIN.",
+      "sql": "SELECT id, customer_id, total FROM public.orders WHERE created_at >= '2026-04-10'::timestamp AND created_at < '2026-04-11'::timestamp",
       "statement_kind": "select",
       "tables": [
         "public.orders"
       ],
-      "syntax_hint": "Фильтры по значениям и диапазонам, ORDER BY и LIMIT.",
+      "syntax_hint": "Полуоткрытый диапазон по created_at: от начала суток включительно до начала следующих суток.",
       "calls_per_hour": {
         "normal": 300,
         "sale": 1500,
-        "fulfillment": 6000
+        "fulfillment": 18000
       }
     },
     {

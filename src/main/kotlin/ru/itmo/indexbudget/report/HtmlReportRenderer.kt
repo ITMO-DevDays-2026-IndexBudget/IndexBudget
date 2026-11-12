@@ -51,7 +51,7 @@ class HtmlReportRenderer : ReportRenderer {
             when (section) {
                 HtmlReportSection.OVERVIEW -> overview(report)
                 HtmlReportSection.QUERIES -> queries(report)
-                HtmlReportSection.QUERY_DETAILS -> { this.section("query-details", "SQL и планы", ""); queryDetails(report); append("</section>") }
+                HtmlReportSection.QUERY_DETAILS -> { append("<section id=\"query-details\">"); queryDetailsGroup(report); append("</section>") }
                 HtmlReportSection.PROFILES -> profiles(report)
                 HtmlReportSection.INDEXES -> indexes(report)
                 HtmlReportSection.INDEX_DETAILS -> { this.section("index-details", "Каталог индексов и DDL", ""); indexDetails(report); append("</section>") }
@@ -166,24 +166,35 @@ class HtmlReportRenderer : ReportRenderer {
             selected == null -> append("<p>Пригодная рекомендация не сохранена.</p>")
             selected.evaluation.candidateIds.isEmpty() -> append("<p>Выбран пустой набор: оставь существующие индексы.</p>")
             else -> {
-                append("<ul class=\"recommended-indexes\">")
-                selected.evaluation.candidateIds.forEachIndexed { index, id ->
-                    val candidate = report.candidates.candidates.firstOrNull { it.id == id }
-                    append("<li><a href=\"#indexes\"><code>")
-                    text(candidate?.let { shortDefinition(it, report) } ?: "Индекс ${index + 1} · определение неизвестно")
-                    append("</code></a></li>")
+                val groups = selected.evaluation.candidateIds.mapIndexed { index, id ->
+                    index to report.candidates.candidates.firstOrNull { it.id == id }
+                }.groupBy { it.second?.definition?.table }
+                append("<div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Предлагаемые индексы\"><table class=\"recommended-table\"><thead><tr><th scope=\"col\">Таблица</th><th scope=\"col\">Индекс</th></tr></thead><tbody>")
+                for ((table, candidates) in groups.entries.sortedWith(compareBy({ it.key?.name }, { it.key?.schema }))) {
+                    append("<tr><th scope=\"row\"><code>")
+                    text(table?.let { shortTable(it, report) } ?: "Таблица неизвестна")
+                    append("</code></th><td><ul class=\"recommended-indexes\">")
+                    for ((index, candidate) in candidates) {
+                        append("<li><a href=\"#indexes\"><code>")
+                        text(candidate?.let { shortIndexDefinition(it) } ?: "Индекс ${index + 1} · определение неизвестно")
+                        append("</code></a></li>")
+                    }
+                    append("</ul></td></tr>")
                 }
-                append("</ul>")
+                append("</tbody></table></div>")
             }
         }
         append("</div><p class=\"effect-sentence\">Оценочная стоимость выбранных запросов с учётом частот: <strong class=\"")
             .append(effectStyle(summary.meanEffect)).append("\">")
         text(if (result.selected == null) "Эффект не определён" else effectLabel(summary.meanEffect))
         append("</strong> по сравнению с существующими индексами.</p>")
-        append("<p class=\"muted baseline-note\"><strong>Planner cost</strong> — оценка затрат PostgreSQL, не время выполнения. Снижение cost не гарантирует ускорения.</p>")
-        append("<dl class=\"summary-facts\">")
-        entry("Регрессии SQL", summary.regressedQueryCount?.let { "$it из ${queryCount(report) ?: "нет данных"}" } ?: "Нет данных")
-        append("</dl>")
+        if (summary.regressedQueryCount == 0) {
+            append("<p class=\"summary-facts\">Регрессий SQL не обнаружено</p>")
+        } else {
+            append("<dl class=\"summary-facts\">")
+            entry("Регрессии SQL", summary.regressedQueryCount?.let { "$it из ${queryCount(report) ?: "нет данных"}" } ?: "Нет данных")
+            append("</dl>")
+        }
         if (summary.regressedQueryCount != null && summary.regressedQueryCount > 0) {
             append("<p class=\"error\"><a href=\"#queries\">Посмотреть ухудшения запросов</a></p>")
         }
@@ -192,13 +203,10 @@ class HtmlReportRenderer : ReportRenderer {
     }
 
     private fun StringBuilder.workloadContext(report: AnalysisReport) {
-        append("<div class=\"workload-context\"><h2>Основа вывода</h2><p>")
-        text("SQL: ${queryCount(report) ?: "нет данных"} · профилей частот: ${report.input?.profiles?.size ?: "нет данных"}. ")
+        append("<div class=\"workload-context\"><h2>Основа вывода</h2>")
         val provenance = report.workloadProvenance
-        if (provenance == null) {
-            append("Источник, период и охват SQL-нагрузки не указаны. Неизвестно, насколько она отражает рабочую БД.</p>")
-        } else {
-            append("Источник — pg_stat_statements, разница снимков.</p><ul class=\"observation-windows\">")
+        if (provenance != null) {
+            append("<p>Источник — pg_stat_statements, разница снимков.</p><ul class=\"observation-windows\">")
             provenance.windows.forEach { window ->
                 append("<li><span>").append(h(window.profileId)).append("</span> · <span class=\"quantity\">")
                 text(windowDuration(window))
@@ -219,9 +227,7 @@ class HtmlReportRenderer : ReportRenderer {
         })).append(". <a href=\"#provenance\">Строки/час и происхождение</a></p>")
         val warnings = (report.result.diagnostics.warnings + report.candidates.diagnostics.warnings).distinct()
         if (warnings.isNotEmpty()) {
-            append("<p class=\"warning-text\">Ограничения данных: ")
-            text(warnings.joinToString(" ") { it.message })
-            append(" <a href=\"#search\">Подробности</a></p>")
+            append("<p class=\"warning-text\">Есть ограничения данных: <a href=\"#search\">подробности</a></p>")
         }
         append("</div>")
     }
@@ -320,8 +326,10 @@ class HtmlReportRenderer : ReportRenderer {
     }
 
     private fun shortDefinition(candidate: IndexCandidate, report: AnalysisReport): String =
-        shortTable(candidate.definition.table, report) +
-            " · ${candidate.definition.method} " +
+        shortTable(candidate.definition.table, report) + " · " + shortIndexDefinition(candidate)
+
+    private fun shortIndexDefinition(candidate: IndexCandidate): String =
+        "${candidate.definition.method} " +
             "(" + candidate.definition.keys.joinToString { it.column.name } + ")" +
             candidate.definition.includedColumns.takeIf { it.isNotEmpty() }?.joinToString(", ", " INCLUDE (", ")") { it.name }.orEmpty()
 
@@ -456,7 +464,7 @@ class HtmlReportRenderer : ReportRenderer {
         row("Дополнительные индексы", number(usage?.indexCount), number(constraints?.maxIndexes))
         append("</tbody></table></div>")
         if (usage != null) {
-            append("<p>Размер оценён HypoPG; расход места учитывается с запасом ×").append(h(number(usage.sizeSafetyFactor)))
+            append("<p class=\"muted resource-note\">Размер оценён HypoPG; расход места учитывается с запасом ×").append(h(number(usage.sizeSafetyFactor)))
                 .append(". Фактический размер может отличаться.</p>")
         }
         append("<p class=\"muted\">Бюджет записи — лимит условных затрат на обслуживание новых индексов при изменении данных. <a href=\"#resource-model\">Как устроена модель</a></p>")
@@ -514,11 +522,11 @@ class HtmlReportRenderer : ReportRenderer {
     }
 
     private fun StringBuilder.queries(report: AnalysisReport, includeDetails: Boolean = false) {
-        section("queries", "Каким запросам поможет выбранный набор", "Оценка одного выполнения запроса, planner cost")
+        section("queries", "Каким запросам поможет выбранный набор", "")
         if (report.statementKinds.values.any { it != StatementKind.SELECT }) {
             append("<p class=\"notice\">Для UPDATE/DELETE cost оценивает поиск и подготовку строк. Фактическая запись, WAL, блокировки и триггеры в эту оценку не входят. Интенсивность изменения строк задаётся отдельно от частоты вызовов.</p>")
         }
-        append("<p>«До» — база с существующими индексами. «С набором» — та же база с добавленными гипотетическими индексами. Меньшая оценка лучше.</p>")
+        append("<p class=\"query-legend\">«До» — база с существующими индексами. «С набором» — та же база с добавленными гипотетическими индексами. Меньшая оценка лучше.</p>")
         val baseline = report.result.baseline
         val selected = report.result.selected?.evaluation
         val effects = report.queryEffects.associateBy { it.id }
@@ -558,11 +566,14 @@ class HtmlReportRenderer : ReportRenderer {
         }
         append("</div>")
         costGuards(report)
-        if (includeDetails) {
-            append("<h3>SQL и планы</h3>")
-            queryDetails(report)
-        }
+        if (includeDetails) queryDetailsGroup(report)
         append("</section>")
+    }
+
+    private fun StringBuilder.queryDetailsGroup(report: AnalysisReport) {
+        append("<details class=\"query-details-group\"><summary>Подробности по запросам</summary>")
+        queryDetails(report)
+        append("</details>")
     }
 
     private fun StringBuilder.queryDetails(report: AnalysisReport) {
