@@ -184,7 +184,7 @@ class JdbcAnalysisSessionIntegrationTest {
         assertEquals(setOf("s", "u", "d"), result.baseline?.costByQueryId?.keys)
         assertEquals(setOf("s", "u", "d"), result.selected?.evaluation?.costByQueryId?.keys)
         val json = mapper.readTree(Files.readString(output.resolve("report.json")))
-        assertEquals(listOf("select", "update", "delete"), json["queries"].map { it["statement_kind"].asString() })
+        assertEquals(listOf("select", "update", "delete"), json["queries"].toList().map { it["statement_kind"].asString() })
         assertEquals("row_search_and_preparation", json["queries"][1]["cost_interpretation"].asString())
         assertTrue(Files.readString(output.resolve("report.html")).contains("ModifyTable"))
         for (file in listOf("report.json", "report.html", "indexes.sql"))
