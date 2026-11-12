@@ -9,6 +9,7 @@ import ru.itmo.indexbudget.domain.AnalysisReport
 import ru.itmo.indexbudget.domain.ErrorCode
 import ru.itmo.indexbudget.domain.RunContext
 import ru.itmo.indexbudget.domain.RunStatus
+import ru.itmo.indexbudget.domain.validateMethodFormat
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption.ATOMIC_MOVE
@@ -56,7 +57,7 @@ class AtomicReportExporter(
     private fun validateIdentity(report: AnalysisReport, context: RunContext) {
         require(report.runId == context.runId && report.inputHash == context.inputHash)
         require(report.runId.matches(Regex("[A-Za-z0-9._-]{1,128}")))
-        require(report.schemaVersion == 3 && report.specVersion == "0.2")
+        report.validateMethodFormat()
         val hash = report.inputHash
         require(hash == null || hash.matches(Regex("[a-f0-9]{64}")))
         require(report.result.status == RunStatus.FAILED || hash != null)
@@ -82,6 +83,7 @@ class AtomicReportExporter(
         append("-- IndexBudget recommendations; not executed automatically.\n")
         append("-- run_id: ").append(report.runId).append('\n')
         append("-- input_hash: ").append(report.inputHash).append('\n')
+        append("-- index_methods: ").append(report.indexMethods.sortedBy { it.ordinal }.joinToString(",") { it.wireName }).append('\n')
         append("-- selected_objective: ").append(report.result.selectedObjective.name.lowercase()).append("\n\n")
         val candidatesById = report.candidates.candidates.associateBy { it.id }
         val selected = requireNotNull(report.result.selected)

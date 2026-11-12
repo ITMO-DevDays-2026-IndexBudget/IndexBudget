@@ -22,16 +22,16 @@ class ManualIndexEvaluator {
             if (table.kind != TableKind.ORDINARY) invalid(ErrorCode.UNSUPPORTED_SQL, "Manual indexes require ordinary tables.")
             for ((definitionIndex, definition) in definitionsForTable) {
                 val field = "manual_indexes.$definitionIndex"
-                if (definition.method != "btree" || definition.unique || definition.keys.size !in 1..2 ||
+                if (!definition.hasSupportedShape() ||
                     definition.includedColumns.isNotEmpty())
-                    invalid(ErrorCode.INVALID_INPUT, "Expected a nonunique B-tree with one or two columns.")
+                    invalid(ErrorCode.INVALID_INPUT, "Expected B-tree with one or two columns or single-column BRIN.")
                 for ((keyIndex, key) in definition.keys.withIndex()) {
                     val keyField = "$field.keys.$keyIndex"
                     if (key.column.table != tableRef || table.columns.none { it.name == key.column.name })
                         invalid(ErrorCode.UNKNOWN_COLUMN, "Manual index column is unknown.")
                     val column = table.columns.single { it.name == key.column.name }
-                    if (column.defaultOperatorClass == null)
-                        invalid(ErrorCode.INVALID_INPUT, "Manual index key has no default B-tree operator class.", keyField)
+                    if (column.operatorClassFor(definition.method) == null)
+                        invalid(ErrorCode.INVALID_INPUT, "Manual index key has no default operator class for its method.", keyField)
                     if (key.collation != null || key.operatorClass != null)
                         invalid(ErrorCode.INVALID_INPUT, "Manual indexes use catalog-default collation and operator class.")
                 }

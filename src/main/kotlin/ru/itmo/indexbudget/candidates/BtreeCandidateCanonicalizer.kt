@@ -38,14 +38,13 @@ class BtreeCandidateCanonicalizer(
 
     fun canonicalize(definition: IndexDefinition): IndexDefinition {
         val resolved = resolveDefaults(definition)
-        if (resolved.keys.any { it.operatorClass == null }) catalogError("Default B-tree operator class is unavailable")
+        if (resolved.keys.any { it.operatorClass == null }) catalogError("Default index operator class is unavailable")
         return CanonicalIndex.normalize(resolved).also { context.checkDeadline() }
     }
 
     private fun resolveDefaults(definition: IndexDefinition): IndexDefinition {
         context.checkDeadline()
-        require(definition.method == "btree" && !definition.unique && definition.keys.size in 1..2 &&
-            definition.keys.map { it.column }.distinct().size == definition.keys.size) { "Expected a supported B-tree definition" }
+        require(definition.hasSupportedShape()) { "Expected a supported index definition" }
         val table = tables[definition.table] ?: catalogError("Candidate table is absent from catalog")
         if (table.kind != TableKind.ORDINARY) catalogError("Candidate requires an ordinary table")
         for (column in definition.includedColumns) {
@@ -57,9 +56,13 @@ class BtreeCandidateCanonicalizer(
             require(key.column.table == table.ref) { "Index key must belong to its table" }
             val column = columns.getValue(table.ref)[key.column.name]
                 ?: catalogError("Candidate column is absent from catalog")
+            if (definition.method == "brin" && key.operatorClass != null &&
+                qualifiedIdentifier(key.operatorClass) != column.operatorClassFor("brin")?.let(::qualifiedIdentifier)) {
+                catalogError("BRIN requires the catalog-default operator class")
+            }
             key.copy(
                 collation = key.collation ?: column.collation,
-                operatorClass = key.operatorClass ?: column.defaultOperatorClass,
+                operatorClass = key.operatorClass ?: column.operatorClassFor(definition.method),
             )
         })
         return resolved.also { context.checkDeadline() }
@@ -68,8 +71,9 @@ class BtreeCandidateCanonicalizer(
     fun canonicalize(scope: CandidateScope): CanonicalCandidateScope {
         context.checkDeadline()
         val grouped = linkedMapOf<IndexDefinition, IndexCandidate>()
-        val unindexableColumns = linkedMapOf<ColumnRef, Int>()
+        val unindexableColumns = linkedMapOf<Pair<String, ColumnRef>, Int>()
         var unindexableVariants = 0
+        val unindexableByMethod = sortedMapOf<String, Int>()
         for (variant in scope.variants) {
             context.checkDeadline()
             require(variant.definition.table == scope.table) { "Variant must belong to its scope" }
@@ -79,7 +83,11 @@ class BtreeCandidateCanonicalizer(
             val missing = resolved.keys.filter { it.operatorClass == null }
             if (missing.isNotEmpty()) {
                 unindexableVariants++
-                for (key in missing) unindexableColumns[key.column] = (unindexableColumns[key.column] ?: 0) + 1
+                unindexableByMethod[resolved.method] = (unindexableByMethod[resolved.method] ?: 0) + 1
+                for (key in missing) {
+                    val entry = resolved.method to key.column
+                    unindexableColumns[entry] = (unindexableColumns[entry] ?: 0) + 1
+                }
                 continue
             }
             val definition = CanonicalIndex.normalize(resolved)
@@ -95,19 +103,20 @@ class BtreeCandidateCanonicalizer(
         }
         val existing = existingByTable.getOrPut(scope.table) { existingDefinitions(scope.table) }
         val decisions = scope.decisions.toMutableList()
-        for ((column, count) in unindexableColumns.toSortedMap(compareBy { it.name })) {
+        for ((entry, count) in unindexableColumns.toSortedMap(compareBy({ it.first }, { it.second.name }))) {
+            val (method, column) = entry
             context.checkDeadline()
-            decisions += CandidateDecision(CandidateReason.NO_BTREE_OPERATOR_CLASS,
+            decisions += CandidateDecision(if (method == "brin") CandidateReason.NO_BRIN_OPERATOR_CLASS else CandidateReason.NO_BTREE_OPERATOR_CLASS,
                 queryId = scope.queryId, table = scope.table, phase = AnalysisPhase.CANDIDATES,
-                details = mapOf("column" to column.name, "affected_variants" to count.toString()))
+                details = mapOf("method" to method, "column" to column.name, "affected_variants" to count.toString()))
         }
-        val warnings = if (unindexableVariants == 0) emptyList() else listOf(AnalysisWarning(
+        val warnings = unindexableByMethod.map { (method, count) -> AnalysisWarning(
             WarningCode.CANDIDATE_REJECTED,
-            "Варианты с колонками без подходящего B-tree opclass исключены; анализ остальных продолжается.",
+            "Варианты с колонками без подходящего $method opclass исключены; анализ остальных продолжается.",
             queryId = scope.queryId, details = mapOf("schema" to scope.table.schema, "table" to scope.table.name,
-                "reason" to CandidateReason.NO_BTREE_OPERATOR_CLASS.name,
-                "unindexable_variants" to unindexableVariants.toString()),
-        ))
+                "reason" to (if (method == "brin") CandidateReason.NO_BRIN_OPERATOR_CLASS else CandidateReason.NO_BTREE_OPERATOR_CLASS).name,
+                "unindexable_variants" to count.toString()),
+        ) }
         val retained = grouped.values.sortedBy { it.id }.filter { candidate ->
             context.checkDeadline()
             val duplicates = existing[candidate.definition]
@@ -158,19 +167,21 @@ class BtreeCandidateCanonicalizer(
         val result = mutableMapOf<IndexDefinition, MutableList<String>>()
         for (index in tables[table]?.existingIndexes.orEmpty()) {
             context.checkDeadline()
-            if (index.table != table || index.method != "btree" || !index.valid || !index.ready || !index.accessible ||
+            if (index.table != table || index.method !in setOf("btree", "brin") || !index.valid || !index.ready || !index.accessible ||
                 index.predicate != null || index.expressions.isNotEmpty() || index.includedColumns.size > 2 ||
                 index.includedColumns.distinct().size != index.includedColumns.size ||
                 index.includedColumns.any { it.table != table || it.name !in columns.getValue(table) || it in index.keys.map(IndexKey::column) } ||
                 index.keys.size !in 1..2 || index.keys.map { it.column }.distinct().size != index.keys.size
             ) continue
+            if (index.method == "brin" && (index.keys.size != 1 || index.includedColumns.isNotEmpty() ||
+                !index.defaultStorageParameters)) continue
             // Missing metadata is not evidence of equality. Never substitute defaults for real keys.
             if (index.keys.any { key ->
                 key.column.table != table || key.operatorClass == null ||
                     key.column.name !in columns.getValue(table) ||
                     (key.collation == null && columns.getValue(table).getValue(key.column.name).collation != null)
             }) continue
-            val definition = CanonicalIndex.normalize(IndexDefinition(table, index.keys, includedColumns = index.includedColumns))
+            val definition = CanonicalIndex.normalize(IndexDefinition(table, index.keys, method = index.method, includedColumns = index.includedColumns))
             result.getOrPut(definition) { mutableListOf() }.add(index.name)
         }
         return result.mapValues { (_, names) -> names.distinct().sorted() }

@@ -80,6 +80,7 @@ class JdbcCatalogReader(
                         nullable = !getBoolean("attnotnull"), collation = getString("collation"),
                         defaultOperatorClass = getString("opclass"), isBuiltinType = getBoolean("builtin"),
                         typeOid = getLong("type_oid"),
+                        defaultOperatorClasses = getString("brin_opclass")?.let { mapOf("brin" to it) }.orEmpty(),
                     )
                 }
                 val indexes = readIndexes(relation, context)
@@ -116,6 +117,7 @@ class JdbcCatalogReader(
                 predicate = getString("predicate"), included = getInt("position") > getInt("indnkeyatts"),
                 column = getString("attname"), expression = getString("expression"), options = getInt("options"),
                 collation = getString("collation"), opclass = getString("opclass"),
+                defaultStorageParameters = getBoolean("default_storage_parameters"),
             )
         }
         return rows.groupBy { it.oid }.values.map { parts ->
@@ -130,6 +132,7 @@ class JdbcCatalogReader(
                 },
                 valid = index.valid, ready = index.ready, accessible = index.accessible,
                 unique = index.unique, predicate = index.predicate,
+                defaultStorageParameters = index.defaultStorageParameters,
                 expressions = parts.mapNotNull { it.expression },
                 includedColumns = parts.filter { it.included }.mapNotNull { it.column?.let { name -> ColumnRef(relation.ref, name) } },
             )
@@ -177,7 +180,7 @@ class JdbcCatalogReader(
     private data class IndexRow(val oid: Long, val name: String, val method: String, val valid: Boolean,
         val ready: Boolean, val accessible: Boolean, val unique: Boolean, val predicate: String?,
         val included: Boolean, val column: String?, val expression: String?, val options: Int,
-        val collation: String?, val opclass: String?)
+        val collation: String?, val opclass: String?, val defaultStorageParameters: Boolean)
 
     private companion object {
         val TYPES = """
@@ -208,17 +211,7 @@ class JdbcCatalogReader(
             WHERE c.oid = pg_catalog.to_regclass(?)
         """.trimIndent()
 
-        val COLUMNS = """
-            SELECT a.attname, a.atttypid AS type_oid, pg_catalog.format_type(a.atttypid, a.atttypmod) AS type_name, a.attnotnull,
-                   tn.nspname = 'pg_catalog' AND t.oid < 16384 AS builtin,
-                   CASE WHEN co.oid IS NOT NULL THEN pg_catalog.format('%I.%I', cn.nspname, co.collname) END AS collation,
-                   defaults.opclass
-            FROM pg_catalog.pg_attribute a
-            JOIN pg_catalog.pg_type t ON t.oid = a.atttypid
-            JOIN pg_catalog.pg_namespace tn ON tn.oid = t.typnamespace
-            LEFT JOIN pg_catalog.pg_collation co ON co.oid = a.attcollation
-            LEFT JOIN pg_catalog.pg_namespace cn ON cn.oid = co.collnamespace
-            LEFT JOIN LATERAL (
+        private fun defaultOperatorClassSql(method: String): String = """
                 -- PostgreSQL GetDefaultOpClass: exact match, then a unique compatible
                 -- preferred type in the same category, then a unique compatible type.
                 -- Domains are unsupported by the SQL layer; do not invent defaults for them.
@@ -228,7 +221,7 @@ class JdbcCatalogReader(
                                 WHEN ot.typcategory = t.typcategory AND ot.typispreferred THEN 1
                                 ELSE 2 END AS priority
                     FROM pg_catalog.pg_opclass op
-                    JOIN pg_catalog.pg_am am ON am.oid = op.opcmethod AND am.amname = 'btree'
+                    JOIN pg_catalog.pg_am am ON am.oid = op.opcmethod AND am.amname = '$method'
                     JOIN pg_catalog.pg_namespace ns ON ns.oid = op.opcnamespace
                     JOIN pg_catalog.pg_type ot ON ot.oid = op.opcintype
                     WHERE op.opcdefault AND t.typtype <> 'd' AND (
@@ -251,13 +244,31 @@ class JdbcCatalogReader(
                     WHERE priority = (SELECT pg_catalog.min(priority) FROM compatible)
                 )
                 SELECT pg_catalog.min(opclass) AS opclass FROM best HAVING pg_catalog.count(*) = 1
+        """.trimIndent()
+
+        val COLUMNS = """
+            SELECT a.attname, a.atttypid AS type_oid, pg_catalog.format_type(a.atttypid, a.atttypmod) AS type_name, a.attnotnull,
+                   tn.nspname = 'pg_catalog' AND t.oid < 16384 AS builtin,
+                   CASE WHEN co.oid IS NOT NULL THEN pg_catalog.format('%I.%I', cn.nspname, co.collname) END AS collation,
+                   defaults.opclass, brin_defaults.opclass AS brin_opclass
+            FROM pg_catalog.pg_attribute a
+            JOIN pg_catalog.pg_type t ON t.oid = a.atttypid
+            JOIN pg_catalog.pg_namespace tn ON tn.oid = t.typnamespace
+            LEFT JOIN pg_catalog.pg_collation co ON co.oid = a.attcollation
+            LEFT JOIN pg_catalog.pg_namespace cn ON cn.oid = co.collnamespace
+            LEFT JOIN LATERAL (
+                ${defaultOperatorClassSql("btree")}
             ) defaults ON true
+            LEFT JOIN LATERAL (
+                ${defaultOperatorClassSql("brin")}
+            ) brin_defaults ON true
             WHERE a.attrelid = ? AND a.attnum > 0 AND NOT a.attisdropped
             ORDER BY a.attnum
         """.trimIndent()
 
         val INDEXES = """
             SELECT i.indexrelid, ic.relname AS index_name, am.amname AS method,
+                   ic.reloptions IS NULL AS default_storage_parameters,
                    i.indisvalid, i.indisready, i.indislive, i.indcheckxmin, i.indisunique,
                    pg_catalog.pg_get_expr(i.indpred, i.indrelid) AS predicate,
                    k.position, i.indnkeyatts, a.attname, i.indoption[(k.position - 1)::integer] AS options,

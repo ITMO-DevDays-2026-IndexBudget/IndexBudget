@@ -23,7 +23,7 @@ internal class BudgetSeriesWriter(
     fun publish(result: BudgetSeriesResult, preparation: SeriesPreparation?, preparationContext: RunContext?, finished: Boolean) {
         owner.verify()
         val root = linkedMapOf<String, Any?>(
-            "schema_version" to 1, "spec_version" to "0.2", "series_id" to context.runId,
+            "schema_version" to (if (input.requiresMethodAwareReport()) 2 else 1), "spec_version" to "0.2", "series_id" to context.runId,
             "status" to if (finished) result.status.name.lowercase() else "running",
             "duration_millis" to context.elapsedTime().toMillis(), "timeout_seconds" to request.timeoutSeconds,
             "budget" to request.budget.wireName, "values" to request.values,
@@ -35,6 +35,7 @@ internal class BudgetSeriesWriter(
                 "observation_scope" to "catalog_baseline_plans_versions; no database snapshot isolation"),
             "settings" to mapOf("selected_objective" to input.objective.name.lowercase(),
                 "analysis_mode" to input.analysisMode.name.lowercase(), "candidate_ranking" to input.candidateRanking.wireName,
+                "index_methods" to input.indexMethods.sortedBy { it.ordinal }.map { it.wireName },
                 "constraints" to budgets(input.constraints),
                 "queries" to input.queries.map { mapOf("id" to it.id, "sql" to it.sql) },
                 "profiles" to input.profiles.map { mapOf("id" to it.id, "weight" to it.weight, "calls_per_hour" to it.callsPerHour) },
@@ -108,8 +109,10 @@ internal class BudgetSeriesWriter(
         "cache_hits" to value.cacheHits, "repair_attempts" to value.repairAttempts)
 
     private fun candidate(value: IndexCandidate) = mapOf("id" to value.id, "schema" to value.definition.table.schema,
-        "table" to value.definition.table.name, "keys" to value.definition.keys.map { mapOf("column" to it.column.name,
-            "direction" to it.direction.name.lowercase(), "nulls" to it.nulls.name.lowercase()) },
+        "table" to value.definition.table.name, "method" to value.definition.method, "keys" to value.definition.keys.map { mapOf("column" to it.column.name,
+            "direction" to it.direction.name.lowercase().takeIf { value.definition.method == "btree" },
+            "nulls" to it.nulls.name.lowercase().takeIf { value.definition.method == "btree" },
+            "collation" to it.collation, "operator_class" to it.operatorClass) },
         "included_columns" to value.definition.includedColumns.map { it.name }, "ddl" to value.ddl,
         "estimated_bytes" to value.estimatedBytes, "budgeted_bytes" to value.budgetedBytes,
         "write_units_per_hour" to value.writeUnitsPerHour)
