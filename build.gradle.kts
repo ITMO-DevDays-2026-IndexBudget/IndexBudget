@@ -79,3 +79,12 @@ tasks.register<JavaExec>("candidateRankingExperiments") {
     mainClass.set("ru.itmo.indexbudget.experiments.CandidateRankingExperimentsKt")
     javaLauncher.set(javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(25)) })
 }
+
+tasks.register<JavaExec>("searchComparisonExperiments") {
+    group = "verification"
+    description = "Compare greedy, greedy+repair and the exhaustive verification reference on fixed pools"
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass.set("ru.itmo.indexbudget.experiments.SearchComparisonExperimentsKt")
+    javaLauncher.set(javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(25)) })
+}

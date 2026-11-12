@@ -38,4 +38,5 @@ export INDEXBUDGET_HYPOPG_TEST_PASSWORD=''
     --tests 'ru.itmo.indexbudget.application.CandidateRefillHypopgIntegrationTest' \
     --tests 'ru.itmo.indexbudget.application.BudgetSeriesHypopgIntegrationTest' \
     --tests 'ru.itmo.indexbudget.application.CandidateRankingHypopgIntegrationTest' \
+    --tests 'ru.itmo.indexbudget.application.SearchComparisonHypopgIntegrationTest' \
     --tests 'ru.itmo.indexbudget.comparison.ManualComparisonIntegrationTest'
