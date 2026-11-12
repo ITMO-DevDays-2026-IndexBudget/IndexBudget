@@ -1,16 +1,22 @@
 # Целевая архитектура IndexBudget
 
-Это архитектура реализованного сквозного CLI и инварианты дальнейшего развития. `AnalysisPipeline` соединяет SQL resolution, каталог, кандидаты, HypoPG, поиск и экспорт; `analyze-series`, импорт и снимки используют согласованные контракты. Наличие реализации не подменяет приёмочные проверки. Текущие стыки описаны в [docs/contracts.md](../docs/contracts.md), состояние реализации и команды запуска — в [README](../README.md). Источник требований — [спецификация v0.2](../IndexBudget-spec-v0.2.md); последовательность работ и владельцы — [issue #2](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/issues/2). До изменения кода проверь фактическую структуру репозитория. Не создавай ещё один каркас, если нужный компонент уже появился. Порядок работы — в [development.md](development.md), проверки изменений — в [review.md](review.md).
+`AnalysisPipeline` связывает SQL resolution, каталог, кандидаты, HypoPG, поиск и экспорт.
+Серии, импорт и снимки используют общие контракты. Точные интерфейсы находятся в
+[docs/contracts.md](../docs/contracts.md), команды в [README](../README.md).
+Требования задаёт [спецификация v0.2](../IndexBudget-spec-v0.2.md), владельцев и зависимости
+[issue #2](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/issues/2).
+Перед изменением компонента посмотри его текущий код и результаты проверок.
+[Разработка](development.md) и [ревью](review.md) описывают порядок работы.
 
 ## Окружение и граница приложения
 
-Целевой стек: Kotlin/JVM, JDK 25 LTS, Spring Boot с `WebApplicationType.NONE`, Gradle Kotlin DSL, Jackson, PostgreSQL JDBC. Для PostgreSQL 16, HypoPG и воспроизводимого demo seed предусмотрен Docker Compose; готовность demo проверяй по фактическим файлам проекта. Версии зависимостей и точные команды сборки бери из build-файлов, Gradle wrapper и README.
+Стек: Kotlin/JVM, JDK 25 LTS, Spring Boot с `WebApplicationType.NONE`, Gradle Kotlin DSL, Jackson, PostgreSQL JDBC. Docker Compose поднимает PostgreSQL 16 с HypoPG и воспроизводимым demo seed. Готовность БД проверяется отдельно. Версии зависимостей и точные команды сборки бери из build-файлов, Gradle wrapper и README.
 
 Обычная команда `analyze` выполняет один анализ и экспортирует локальные HTML/JSON/SQL. `analyze-series` выполняет общую подготовку и 3–5 независимых бюджетных точек с отдельными каталогами и машинной сводкой [по контракту серии](../docs/budget-series.md). HTTP API, React, worker-сервер и polling не входят в ядро MVP. Отдельная [демонстрационная обёртка frontend](../frontend/README.md) предоставляет экран настройки, HTTP-очередь и публикацию файлов, вызывая существующий CLI. Подготовка выбранного фиксированного датасета и статистики выполняется в собственной одноразовой БД frontend до анализа. Анализ предлагает дополнительные индексы, сохраняя реальные индексы в baseline. Он не применяет рекомендации и не выполняет `EXPLAIN ANALYZE` или автоматический `ANALYZE` на целевой БД.
 
 ## Разделение ответственности
 
-Модули ниже — логические границы; отдельные Gradle subprojects не обязательны. DTO и интерфейсы согласуются в [#3](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/issues/3). Их точные пакеты и сигнатуры определяются реализацией, а инварианты — [contracts.md](contracts.md).
+Таблица описывает ответственность пакетов внутри одного Gradle-проекта. DTO и интерфейсы согласуются в [#3](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/issues/3). Их точные пакеты и сигнатуры определяются реализацией, а инварианты — [contracts.md](contracts.md).
 
 | Зона | Ответственность | Владелец и задачи |
 | --- | --- | --- |
