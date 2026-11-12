@@ -35,7 +35,7 @@ class BudgetSeriesPipelineTest {
         val result = BudgetSeriesPipeline(analysis, noShutdown).run(guarded,
             request("1000000", "2000000", "3000000"), directory.resolve("out"), RunContext())
         assertEquals(SeriesStatus.COMPLETED, result.status)
-        assertEquals(guarded.constraints.queryCostGuards, analysis.prepared!!.pool.input.constraints.queryCostGuards)
+        assertEquals(guarded.constraints.queryCostGuards, checkNotNull(analysis.prepared) { "Expected prepared to be available" }.pool.input.constraints.queryCostGuards)
         assertTrue(analysis.pointInputs.all { it.constraints.queryCostGuards == guarded.constraints.queryCostGuards })
         assertEquals(1.25, summary()["settings"]["constraints"]["query_cost_guards"]["records_by_group"].doubleValue())
         assertEquals(1.25, summary()["preparation"]["maximum_budgets"]["query_cost_guards"]["records_by_group"].doubleValue())
@@ -67,10 +67,10 @@ class BudgetSeriesPipelineTest {
         val result = BudgetSeriesPipeline(analysis, noShutdown).run(imported,
             request("1000000", "2000000", "3000000"), directory.resolve("out"), RunContext())
         assertEquals(SeriesStatus.COMPLETED, result.status)
-        assertEquals(imported.provenance, analysis.prepared!!.pool.input.provenance)
+        assertEquals(imported.provenance, checkNotNull(analysis.prepared) { "Expected prepared to be available" }.pool.input.provenance)
         assertTrue(analysis.pointInputs.all { it.provenance == imported.provenance })
         assertEquals("pg_stat_statements", summary()["source"]["workload_source"].stringValue())
-        assertEquals(imported.provenance!!.sourceId.toString(), summary()["source"]["workload_source_id"].stringValue())
+        assertEquals(checkNotNull(imported.provenance) { "Expected provenance to be available" }.sourceId.toString(), summary()["source"]["workload_source_id"].stringValue())
     }
 
     @Test
@@ -91,7 +91,7 @@ class BudgetSeriesPipelineTest {
             preparation(maximum)
         }
         analysis.point = { at, output, child, pool ->
-            assertSame(analysis.prepared!!.pool, pool)
+            assertSame(checkNotNull(analysis.prepared) { "Expected prepared to be available" }.pool, pool)
             assertEquals(input.copy(constraints = at.constraints), at)
             assertEquals(RunStatistics(), child.statistics())
             assertEquals("a".repeat(64), child.inputHash)
@@ -115,7 +115,7 @@ class BudgetSeriesPipelineTest {
         assertEquals(4, contexts.map { it.runId }.distinct().size)
         assertTrue(contexts.all { it !== context })
         assertEquals(RunStatistics(), context.statistics())
-        assertEquals(listOf(1, 1, 1), result.points.map { it.result!!.diagnostics.statistics.explainAttempts })
+        assertEquals(listOf(1, 1, 1), result.points.map { checkNotNull(it.result) { "Expected result to be available" }.diagnostics.statistics.explainAttempts })
         val summary = summary()
         assertEquals("completed", summary["status"].stringValue())
         assertEquals("fixed_candidate_pool", summary["comparison_scope"].stringValue())
@@ -194,8 +194,8 @@ class BudgetSeriesPipelineTest {
         assertEquals(SeriesStatus.PARTIAL, result.status)
         assertEquals(2, analysis.pointInputs.size)
         assertEquals(SeriesPointStatus.SKIPPED, result.points[2].status)
-        assertEquals(ErrorCode.CANCELLED, result.points[1].error!!.code)
-        assertEquals(ErrorCode.CANCELLED, result.points[2].error!!.code)
+        assertEquals(ErrorCode.CANCELLED, checkNotNull(result.points[1].error) { "Expected error to be available" }.code)
+        assertEquals(ErrorCode.CANCELLED, checkNotNull(result.points[2].error) { "Expected error to be available" }.code)
         assertTrue(Files.isRegularFile(directory.resolve("out/point-01/report.html")))
         assertFalse(Files.exists(directory.resolve("out/point-03")))
     }
@@ -219,8 +219,8 @@ class BudgetSeriesPipelineTest {
             request("1000000", "2000000", "3000000").copy(timeoutSeconds = 2), directory.resolve("out"), parent)
         assertEquals(SeriesStatus.PARTIAL, result.status)
         assertEquals(2, analysis.pointInputs.size)
-        assertEquals(ErrorCode.DEADLINE_EXCEEDED, result.points[1].error!!.code)
-        assertEquals(ErrorCode.DEADLINE_EXCEEDED, result.points[2].error!!.code)
+        assertEquals(ErrorCode.DEADLINE_EXCEEDED, checkNotNull(result.points[1].error) { "Expected error to be available" }.code)
+        assertEquals(ErrorCode.DEADLINE_EXCEEDED, checkNotNull(result.points[2].error) { "Expected error to be available" }.code)
         assertEquals("skipped", summary()["points"][2]["status"].stringValue())
         assertTrue(Files.isRegularFile(directory.resolve("out/point-01/report.json")))
     }
@@ -235,7 +235,7 @@ class BudgetSeriesPipelineTest {
             request("0", "1000000", "2000000"), directory.resolve("out"), RunContext())
         assertTrue(registrationClosed)
         assertEquals(SeriesStatus.FAILED, result.status)
-        assertEquals(ErrorCode.DB_CONNECTION_ERROR, result.preparationError!!.code)
+        assertEquals(ErrorCode.DB_CONNECTION_ERROR, checkNotNull(result.preparationError) { "Expected preparationError to be available" }.code)
         assertTrue(result.points.all { it.status == SeriesPointStatus.SKIPPED && it.runId == null })
         assertEquals(0, analysis.pointInputs.size)
         assertEquals("failed", summary()["status"].stringValue())
@@ -275,8 +275,8 @@ class BudgetSeriesPipelineTest {
         }
         val result = run(analysis)
         assertEquals(SeriesStatus.PARTIAL, result.status)
-        assertEquals(ErrorCode.EXPORT_FAILED, result.points[1].error!!.code)
-        assertEquals(ErrorCode.INTERNAL_ERROR, result.points[2].error!!.code)
+        assertEquals(ErrorCode.EXPORT_FAILED, checkNotNull(result.points[1].error) { "Expected error to be available" }.code)
+        assertEquals(ErrorCode.INTERNAL_ERROR, checkNotNull(result.points[2].error) { "Expected error to be available" }.code)
         val json = Files.readString(directory.resolve("out/series.json"))
         assertFalse(json.contains("private-password"))
         assertFalse(json.contains("private-host"))

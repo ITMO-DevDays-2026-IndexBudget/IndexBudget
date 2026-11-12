@@ -21,7 +21,7 @@ class RecordedHtmlReportFixtureTest {
         assertEquals(275_252L, report.summary.budgetUsage?.budgetedBytes)
         assertNull(report.summary.budgetUsage?.writeUnitsPerHour)
         assertEquals(true, report.incumbentsCoincide)
-        assertEquals(79.583983315, report.summary.meanEffect.gainPercent!!, 0.000000001)
+        assertEquals(79.583983315, checkNotNull(report.summary.meanEffect.gainPercent) { "Expected gainPercent to be available" }, 0.000000001)
         assertNull(report.inputHash, "A reconstruction must not claim the original workload hash")
         assertTrue(report.runId.endsWith("-html-preview"))
     }

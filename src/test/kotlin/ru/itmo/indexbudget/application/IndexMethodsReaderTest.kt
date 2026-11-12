@@ -32,8 +32,8 @@ class IndexMethodsReaderTest {
     @Test
     fun `manual method is independent from automatic selection but BRIN cannot accept sort or INCLUDE`() {
         val manual = """, "manual_indexes":[{"schema":"public","table":"t","method":"brin","keys":[{"column":"a"}]}]"""
-        assertEquals("brin", read(manual).manualIndexes!!.single().method)
-        assertEquals("btree", read(manual.replace("\"method\":\"brin\",", "")).manualIndexes!!.single().method)
+        assertEquals("brin", checkNotNull(read(manual).manualIndexes) { "Expected manualIndexes to be available" }.single().method)
+        assertEquals("btree", checkNotNull(read(manual.replace("\"method\":\"brin\",", "")).manualIndexes) { "Expected manualIndexes to be available" }.single().method)
         for (invalid in listOf(manual.replace("\"column\":\"a\"", "\"column\":\"a\",\"direction\":\"asc\""),
             manual.replace("\"column\":\"a\"", "\"column\":\"a\",\"nulls\":\"last\""),
             manual.replace("\"keys\":", "\"include\":[\"b\"],\"keys\":"),
@@ -42,6 +42,6 @@ class IndexMethodsReaderTest {
                 assertThrows(AnalysisException::class.java) { read(invalid.replace("\"brin\"", "\"$method\"")) }
             }
         }
-        assertEquals("hash", read(manual.replace("\"brin\"", "\"hash\"")).manualIndexes!!.single().method)
+        assertEquals("hash", checkNotNull(read(manual.replace("\"brin\"", "\"hash\"")).manualIndexes) { "Expected manualIndexes to be available" }.single().method)
     }
 }

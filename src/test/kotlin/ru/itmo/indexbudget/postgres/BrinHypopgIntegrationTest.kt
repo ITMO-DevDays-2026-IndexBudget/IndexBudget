@@ -80,8 +80,8 @@ class BrinHypopgIntegrationTest {
                         assertEquals(setOf("btree", "brin"), batch.candidates.map { it.definition.method }.toSet())
                         assertEquals(2, batch.candidates.size)
                         val sized = batch.candidates.map { it.copy(estimatedBytes = session.estimateSize(it, context)) }
-                        brinBytes = sized.single { it.definition.method == "brin" }.estimatedBytes!!
-                        btreeBytes = sized.single { it.definition.method == "btree" }.estimatedBytes!!
+                        brinBytes = checkNotNull(sized.single { it.definition.method == "brin" }.estimatedBytes) { "Expected estimatedBytes to be available" }
+                        btreeBytes = checkNotNull(sized.single { it.definition.method == "btree" }.estimatedBytes) { "Expected estimatedBytes to be available" }
                         assertTrue(brinBytes > 0 && brinBytes < btreeBytes)
                         samples = (listOf(emptyList<IndexCandidate>()) + sized.map { listOf(it) } + listOf(sized)).map { set ->
                             val evaluation = session.evaluate(set, resolved, context)
@@ -124,14 +124,14 @@ class BrinHypopgIntegrationTest {
                 tight.withObject("/constraints").put("storage_budget_bytes", brinBytes * 2)
                 Files.writeString(constrainedSource, mapper.writerWithDefaultPrettyPrinter().writeValueAsString(tight))
                 val constrained = analyze(constrainedSource, output.resolve("tight"))
-                val selected = constrained.result.selected!!.evaluation.candidateIds
+                val selected = checkNotNull(constrained.result.selected) { "Expected selected to be available" }.evaluation.candidateIds
                 assertEquals(listOf("brin"), constrained.candidates.candidates.filter { it.id in selected }.map { it.definition.method })
                 assertTrue(constrained.result.diagnostics.candidateDecisions.any { it.reason == CandidateReason.STORAGE_BUDGET })
-                assertEquals(ManualComparisonStatus.COMPLETED, constrained.manualComparison!!.status)
+                assertEquals(ManualComparisonStatus.COMPLETED, checkNotNull(constrained.manualComparison) { "Expected manualComparison to be available" }.status)
                 assertEquals(setOf("brin", "btree"), constrained.manualComparison.candidates.map { it.definition.method }.toSet())
                 assertFalse(constrained.manualComparison.admissible)
                 assertTrue(BudgetViolation.STORAGE_BUDGET in constrained.manualComparison.budgetViolations)
-                assertTrue(constrained.candidates.diagnostics.preparation!!.sizeAttempts <= 32)
+                assertTrue(checkNotNull(constrained.candidates.diagnostics.preparation) { "Expected preparation to be available" }.sizeAttempts <= 32)
                 assertTrue(constrained.candidates.diagnostics.preparation.finalShortlistedCandidates <= 16)
                 assertTrue(constrained.result.diagnostics.statistics.explainAttempts <= 2000)
                 analyzeSeries(source, output, brinBytes, btreeBytes)
@@ -187,9 +187,9 @@ class BrinHypopgIntegrationTest {
         assertEquals(2, summary["schema_version"].intValue())
         assertEquals(setOf("brin", "btree"), summary["preparation"]["candidates"].toList().map { it["method"].stringValue() }.toSet())
         assertTrue(Files.readString(output.resolve("series/report.html")).contains("btree, brin"))
-        assertEquals(4, result.points[1].report!!.schemaVersion)
-        assertEquals(listOf("brin"), result.points[1].report!!.let { report ->
-            report.candidates.candidates.filter { it.id in report.result.selected!!.evaluation.candidateIds }.map { it.definition.method }
+        assertEquals(4, checkNotNull(result.points[1].report) { "Expected report to be available" }.schemaVersion)
+        assertEquals(listOf("brin"), checkNotNull(result.points[1].report) { "Expected report to be available" }.let { report ->
+            report.candidates.candidates.filter { it.id in checkNotNull(report.result.selected) { "Expected selected to be available" }.evaluation.candidateIds }.map { it.definition.method }
         })
     }
 
@@ -231,15 +231,15 @@ class BrinHypopgIntegrationTest {
         assertEquals(listOf("btree", "brin"), json["index_methods"].toList().map { it.stringValue() })
         assertEquals(result.runId, json["run_id"].stringValue())
         assertTrue(html.contains(result.runId) && sql.contains(result.runId))
-        assertTrue(html.contains(result.inputHash!!) && sql.contains(result.inputHash))
+        assertTrue(html.contains(checkNotNull(result.inputHash) { "Expected inputHash to be available" }) && sql.contains(result.inputHash))
         assertTrue(html.contains("btree, brin"))
         assertTrue(sql.contains("-- index_methods: btree,brin"))
         val recommendation = html.substringAfter("<ul class=\"recommended-indexes\">", "").substringBefore("</ul>")
         assertTrue(recommendation.isNotEmpty())
-        for (candidate in result.candidates.candidates.filter { it.id in result.result.selected!!.evaluation.candidateIds }) {
-            assertTrue(sql.contains(candidate.ddl!!))
+        for (candidate in result.candidates.candidates.filter { it.id in checkNotNull(result.result.selected) { "Expected selected to be available" }.evaluation.candidateIds }) {
+            assertTrue(sql.contains(checkNotNull(candidate.ddl) { "Expected ddl to be available" }))
             val expected = when (candidate.definition.method) {
-                "btree" -> "events(sequence)"
+                "btree" -> "events · btree (sequence)"
                 "brin" -> "events · brin (sequence)"
                 else -> error("Unexpected method")
             }

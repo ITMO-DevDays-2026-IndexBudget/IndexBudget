@@ -51,21 +51,23 @@ class BtreeCandidateCanonicalizer(
             context.checkDeadline()
             if (column.name !in columns.getValue(table.ref)) catalogError("INCLUDE column is absent from catalog")
         }
-        val resolved = definition.copy(keys = definition.keys.map { key ->
-            context.checkDeadline()
-            require(key.column.table == table.ref) { "Index key must belong to its table" }
-            val column = columns.getValue(table.ref)[key.column.name]
-                ?: catalogError("Candidate column is absent from catalog")
-            if (definition.method != "btree" && key.operatorClass != null &&
-                qualifiedIdentifier(key.operatorClass) != column.operatorClassFor(definition.method)?.let(::qualifiedIdentifier)) {
-                catalogError("BRIN/hash require the catalog-default operator class")
-            }
-            key.copy(
-                collation = key.collation ?: column.collation,
-                operatorClass = key.operatorClass ?: column.operatorClassFor(definition.method),
-            )
-        })
+        val resolved = definition.copy(keys = definition.keys.map { resolveKey(it, table.ref, definition.method) })
         return resolved.also { context.checkDeadline() }
+    }
+
+    private fun resolveKey(key: IndexKey, table: TableRef, method: String): IndexKey {
+        context.checkDeadline()
+        require(key.column.table == table) { "Index key must belong to its table" }
+        val column = columns.getValue(table)[key.column.name]
+            ?: catalogError("Candidate column is absent from catalog")
+        if (method != "btree" && key.operatorClass != null &&
+            qualifiedIdentifier(key.operatorClass) != column.operatorClassFor(method)?.let(::qualifiedIdentifier)) {
+            catalogError("BRIN/hash require the catalog-default operator class")
+        }
+        return key.copy(
+            collation = key.collation ?: column.collation,
+            operatorClass = key.operatorClass ?: column.operatorClassFor(method),
+        )
     }
 
     fun canonicalize(scope: CandidateScope): CanonicalCandidateScope {

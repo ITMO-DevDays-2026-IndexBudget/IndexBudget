@@ -234,12 +234,12 @@ class StatisticsSnapshotTest {
         var statementClosed = false
         val sql = mutableListOf<String>()
         val connection = proxy(Connection::class.java) { name, args -> when (name) {
-            "setReadOnly" -> { readOnly = args!![0] as Boolean; null }
+            "setReadOnly" -> { readOnly = checkNotNull(args) { "Expected args to be available" }[0] as Boolean; null }
             "close", "abort" -> { closed = true; aborted.countDown(); null }
-            "setNetworkTimeout" -> { networkTimeout = args!![1] as Int; null }
+            "setNetworkTimeout" -> { networkTimeout = checkNotNull(args) { "Expected args to be available" }[1] as Int; null }
             "commit" -> { commits++; null }
             "prepareStatement" -> {
-                val query = args!![0] as String
+                val query = checkNotNull(args) { "Expected args to be available" }[0] as String
                 sql += query
                 onPrepare()
                 proxy(PreparedStatement::class.java) { method, _ -> when (method) {
@@ -282,7 +282,7 @@ class StatisticsSnapshotTest {
                     "wasNull" -> wasNull
                     "close" -> null
                     else -> {
-                        val value = rows[index][args!![0].toString()]
+                        val value = rows[index][checkNotNull(args) { "Expected args to be available" }[0].toString()]
                         wasNull = value == null
                         when (name) {
                             "getLong" -> (value as? Number)?.toLong() ?: 0L

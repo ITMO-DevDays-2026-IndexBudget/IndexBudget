@@ -28,43 +28,56 @@ internal object WriteProfileReport {
     fun render(rates: JsonNode, origin: JsonNode): String = buildString {
         val observed = rates.isObject && rates.properties().any { it.value.path("source").isString && it.value.path("source").stringValue() == "observed" }
         append("<details class=\"write-profile\"><summary>Исходный профиль записи · строки/час · ")
-            .append(if (observed) "Наблюдаемый" else if (rates.isObject && !rates.isEmpty) "Ручной" else "Не задан")
+            .append(when {
+                observed -> "Наблюдаемый"
+                rates.isObject && !rates.isEmpty -> "Ручной"
+                else -> "Не задан"
+            })
             .append("</summary>")
         append("<p>Интенсивность изменения строк задаётся отдельно от частоты вызовов SQL. Write proxy — условная модель сопровождения индексов, не историческое время и не физическое измерение.</p>")
         if (!rates.isObject || rates.isEmpty) {
             append("<p>Профиль записи не задан. Неизвестные write units не заменяются нулём.</p>")
         } else {
-            if (observed) {
-                append("<p><strong>Наблюдаемый профиль</strong> · ")
-                append(when {
-                    (origin.path("complete").isBoolean && origin.path("complete").booleanValue()) -> "Наблюдение полное"
-                    origin.path("complete").isBoolean -> "Наблюдение неполное"
-                    else -> "Полнота неизвестна"
-                }).append("</p><dl class=\"values\">")
-                for ((label, value) in listOf(
-                    "Начало окна" to origin.path("window").path("from"),
-                    "Конец окна" to origin.path("window").path("to"),
-                    "Длительность, с" to origin.path("window").path("period_seconds"),
-                    "Источник" to origin.path("source").path("source_id"),
-                    "БД OID" to origin.path("source").path("database_oid"),
-                    "PostgreSQL" to origin.path("source").path("postgres_version"),
-                )) append("<div><dt>").append(label).append("</dt><dd>").append(h(display(value))).append("</dd></div>")
-                append("</dl>")
-                for (reason in origin.path("reasons")) append("<p class=\"warning-text\">").append(h(display(reason))).append("</p>")
-                append("<p>PG16 не позволяет надёжно обнаружить все адресные сбросы. HOT — историческая диагностика; из будущей цены индекса он не вычитается.</p>")
-                if (!(origin.path("complete").isBoolean && origin.path("complete").booleanValue())) append("<p>Для включённого лимита нужен полный профиль: получите совместимое окно и повторите импорт либо явно задайте ручной профиль. Неизвестное не становится нулём.</p>")
-            } else append("<p>Ручной профиль записи. Окно наблюдения не задано.</p>")
-            append("<div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Профиль записи\"><table><thead><tr><th>Таблица</th><th>INSERT, строк/час</th><th>UPDATE, строк/час</th><th>DELETE, строк/час</th><th>Источник</th></tr></thead><tbody>")
-            for ((name, rate) in rates.properties().sortedBy { it.key }) {
-                append("<tr><th scope=\"row\">").append(h(name)).append("</th>")
-                for (key in listOf("inserts_per_hour", "updates_per_hour", "deletes_per_hour", "source")) {
-                    append("<td>").append(h(display(rate.path(key)))).append("</td>")
-                }
-                append("</tr>")
-            }
-            append("</tbody></table></div>")
+            if (observed) appendObservation(origin)
+            else append("<p>Ручной профиль записи. Окно наблюдения не задано.</p>")
+            appendRates(rates)
         }
         append("</details>")
+    }
+
+    private fun StringBuilder.appendObservation(origin: JsonNode) {
+        append("<p><strong>Наблюдаемый профиль</strong> · ")
+        append(when {
+            (origin.path("complete").isBoolean && origin.path("complete").booleanValue()) -> "Наблюдение полное"
+            origin.path("complete").isBoolean -> "Наблюдение неполное"
+            else -> "Полнота неизвестна"
+        }).append("</p><dl class=\"values\">")
+        for ((label, value) in listOf(
+            "Начало окна" to origin.path("window").path("from"),
+            "Конец окна" to origin.path("window").path("to"),
+            "Длительность, с" to origin.path("window").path("period_seconds"),
+            "Источник" to origin.path("source").path("source_id"),
+            "БД OID" to origin.path("source").path("database_oid"),
+            "PostgreSQL" to origin.path("source").path("postgres_version"),
+        )) append("<div><dt>").append(label).append("</dt><dd>").append(h(display(value))).append("</dd></div>")
+        append("</dl>")
+        for (reason in origin.path("reasons")) append("<p class=\"warning-text\">").append(h(display(reason))).append("</p>")
+        append("<p>PG16 не позволяет надёжно обнаружить все адресные сбросы. HOT — историческая диагностика; из будущей цены индекса он не вычитается.</p>")
+        if (!(origin.path("complete").isBoolean && origin.path("complete").booleanValue())) {
+            append("<p>Для включённого лимита нужен полный профиль: получите совместимое окно и повторите импорт либо явно задайте ручной профиль. Неизвестное не становится нулём.</p>")
+        }
+    }
+
+    private fun StringBuilder.appendRates(rates: JsonNode) {
+        append("<div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Профиль записи\"><table><thead><tr><th>Таблица</th><th>INSERT, строк/час</th><th>UPDATE, строк/час</th><th>DELETE, строк/час</th><th>Источник</th></tr></thead><tbody>")
+        for ((name, rate) in rates.properties().sortedBy { it.key }) {
+            append("<tr><th scope=\"row\">").append(h(name)).append("</th>")
+            for (key in listOf("inserts_per_hour", "updates_per_hour", "deletes_per_hour", "source")) {
+                append("<td>").append(h(display(rate.path(key)))).append("</td>")
+            }
+            append("</tr>")
+        }
+        append("</tbody></table></div>")
     }
 
     private fun display(value: JsonNode) = when {

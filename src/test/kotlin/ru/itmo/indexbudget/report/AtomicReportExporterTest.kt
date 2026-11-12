@@ -52,7 +52,7 @@ class AtomicReportExporterTest {
     @Test
     fun `covering payload survives JSON HTML and SQL export with explicit report version`() {
         val fixture = ContractFixtures.report(sameIncumbents = true)
-        val selectedId = fixture.result.selected!!.evaluation.candidateIds.single()
+        val selectedId = checkNotNull(fixture.result.selected) { "Expected selected to be available" }.evaluation.candidateIds.single()
         val original = fixture.candidates.candidates.single { it.id == selectedId }
         val definition = original.definition.copy(includedColumns = listOf(ColumnRef(original.definition.table, "payload<\"x>")))
         val covering = original.copy(definition = definition, ddl = PostgresDdlRenderer().render(definition),

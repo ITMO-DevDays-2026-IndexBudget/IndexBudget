@@ -26,8 +26,8 @@ class GreedyOptimizerTest {
             assertEquals(listOf("records_group_id"), search.result.bestMean.evaluation.candidateIds)
             assertEquals(282700.0, search.result.bestRobust.metrics.meanCost, 1e-8)
             assertEquals(147400.0, search.result.bestMean.metrics.meanCost, 1e-8)
-            assertEquals(303000.0 / 310000.0, search.result.bestRobust.metrics.worstRatio!!, 1e-12)
-            assertEquals(304000.0 / 310000.0, search.result.bestMean.metrics.worstRatio!!, 1e-12)
+            assertEquals(303000.0 / 310000.0, checkNotNull(search.result.bestRobust.metrics.worstRatio) { "Expected worstRatio to be available" }, 1e-12)
+            assertEquals(304000.0 / 310000.0, checkNotNull(search.result.bestMean.metrics.worstRatio) { "Expected worstRatio to be available" }, 1e-12)
             assertEquals(objective, search.result.selectedObjective)
             assertEquals(ComparisonScope.EVALUATED_SETS, search.result.comparisonScope)
             assertSame(if (objective == Objective.ROBUST) search.result.bestRobust else search.result.bestMean,
@@ -344,8 +344,8 @@ class GreedyOptimizerTest {
 
         assertTrue(result is SearchResult.Completed)
         assertSame(baseline, result.baseline)
-        assertFalse(result.bestRobust!!.evaluation.plansByQueryId.isEmpty())
-        assertFalse(result.bestMean!!.evaluation.plansByQueryId.isEmpty())
+        assertFalse(checkNotNull(result.bestRobust) { "Expected bestRobust to be available" }.evaluation.plansByQueryId.isEmpty())
+        assertFalse(checkNotNull(result.bestMean) { "Expected bestMean to be available" }.evaluation.plansByQueryId.isEmpty())
         assertEquals(ComparisonScope.EVALUATED_SETS, result.comparisonScope)
     }
 
