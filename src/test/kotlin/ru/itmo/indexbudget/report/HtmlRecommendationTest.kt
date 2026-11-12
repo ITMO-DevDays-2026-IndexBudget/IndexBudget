@@ -123,19 +123,25 @@ class HtmlRecommendationTest {
     }
 
     @Test
-    fun `partial reason appears beside status before recommendation and effect`() {
+    fun `partial limitations link leads to retained diagnostics even without warnings`() {
         val partial = ContractFixtures.partialResult()
         val report = ContractFixtures.report().copy(result = partial.copy(diagnostics = partial.diagnostics.copy(
+            warnings = emptyList(),
             stopReasons = listOf(StopReason.REPAIR_LIMIT),
             errors = listOf(AnalysisError(ErrorCode.REPAIR_LIMIT, "Repair attempt limit reached.")),
         )))
-        val overview = section(renderer.render(report), "overview")
-        val reason = overview.indexOf("REPAIR_LIMIT")
-        assertTrue(reason >= 0)
-        assertTrue(reason < overview.indexOf("<h2>Предлагаемые индексы</h2>"))
-        assertTrue(reason < overview.indexOf("class=\"effect-sentence\""))
-        assertEquals(1, Regex("REPAIR_LIMIT").findAll(overview).count())
-        assertTrue(overview.contains("Сохранён лучший полный допустимый результат"))
+        val html = renderer.render(report.copy(candidates = report.candidates.copy(
+            diagnostics = report.candidates.diagnostics.copy(warnings = emptyList()),
+        )))
+        val overview = section(html, "overview")
+        assertFalse(overview.contains("REPAIR_LIMIT"))
+        assertFalse(overview.contains("Частичный результат"))
+        assertFalse(overview.contains("Поиск остановлен досрочно"))
+        assertTrue(overview.substringAfter("Основа вывода").contains("Есть ограничения данных:"))
+        assertTrue(overview.contains("href=\"#search\""))
+        val diagnostics = section(html, "search")
+        assertTrue(diagnostics.contains("REPAIR_LIMIT"))
+        assertTrue(diagnostics.contains("Сохранён лучший полный допустимый результат"))
     }
 
     private fun section(html: String, id: String): String =

@@ -177,6 +177,17 @@ async function noPageOverflow(page, message) {
               const order = await page.locator(`#${prefix}query-comparison tbody tr`)
                 .evaluateAll(elements => elements.map(element => Number(element.dataset.order)));
               assert.deepEqual(order, [...order].sort((a, b) => a - b));
+              const header = page.locator(`#${prefix}query-comparison th[data-sort-key="cost"]`);
+              for (const direction of ['descending', 'ascending']) {
+                await header.locator('button').click();
+                assert.equal(await header.getAttribute('aria-sort'), direction);
+                const values = await page.locator(`#${prefix}query-comparison tbody tr`).evaluateAll(rows =>
+                  rows.map(row => row.dataset.cost));
+                const known = values.filter(value => value !== '').map(Number);
+                assert.deepEqual(known, [...known].sort((a, b) => direction === 'ascending' ? a - b : b - a));
+                assert.ok(values.slice(known.length).every(value => value === ''), 'Unknown costs stay last');
+              }
+              assert.equal(await selector.inputValue(), ordinal, 'Sorting preserves the selected budget');
             }
           }
           await noPageOverflow(page, `${variant}/${width}/${ordinal}: selected report overflow`);

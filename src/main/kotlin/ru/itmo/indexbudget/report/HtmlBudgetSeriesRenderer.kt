@@ -173,9 +173,10 @@ class HtmlBudgetSeriesRenderer {
         val profiles = if (usable(point)) point.path("metrics").path("profiles").toList() else emptyList()
         if (profiles.isEmpty()) append("Эффект не определён")
         else append(profiles.joinToString("; ") { profile -> (if (profiles.size > 1) h(profile.path("profile_id").stringValue()) + " — " else "") + h(effectLabel(profile)) })
-        append(" по сравнению с существующими индексами.</p><p class=\"muted\">").append(h(statusLabel(point.path("status").stringValue())))
-        if (report?.summary?.regressedQueryCount == 0) append(". Регрессий SQL не обнаружено.</p>")
-        else append(". Рост стоимости: ").append(h(report?.summary?.regressedQueryCount?.let { "$it из ${report.input?.queries?.size ?: report.result.baseline?.costByQueryId?.size ?: "нет данных"} SQL" } ?: "нет данных")).append(".</p>")
+        append(" по сравнению с существующими индексами.</p><p class=\"muted\">")
+        if (point.path("status").stringValue() != "partial") append(h(statusLabel(point.path("status").stringValue()))).append(". ")
+        if (report?.summary?.regressedQueryCount == 0) append("Регрессий SQL не обнаружено.</p>")
+        else append("Рост стоимости: ").append(h(report?.summary?.regressedQueryCount?.let { "$it из ${report.input?.queries?.size ?: report.result.baseline?.costByQueryId?.size ?: "нет данных"} SQL" } ?: "нет данных")).append(".</p>")
         append("<div class=\"workload-context\"><strong>Основа вывода</strong><p>")
         val provenance = report?.workloadProvenance
         if (provenance == null) {
@@ -197,7 +198,14 @@ class HtmlBudgetSeriesRenderer {
             }
             append("</ul><p>")
         }
-        append("</p></div></article>")
+        append("</p>")
+        if (point.path("status").stringValue() == "partial" ||
+            report?.result?.diagnostics?.warnings?.isNotEmpty() == true ||
+            report?.candidates?.diagnostics?.warnings?.isNotEmpty() == true) {
+            val target = if (report != null) "variant-$ordinal-search" else "point-$ordinal-diagnostics"
+            append("<p>Есть ограничения данных: <a href=\"#$target\">подробности</a></p>")
+        }
+        append("</div></article>")
     }
 
     private fun StringBuilder.pointsTable(summary: JsonNode, points: List<JsonNode>, candidates: Map<String, JsonNode>, storage: Boolean, interactive: Boolean) {
@@ -219,9 +227,9 @@ class HtmlBudgetSeriesRenderer {
                 append(h(effectLabel(profile))).append("</p>")
             } else append("Нет оценки")
             append("</td><td><p>Место с запасом: ").append(if (usable(point)) h(size(point.path("metrics").path("budget_usage").path("budgeted_bytes"))) else "Нет данных").append("</p>")
-            badge(point.path("status"))
+            if (point.path("status").stringValue() != "partial") badge(point.path("status"))
             if (!point.path("conditions_match").isTrue) append("<p class=\"warning-text\">").append(if (point.path("conditions_match").isFalse) "Условия изменились" else "Сопоставимость не установлена").append("</p>")
-            append("<details><summary>Точные значения и диагностика</summary>")
+            append("<details id=\"point-$ordinal-diagnostics\"><summary>Точные значения и диагностика</summary>")
             pointDetails(summary, point, storage, single)
             append("</details></td></tr>")
         }
@@ -342,7 +350,7 @@ class HtmlBudgetSeriesRenderer {
             .append(": ").append(h(error.path("message").stringValue())).append("</p>")
     }
     private fun statusLabel(value: String) = when (value) {
-        "completed" -> "Завершён"; "partial" -> "Частичный результат"; "failed" -> "Ошибка"
+        "completed" -> "Завершён"; "partial" -> "Есть ограничения данных"; "failed" -> "Ошибка"
         "skipped" -> "Не рассчитан"; "running" -> "Выполняется"; else -> "Нет данных"
     }
     private fun StringBuilder.badge(status: JsonNode) {
