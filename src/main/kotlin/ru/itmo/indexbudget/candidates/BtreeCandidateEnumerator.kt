@@ -215,7 +215,7 @@ class BtreeCandidateEnumerator : CandidateEnumerator {
         context: RunContext,
     ): CoveringVariants {
         // Never expand a wildcard, including mixed explicit/wildcard projections.
-        if (query.selectsAllColumns) return CoveringVariants()
+        if (query.statementKind != StatementKind.SELECT || query.selectsAllColumns) return CoveringVariants()
         val projection = query.projectedColumns.filter { it.table == table }.toSet()
         if (projection.isEmpty()) return CoveringVariants()
         val needed = query.referencedColumns.filter { it.table == table }.toSet() + projection

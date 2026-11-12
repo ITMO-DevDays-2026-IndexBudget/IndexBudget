@@ -79,6 +79,7 @@ class DefaultReportBuilder(
             incumbentsCoincide = if (result.status == RunStatus.FAILED) null else
                 result.bestRobust?.evaluation?.candidateIds == result.bestMean?.evaluation?.candidateIds,
             costGuards = costGuards,
+            statementKinds = context.statementKinds.filterKeys { it in queryIds },
         )
     }
 }

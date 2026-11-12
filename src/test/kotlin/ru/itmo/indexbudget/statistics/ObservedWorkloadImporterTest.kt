@@ -31,6 +31,21 @@ class ObservedWorkloadImporterTest {
     private val options: Map<String, Any?> = mapOf("constraints" to mapOf("storage_budget_bytes" to 1048576,
         "write_budget_units_per_hour" to null), "objective" to "robust")
 
+    @Test fun `restricted DML imports through selection frequencies and full semantic validation`() {
+        for ((template, example, kind) in listOf(
+            Triple("UPDATE public.records SET value=$1 WHERE group_id=$2",
+                "UPDATE public.records SET value=7 WHERE group_id=1", StatementKind.UPDATE),
+            Triple("DELETE FROM public.records WHERE group_id=$1",
+                "DELETE FROM public.records WHERE group_id=1", StatementKind.DELETE),
+        )) {
+            val result = build(frequencies(template), listOf(SqlExample(key(), example, listOf("pg_catalog", "public"))))
+            assertNull(result.error)
+            assertEquals(kind, result.resolvedQueries.single().statementKind)
+            assertEquals(3600.0, read(result).profiles.single().callsPerHour.values.single())
+            assertTrue(read(result).queries.single().sql.startsWith(kind.name))
+        }
+    }
+
     @Test fun `template catalog includes its own unqualified table before comparing physical schemas`() {
         val archive = snapshot.tables.single().copy(ref = TableRef("archive", "records"))
         val available = snapshot.tables + archive

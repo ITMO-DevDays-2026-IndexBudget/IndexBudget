@@ -51,8 +51,8 @@ class JdbcCatalogReader(
                 CatalogOperator(getLong("oid"), getString("schema_name"), getString("oprname"),
                     getLong("oprleft"), getLong("oprright"), getBoolean("builtin"))
             }
-            val casts = query("SELECT castsource, casttarget FROM pg_catalog.pg_cast WHERE castcontext OPERATOR(pg_catalog.=) 'i'", context) {
-                CatalogImplicitCast(getLong("castsource"), getLong("casttarget"))
+            val casts = query("SELECT castsource, casttarget, castcontext FROM pg_catalog.pg_cast WHERE castcontext OPERATOR(pg_catalog.=) ANY(ARRAY['i','a']::pg_catalog.\"char\"[])", context) {
+                CatalogImplicitCast(getLong("castsource"), getLong("casttarget"), getString("castcontext") == "a")
             }
             val found = linkedMapOf<TableRef, CatalogTable>()
             val unresolved = mutableListOf<TableName>()

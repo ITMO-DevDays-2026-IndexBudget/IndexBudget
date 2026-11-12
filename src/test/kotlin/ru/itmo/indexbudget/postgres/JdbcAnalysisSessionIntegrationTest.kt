@@ -90,6 +90,81 @@ class JdbcAnalysisSessionIntegrationTest {
     }
 
     @Test
+    fun `mixed SELECT UPDATE DELETE use original EXPLAIN under server read only protection`() {
+        sql(admin, "GRANT UPDATE, DELETE ON $schema.records TO $role") // Dedicated disposable opt-in role only.
+        val input = WorkloadInput(listOf(
+            QueryInput("select", "SELECT payload FROM records WHERE a = 314"),
+            QueryInput("update", "UPDATE records r SET payload = 'changed' WHERE r.a = 314"),
+            QueryInput("delete", "DELETE FROM records WHERE b = 314"),
+        ), listOf(Profile("p", 1.0, mapOf("select" to 1.0, "update" to 2.0, "delete" to 3.0))),
+            Constraints(100_000_000, null))
+        val context = RunContext().apply { startSearch() }
+        val analyzer = JSqlParserSqlAnalyzer()
+        val parsed = analyzer.parse(input, context)
+        val catalog = session.readCatalog(parsed.referencedTables, context)
+        val mixed = analyzer.resolve(parsed, catalog, context)
+        val observed = mutableListOf<ExplainObservation>()
+        session = JdbcAnalysisSession(observingConnection(observed))
+        val before = longScalar(admin, "SELECT sum(id::bigint + a + b + length(payload)) FROM $schema.records")
+        val indexes = scalar(admin, "SELECT count(*) FROM pg_indexes WHERE schemaname = '$schema'")
+        val baseline = session.evaluate(emptyList(), mixed, context)
+        val selected = session.evaluate(candidates, mixed, context)
+        assertEquals(input.queries.map { it.id }.toSet(), selected.costByQueryId.keys)
+        assertEquals(6, observed.size)
+        assertTrue(observed.all { event -> input.queries.any { event.sql == "EXPLAIN (FORMAT JSON) ${it.sql}" } })
+        assertTrue(selected.plansByQueryId.getValue("update").json.contains("ModifyTable"))
+        assertTrue(selected.plansByQueryId.getValue("delete").json.contains("ModifyTable"))
+        assertTrue(selected.costByQueryId.getValue("update") < baseline.costByQueryId.getValue("update"))
+        assertEquals(0, hypothesisCount(connection))
+        for (sql in listOf("UPDATE records SET payload = 'oops' WHERE id = 314",
+            "DELETE FROM records WHERE id = 314", "EXPLAIN ANALYZE DELETE FROM records WHERE id = 314")) {
+            assertEquals("25006", assertThrows(java.sql.SQLException::class.java) { sql(connection, sql) }.sqlState)
+        }
+        val bad = mixed.copy(queries = mixed.queries.map { if (it.id == "update") it.copy(
+            sql = "UPDATE records SET a = CAST('invalid' AS integer) WHERE id = 314") else it })
+        assertEquals(ErrorCode.EXPLAIN_FAILED, assertThrows(AnalysisException::class.java) {
+            session.evaluate(candidates, bad, RunContext())
+        }.error.code)
+        assertEquals(0, hypothesisCount(connection))
+        assertEquals(before, longScalar(admin, "SELECT sum(id::bigint + a + b + length(payload)) FROM $schema.records"))
+        assertEquals(indexes, scalar(admin, "SELECT count(*) FROM pg_indexes WHERE schemaname = '$schema'"))
+        val report = DefaultReportBuilder().build(input, CandidateBatch(emptyList()),
+            SearchResult.Completed(input.objective, baseline,
+                EvaluatedConfiguration(baseline, MetricsCalculatorImpl().calculate(input, baseline, baseline, BudgetUsage(0, 0, null, 0))),
+                EvaluatedConfiguration(baseline, MetricsCalculatorImpl().calculate(input, baseline, baseline, BudgetUsage(0, 0, null, 0)))), context)
+        assertTrue(HtmlReportRenderer().render(report).contains("ModifyTable"))
+        assertTrue(ru.itmo.indexbudget.report.JsonReportWriter().render(report).contains("row_search_and_preparation"))
+        val cancelled = RunContext()
+        session = JdbcAnalysisSession(observingConnection(mutableListOf(), beforeExplain = { text ->
+            if (text.contains("UPDATE records")) cancelled.cancel()
+        }))
+        assertEquals(ErrorCode.CANCELLED, assertThrows(AnalysisException::class.java) {
+            session.evaluate(candidates, mixed, cancelled)
+        }.error.code)
+        assertEquals(0, cancelled.statistics().completedEvaluations)
+        assertTrue(connection.isClosed)
+        connect().use { fresh -> assertEquals(0, hypothesisCount(fresh)) }
+        assertEquals(before, longScalar(admin, "SELECT sum(id::bigint + a + b + length(payload)) FROM $schema.records"))
+    }
+
+    @Test
+    fun `SELECT only role cannot EXPLAIN DML and gets an explicit privilege error`() {
+        val input = input().copy(queries = listOf(QueryInput("d", "DELETE FROM records WHERE a = 314")),
+            profiles = listOf(Profile("p", 1.0, mapOf("d" to 1.0))))
+        val context = RunContext()
+        val analyzer = JSqlParserSqlAnalyzer()
+        val parsed = analyzer.parse(input, context)
+        val mixed = analyzer.resolve(parsed, session.readCatalog(parsed.referencedTables, context), context)
+        val error = assertThrows(AnalysisException::class.java) { session.evaluate(emptyList(), mixed, context) }.error
+        assertEquals(ErrorCode.EXPLAIN_FAILED, error.code)
+        assertEquals("d", error.queryId)
+        assertEquals("42501", error.details["sql_state"])
+        assertTrue(error.message.contains("separate analysis role"))
+        assertEquals(50000, scalar(admin, "SELECT count(*) FROM $schema.records"))
+        assertEquals(0, hypothesisCount(connection))
+    }
+
+    @Test
     fun `generated INCLUDE uses real sizes costs budgets catalog and retains no benefit case`() {
         // Visibility preparation belongs to the disposable fixture, never to analyze.
         sql(admin, "VACUUM (ANALYZE) $schema.records")

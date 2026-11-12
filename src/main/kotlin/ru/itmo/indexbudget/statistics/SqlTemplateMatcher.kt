@@ -10,17 +10,23 @@ import ru.itmo.indexbudget.sql.decodePostgresIdentifier
 import ru.itmo.indexbudget.sql.JSqlParserAstValidator
 import ru.itmo.indexbudget.sql.PostgresParserTokens
 import ru.itmo.indexbudget.sql.postgresName
+import ru.itmo.indexbudget.sql.ValidatedSql
+import net.sf.jsqlparser.statement.update.Update
+import net.sf.jsqlparser.statement.delete.Delete
 
 /** Conservative AST substitution: only parameter leaves change; the entire resulting AST must match. */
 internal class SqlTemplateMatcher(private val context: RunContext) {
-    fun referencedTables(sql: String): Set<TableName> = parse(sql).let { select ->
-        (listOf(select.fromItem as Table) + select.joins.orEmpty().map { it.fromItem as Table }).map {
+    fun referencedTables(sql: String): Set<TableName> = parse(sql).let { validated ->
+        validated.tables.map {
             TableName(decodePostgresIdentifier(it.postgresName), it.schemaName?.let(::decodePostgresIdentifier))
         }.toSet()
     }
     fun match(template: String, example: String, catalog: CatalogSnapshot): Boolean {
-        val original = parse(template)
-        val sample = parse(example)
+        val source = parse(template)
+        val exampleAst = parse(example)
+        if (source.kind != exampleAst.kind) return false
+        val original = source.scope
+        val sample = exampleAst.scope
         qualify(original, catalog)
         qualify(sample, catalog)
         val values = mutableMapOf<String, String>()
@@ -74,15 +80,25 @@ internal class SqlTemplateMatcher(private val context: RunContext) {
             left.setOnExpressions(left.onExpressions.zip(right.onExpressions).map { (a, b) -> bind(a, b) })
         }
         if (original.limit != null && sample.limit != null) original.limit.rowCount = bind(original.limit.rowCount, sample.limit.rowCount)
-        if (original.toString() != sample.toString()) return false
+        if (source.statement is Update && exampleAst.statement is Update) {
+            val left = source.statement.updateSets
+            val right = exampleAst.statement.updateSets
+            if (left.size != right.size) return false
+            for (i in left.indices) {
+                @Suppress("UNCHECKED_CAST") val values = left[i].values as MutableList<Expression>
+                values[0] = requireNotNull(bind(values[0], right[i].values[0]))
+            }
+            source.statement.where = original.where
+        } else if (source.statement is Delete) source.statement.where = original.where
+        if (source.statement.toString() != exampleAst.statement.toString()) return false
         // Validate source-only dialect flags too: canonical SQL text is not itself a whitelist.
-        JSqlParserAstValidator("template", context).validate(original)
+        JSqlParserAstValidator("template", context).validateStatement(source.statement)
         context.checkDeadline()
         return true
     }
 
     /** Freeze table resolution in exported SQL; never carry an implicit historical search_path. */
-    fun qualifiedExample(sql: String, catalog: CatalogSnapshot): String = parse(sql).let { qualify(it, catalog); it.toString() }
+    fun qualifiedExample(sql: String, catalog: CatalogSnapshot): String = parse(sql).let { qualify(it.scope, catalog); it.statement.toString() }
 
     private fun qualify(select: PlainSelect, catalog: CatalogSnapshot) {
         val tables = listOf(select.fromItem) + select.joins.orEmpty().map { it.fromItem }
@@ -108,20 +124,16 @@ internal class SqlTemplateMatcher(private val context: RunContext) {
         else -> false
     }
 
-    private fun parse(sql: String): PlainSelect {
+    private fun parse(sql: String): ValidatedSql {
         if (sql.toByteArray(Charsets.UTF_8).size > 64 * 1024) ImportJson.fail("Template SQL exceeds 64 KiB.")
         context.checkDeadline()
         val tokens = PostgresParserTokens(sql, context)
         val statements = try { CCJSqlParserUtil.parseStatements(sql, java.util.function.Consumer(tokens::configure)) }
-            catch (_: Exception) { ImportJson.fail("Template cannot be parsed as one SELECT.") }
+            catch (_: net.sf.jsqlparser.JSQLParserException) { ImportJson.fail("Template cannot be parsed as one supported statement.") }
         finally { context.checkDeadline() }
         tokens.restoreImages(context)
-        if (statements.size != 1 || statements[0] !is PlainSelect) ImportJson.fail("Template must be one plain SELECT.")
-        return (statements[0] as PlainSelect).also {
-            // Reuse token-based restoration, including quoted names containing dots. Only template
-            // scalar parameters are temporarily allowed; bound ASTs are validated strictly in match.
-            JSqlParserAstValidator("template", context, tokens::restoreIdentifier).validateTemplate(it)
-        }
+        if (statements.size != 1) ImportJson.fail("Template must contain one supported statement.")
+        return JSqlParserAstValidator("template", context, tokens::restoreIdentifier).validateStatement(statements[0], template = true)
     }
     private fun quote(value: String) = "\"" + value.replace("\"", "\"\"") + "\""
 }

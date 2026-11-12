@@ -60,7 +60,8 @@ data class CatalogType(
 data class CatalogOperator(val oid: Long, val schema: String, val name: String,
     val leftTypeOid: Long, val rightTypeOid: Long, val isBuiltin: Boolean = true)
 
-data class CatalogImplicitCast(val sourceTypeOid: Long, val targetTypeOid: Long)
+/** Coercions usable implicitly, or only in an assignment context (never in operator resolution). */
+data class CatalogImplicitCast(val sourceTypeOid: Long, val targetTypeOid: Long, val assignmentOnly: Boolean = false)
 
 data class CatalogSemantics(val types: List<CatalogType>, val operators: List<CatalogOperator>,
     val implicitCasts: List<CatalogImplicitCast> = emptyList())

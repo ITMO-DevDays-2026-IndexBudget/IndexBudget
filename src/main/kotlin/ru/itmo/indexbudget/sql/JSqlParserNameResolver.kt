@@ -33,7 +33,7 @@ internal class JSqlParserNameResolver(private val catalog: CatalogSnapshot, priv
                 context.checkDeadline()
                 val select = parsed.queriesById[query.id]
                     ?: fail(ErrorCode.INVALID_INPUT, "Parsed workload does not cover every input query.")
-                QueryScope(query, select).resolve()
+                QueryScope(query, select, parsed.statementsById[query.id]).resolve()
             } catch (error: AnalysisException) {
                 if (error.error.queryId != null) throw error
                 throw AnalysisException(error.error.copy(queryId = query.id), error)
@@ -43,16 +43,27 @@ internal class JSqlParserNameResolver(private val catalog: CatalogSnapshot, priv
         return ResolvedWorkload(parsed.input, queries)
     }
 
-    private inner class QueryScope(private val query: QueryInput, private val select: PlainSelect) {
+    private inner class QueryScope(private val query: QueryInput, private val select: PlainSelect, private val statement: ValidatedSql?) {
         private val bindings = mutableListOf<Binding>()
         private val referenced = linkedSetOf<ColumnRef>()
         private val projected = linkedSetOf<ColumnRef>()
         private val outputNames = linkedMapOf<String, MutableList<BoundColumn>>()
         private var selectsAll = false
+        private val modified = linkedSetOf<ColumnRef>()
 
         fun resolve(): ResolvedQuery {
             bindTables()
-            resolveProjection()
+            val kind = statement?.kind ?: StatementKind.SELECT
+            if (kind == StatementKind.SELECT) resolveProjection() else {
+                if (bindings.single().table.ref.schema.startsWith("pg_temp")) fail(ErrorCode.UNSUPPORTED_SQL, "Temporary DML targets are unsupported.")
+                for ((column, value) in statement?.assignments.orEmpty()) {
+                    context.checkDeadline()
+                    val bound = resolveColumn(column)
+                    if (!modified.add(bound.ref)) fail(ErrorCode.UNSUPPORTED_SQL, "Repeated SET target column.")
+                    referenced += bound.ref
+                    literalTypes.requireAssignment(bound.column, value)
+                }
+            }
             val predicates = mutableListOf<ResolvedPredicate>()
             val conditions = buildList {
                 select.where?.let { add(resolveCondition(it, PredicateSource.WHERE, bindings, predicates)) }
@@ -79,7 +90,7 @@ internal class JSqlParserNameResolver(private val catalog: CatalogSnapshot, priv
             context.checkDeadline()
             return ResolvedQuery(query.id, query.sql, bindings.mapTo(linkedSetOf()) { it.table.ref },
                 referenced, predicates, order, projected, selectsAll,
-                conditions.reduceOrNull { left, right -> ResolvedCondition.And(left, right) })
+                conditions.reduceOrNull { left, right -> ResolvedCondition.And(left, right) }, kind, modified)
         }
 
         private fun bindTables() {

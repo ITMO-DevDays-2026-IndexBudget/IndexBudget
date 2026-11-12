@@ -141,6 +141,17 @@ class JdbcAnalysisSession(
             workload.queries.size != expected.size || workload.queries.map { it.id }.toSet() != expected) {
             fail(ErrorCode.INTERNAL_ERROR, "Evaluation requires unique candidates and every workload query exactly once")
         }
+        if (workload.queries.any { it.statementKind != ru.itmo.indexbudget.domain.StatementKind.SELECT }) {
+            try {
+                query("SELECT pg_catalog.set_config('default_transaction_read_only', 'on', false)", context,
+                    ErrorCode.DB_CONNECTION_ERROR) { rows ->
+                    if (!rows.next() || rows.getString(1) != "on") fail(ErrorCode.DB_CONNECTION_ERROR, "Cannot enable read-only DML analysis")
+                }
+                query("SELECT pg_catalog.current_setting('transaction_read_only')", context, ErrorCode.DB_CONNECTION_ERROR) { rows ->
+                    if (!rows.next() || rows.getString(1) != "on") fail(ErrorCode.DB_CONNECTION_ERROR, "DML EXPLAIN requires a read-only transaction")
+                }
+            } catch (error: Exception) { abortQuietly(); throw error }
+        }
         val result = withHypotheses(context) {
             for (candidate in candidates.sortedBy { it.id }) {
                 try {
@@ -444,7 +455,7 @@ class JdbcAnalysisSession(
             ErrorCode.DB_CONNECTION_ERROR -> "Analysis connection is unavailable"
             ErrorCode.HYPOTHETICAL_INDEX_ERROR -> "Unable to create or measure hypothetical index"
             ErrorCode.CATALOG_ERROR -> "Unable to read PostgreSQL catalog"
-            else -> "Unable to explain workload query"
+            else -> if (state == "42501") "Insufficient privileges for the original workload statement; configure a separate analysis role" else "Unable to explain workload query"
         }, queryId = queryId, details = state?.let { mapOf("sql_state" to it) } ?: emptyMap()))
     }
 

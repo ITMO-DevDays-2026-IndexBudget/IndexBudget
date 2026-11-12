@@ -38,6 +38,11 @@ import ru.itmo.indexbudget.domain.AnalysisException
 import ru.itmo.indexbudget.domain.ErrorCode
 import ru.itmo.indexbudget.domain.RunContext
 import ru.itmo.indexbudget.domain.ConditionLimits
+import ru.itmo.indexbudget.domain.StatementKind
+import net.sf.jsqlparser.statement.Statement
+import net.sf.jsqlparser.statement.update.Update
+import net.sf.jsqlparser.statement.delete.Delete
+import net.sf.jsqlparser.statement.select.SelectItem
 
 internal class JSqlParserAstValidator(
     private val queryId: String,
@@ -46,6 +51,65 @@ internal class JSqlParserAstValidator(
 ) {
     private var allowTemplateParameters = false
     private var conditionNodes = 0
+
+    fun validateStatement(statement: Statement, template: Boolean = false): ValidatedSql {
+        allowTemplateParameters = template
+        try {
+            if (statement is PlainSelect) return ValidatedSql(statement, statement, validate(statement))
+            val target: Table
+            val where: Expression?
+            val assignments: List<Pair<Column, Expression>>
+            val kind: StatementKind
+            when (statement) {
+                is Update -> {
+                    if (!statement.withItemsList.isNullOrEmpty() || statement.fromItem != null || !statement.joins.isNullOrEmpty() ||
+                        !statement.startJoins.isNullOrEmpty() || statement.returningClause != null || statement.outputClause != null ||
+                        statement.select != null || statement.isUseSelect || statement.isUseColumnsBrackets || statement.isFromBeforeSet ||
+                        !statement.orderByElements.isNullOrEmpty() || statement.limit != null || statement.option != null ||
+                        statement.forPortionClause != null || statement.preferringClause != null || statement.oracleHint != null ||
+                        statement.modifierPriority != null || statement.isModifierIgnore)
+                        fail(ErrorCode.UNSUPPORTED_SQL, "Only one-table literal SET UPDATE with WHERE is supported.")
+                    val sets = statement.updateSets.orEmpty()
+                    if (sets.isEmpty() || sets.size > 256) fail(ErrorCode.INPUT_LIMIT_EXCEEDED, "UPDATE requires 1–256 SET assignments.")
+                    assignments = sets.map {
+                        context.checkDeadline()
+                        if (it.columns.size != 1 || it.values.size != 1) fail(ErrorCode.UNSUPPORTED_SQL, "Tuple SET assignments are unsupported.")
+                        it.columns.single() to it.values.single()
+                    }
+                    target = statement.table
+                    where = statement.where
+                    kind = StatementKind.UPDATE
+                }
+                is Delete -> {
+                    if (!statement.withItemsList.isNullOrEmpty() || !statement.tables.isNullOrEmpty() || !statement.usingList.isNullOrEmpty() ||
+                        !statement.usingFromItemList.isNullOrEmpty() || !statement.joins.isNullOrEmpty() || !statement.isHasFrom ||
+                        statement.returningClause != null || statement.outputClause != null || !statement.orderByElements.isNullOrEmpty() ||
+                        statement.limit != null || statement.option != null || statement.forPortionClause != null ||
+                        statement.preferringClause != null || statement.oracleHint != null || statement.modifierPriority != null ||
+                        statement.isModifierIgnore || statement.isModifierQuick)
+                        fail(ErrorCode.UNSUPPORTED_SQL, "Only DELETE FROM one table with WHERE is supported.")
+                    target = statement.table
+                    where = statement.where
+                    assignments = emptyList()
+                    kind = StatementKind.DELETE
+                }
+                else -> fail(ErrorCode.UNSUPPORTED_SQL, "Only SELECT, restricted UPDATE and DELETE are supported.")
+            }
+            if (where == null) fail(ErrorCode.UNSUPPORTED_SQL, "UPDATE/DELETE require WHERE.")
+            val scope = PlainSelect().apply {
+                fromItem = target
+                this.where = where
+                selectItems = listOf(SelectItem(AllColumns()))
+            }
+            val tables = validate(scope)
+            for ((column, value) in assignments) {
+                validateColumn(column)
+                if (column.table != null) fail(ErrorCode.UNSUPPORTED_SQL, "SET target columns must be unqualified.")
+                validateScalarLiteral(value)
+            }
+            return ValidatedSql(statement, scope, tables, kind, assignments)
+        } finally { allowTemplateParameters = false }
+    }
 
     /** Import-only validation before literal binding; ordinary SQL validation remains strict. */
     fun validateTemplate(select: PlainSelect): List<Table> {

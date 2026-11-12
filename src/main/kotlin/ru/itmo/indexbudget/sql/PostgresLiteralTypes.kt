@@ -15,6 +15,16 @@ internal class PostgresLiteralTypes(private val catalog: CatalogSnapshot, privat
     fun columnType(column: CatalogColumn): CatalogType = byOid[column.typeOid]
         ?: fail(ErrorCode.CATALOG_ERROR, "Catalog is missing a referenced column type identity.")
 
+    fun requireAssignment(column: CatalogColumn, expression: Expression) {
+        val target = columnType(column)
+        if (!target.isBuiltin || target.kind != "b" || target.category == "A") unsupported("SET requires a built-in scalar target type.")
+        val source = infer(expression)
+        if (source != null && source.oid != target.oid && target.category != "S" &&
+            facts().implicitCasts.none { context.checkDeadline(); it.sourceTypeOid == source.oid && it.targetTypeOid == target.oid })
+            unsupported("SET literal cannot be assignment-coerced to the target column type.")
+        // Unknown literals and cast value/typmod validation are checked by the original EXPLAIN.
+    }
+
     fun infer(expression: Expression): CatalogType? {
         context.checkDeadline()
         return when (expression) {
