@@ -1,6 +1,10 @@
 import json
+from pathlib import Path
+import sys
 import unittest
 from unittest.mock import Mock
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from prepared_dataset import prepare_clone, STATISTICS, DISABLE_AUTOVACUUM, SEED_DATABASE, WORK_DATABASE
 
 
