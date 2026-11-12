@@ -39,6 +39,8 @@ data class CatalogColumn(
     val defaultOperatorClass: String? = null,
     val isBuiltinType: Boolean = true,
     val typeOid: Long? = null,
+    /** Defaults of additional access methods, resolved independently from B-tree. */
+    val defaultOperatorClasses: Map<String, String> = emptyMap(),
 )
 
 data class CatalogType(
@@ -60,7 +62,8 @@ data class CatalogType(
 data class CatalogOperator(val oid: Long, val schema: String, val name: String,
     val leftTypeOid: Long, val rightTypeOid: Long, val isBuiltin: Boolean = true)
 
-data class CatalogImplicitCast(val sourceTypeOid: Long, val targetTypeOid: Long)
+/** Coercions usable implicitly, or only in an assignment context (never in operator resolution). */
+data class CatalogImplicitCast(val sourceTypeOid: Long, val targetTypeOid: Long, val assignmentOnly: Boolean = false)
 
 data class CatalogSemantics(val types: List<CatalogType>, val operators: List<CatalogOperator>,
     val implicitCasts: List<CatalogImplicitCast> = emptyList())
@@ -96,7 +99,7 @@ data class IndexKey(
     val operatorClass: String? = null,
 )
 
-/** Nonunique B-tree: 1–2 physical keys and up to two distinct non-key payload columns. */
+/** B-tree: 1–2 keys with optional payload; BRIN: one key, defaults, no payload. */
 data class IndexDefinition(
     val table: TableRef,
     val keys: List<IndexKey>,
@@ -126,4 +129,5 @@ data class ExistingIndex(
     val predicate: String? = null,
     val expressions: List<String> = emptyList(),
     val includedColumns: List<ColumnRef> = emptyList(),
+    val defaultStorageParameters: Boolean = true,
 )

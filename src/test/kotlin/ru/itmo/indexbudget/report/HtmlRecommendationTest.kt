@@ -11,6 +11,23 @@ class HtmlRecommendationTest {
     private val renderer = HtmlReportRenderer()
 
     @Test
+    fun `recommendation distinguishes BRIN from B-tree on the same column`() {
+        val source = ContractFixtures.report(sameIncumbents = true)
+        val original = source.candidates.candidates.single()
+        for ((method, expected) in mapOf("btree" to "records(created_at)", "brin" to "records · brin (created_at)")) {
+            val candidate = if (method == "btree") original else original.copy(definition = original.definition.copy(
+                method = "brin", keys = listOf(IndexKey(original.definition.keys.single().column,
+                    operatorClass = "pg_catalog.timestamp_minmax_ops"))))
+            val input = requireNotNull(source.input).copy(indexMethods = IndexMethod.entries.toSet())
+            val report = DefaultReportBuilder().build(input, source.candidates.copy(candidates = listOf(candidate)),
+                source.result, RunContext())
+            val overview = section(renderer.render(report), "overview")
+            val recommendation = overview.substringAfter("<ul class=\"recommended-indexes\">", "").substringBefore("</ul>")
+            assertTrue(recommendation.contains("<code>$expected</code>"), recommendation)
+        }
+    }
+
+    @Test
     fun `overview leads with recommendation and warns about regressions before search statistics`() {
         val report = HtmlReportFixtures.regression()
         val html = renderer.render(report)

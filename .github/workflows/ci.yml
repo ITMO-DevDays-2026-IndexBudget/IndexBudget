@@ -14,6 +14,62 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  frontend:
+    name: frontend-contract-and-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      COMPOSE_PROJECT_NAME: indexbudget-frontend-ci
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78
+        with:
+          distribution: temurin
+          java-version: '25'
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c
+      - name: Validate fixed datasets, HTTP contract and browser state
+        run: |
+          python3 -m unittest discover -s deploy/frontend/tests -v
+          python3 -m unittest discover -s frontend/tests -v
+          node --test frontend/tests/test_app.js
+      - name: Build CLI and start disposable frontend database
+        run: |
+          ./gradlew --no-daemon installDist
+          docker compose -f frontend/compose.yaml up --build --detach --wait --wait-timeout 180
+      - name: Exercise every dataset through HTTP, CLI and HypoPG
+        run: |
+          python3 -u frontend/server.py > frontend-server.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true; wait "$server_pid" || true' EXIT
+          python3 - <<'PY'
+          import json, time
+          from urllib.request import urlopen
+          for attempt in range(30):
+              try:
+                  with urlopen('http://127.0.0.1:8090/api/health', timeout=10) as response:
+                      health = json.load(response)
+                  if health['database'] and health['cli']:
+                      break
+              except OSError:
+                  pass
+              time.sleep(1)
+          else:
+              raise SystemExit('Frontend did not become ready')
+          PY
+          python3 frontend/tests/smoke.py
+      - name: Remove disposable frontend database
+        if: always()
+        run: docker compose -f frontend/compose.yaml down --volumes
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: frontend-smoke-results
+          include-hidden-files: true
+          path: |
+            frontend-server.log
+            frontend/.local/jobs/
+            frontend/.local/reports/
+          if-no-files-found: warn
   observed-import:
     name: postgres-observed-import
     runs-on: ubuntu-latest
@@ -120,6 +176,12 @@ jobs:
       - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
       - name: Evaluate exact sets on a disposable PostgreSQL and HypoPG backend
         run: bash demo/check-hypopg.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: brin-verification
+          path: build/brin-verification/
+          if-no-files-found: warn
 
   statistics-integration:
     name: postgres-statistics-integration

@@ -85,6 +85,13 @@ class RunContext(
     private var repairAttempts = 0
     private val completed = linkedSetOf<AnalysisPhase>()
     private val cancelled = AtomicBoolean()
+    private val parsedStatementKinds = linkedMapOf<String, StatementKind>()
+    val statementKinds: Map<String, StatementKind> get() = parsedStatementKinds.toMap()
+
+    /** AST-derived metadata only; not inferred from SQL text during report rendering. */
+    fun recordStatementKind(queryId: String, kind: StatementKind) {
+        parsedStatementKinds[queryId] = kind
+    }
 
     val isCancelled: Boolean get() = cancelled.get() || parent?.isCancelled == true
 

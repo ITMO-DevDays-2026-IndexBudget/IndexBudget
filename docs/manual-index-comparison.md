@@ -19,17 +19,17 @@ build/install/indexbudget/bin/indexbudget analyze --workload examples/workload-v
 ]
 ```
 
-При наличии поля требуется 1–5 определений. Поддержаны nonunique B-tree на 1–2 разных
+При наличии поля требуется 1–5 определений. Необязательный `method` принимает `btree` (default) или `brin`. Поддержаны nonunique B-tree на 1–2 разных
 физических колонках workload-таблиц. Имена — точные физические строки, без SQL-кавычек
 и без folding регистра. Пробельные имена допустимы; пустые строки, NUL и некорректный Unicode запрещены. Direction: asc/desc (default asc); nulls: first/last
-(default last для asc, first для desc). Method, unique, predicate, expressions,
+(default last для asc, first для desc). Для BRIN допускается только один ключ `{ "column": "..." }`, без direction/nulls даже со значениями по умолчанию. Unique, predicate, expressions,
 INCLUDE, произвольные collation/opclass и текст DDL во входе запрещены. Каталог задаёт
-collation/default B-tree opclass. Все остальные поля строгие, как основной JSON v2.
+collation/default opclass выбранного метода. Все остальные поля строгие, как основной JSON v2.
 Весь файл, включая ручной набор, входит в прежний лимит 1 MiB и input hash.
 
 Колонки разрешаются через тот же полный CatalogSnapshot до начала baseline. Неизвестная
 колонка/таблица отклоняется с UNKNOWN_COLUMN/UNKNOWN_TABLE, exit 2.
-Ключ без default B-tree opclass отклоняется с INVALID_INPUT, exit 2, и позицией ключа. Отдельные таблицы вне
+Ключ без default opclass выбранного метода отклоняется с INVALID_INPUT, exit 2, и позицией ключа. Отдельные таблицы вне
 SQL workload не поддержаны: для них не определён общий профиль записи. Обычные ограничения
 SQL, каталога и целевой БД сохраняются.
 
@@ -64,9 +64,9 @@ SQL, каталога и целевой БД сохраняются.
 
 ## Отчёт
 
-Отчёт JSON v3 (workload остаётся v2) дополнен optional-данными (null при отсутствии режима):
+Отчёт JSON v3 для B-tree, v4 при разрешённом или ручном BRIN (workload остаётся v2) дополнен optional-данными (null при отсутствии режима):
 
-- manual_requested_indexes — исходные структурированные определения;
+- manual_requested_indexes — исходные структурированные определения с эффективным `method`; BRIN имеет `direction: null`, `nulls: null` (неприменимы);
 - manual_comparison: origin=manual_outside_automatic_shortlist,
   comparison_scope=separate_manual_evaluation, status=not_evaluated/completed/failed,
   admissible, candidates (с отдельными оценками размеров и DDL), decisions,
@@ -106,3 +106,5 @@ Unit tests покрывают полный набор, канонический/
 deadline/cancel/потерю сессии/EXPLAIN limit посреди ручного вектора, ошибки cleanup и
 остановку между размерами с неизвестным хвостом. Экспорт использует сохранённые costs
 и планы, не повторяет EXPLAIN и не заменяет автоматические результаты ручной оценкой.
+
+Автоматический `index_methods` не ограничивает ручные методы. Смешанный ручной набор B-tree/BRIN измеряется целиком; модель write proxy не измеряет разницу реального обслуживания методов. [BRIN: ограничения и реальный пример](brin.md).

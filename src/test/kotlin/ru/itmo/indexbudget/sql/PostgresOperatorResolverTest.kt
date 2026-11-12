@@ -21,6 +21,17 @@ class PostgresOperatorResolverTest {
     private val textEquality = CatalogOperator(98, "pg_catalog", "=", text.oid, text.oid)
 
     @Test
+    fun `assignment only cast cannot resolve a comparison operator`() {
+        val resolver = PostgresOperatorResolver(CatalogSnapshot(emptyList(), semantics = CatalogSemantics(
+            types = listOf(integer, text), operators = listOf(textEquality),
+            implicitCasts = listOf(CatalogImplicitCast(integer.oid, text.oid, assignmentOnly = true)),
+        )), RunContext())
+        assertEquals(ErrorCode.UNSUPPORTED_SQL, assertThrows(AnalysisException::class.java) {
+            resolver.requireBuiltin("=", integer, text)
+        }.error.code)
+    }
+
+    @Test
     fun `domain coercion preserves a custom operator with a better exact argument match`() {
         // PostgreSQL can coerce the second varchar to its domain without a pg_cast row.
         // (varchar, domain) has one exact argument; built-in (text, text) has none.

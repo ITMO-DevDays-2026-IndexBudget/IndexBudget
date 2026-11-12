@@ -1,0 +1,47 @@
+{
+  "postgres_version" : "16.15 (Debian 16.15-1.pgdg12+2)",
+  "hypopg_version" : "1.4.2",
+  "rows" : 1000000,
+  "fixture" : "ordered sequence, 160-byte payload, default planner settings",
+  "brin_estimated_bytes" : 24576,
+  "btree_estimated_bytes" : 29024256,
+  "tight_storage_budget_bytes" : 49152,
+  "samples" : [ {
+    "methods" : [ ],
+    "cost_by_query_id" : {
+      "all_rows" : 37500.0,
+      "range" : 33318.4
+    },
+    "estimated_bytes" : 0,
+    "budgeted_bytes" : 0,
+    "write_units_per_hour" : 0.0
+  }, {
+    "methods" : [ "brin" ],
+    "cost_by_query_id" : {
+      "all_rows" : 37500.0,
+      "range" : 23046.75
+    },
+    "estimated_bytes" : 24576,
+    "budgeted_bytes" : 29492,
+    "write_units_per_hour" : 115.0
+  }, {
+    "methods" : [ "btree" ],
+    "cost_by_query_id" : {
+      "all_rows" : 37500.0,
+      "range" : 636.73
+    },
+    "estimated_bytes" : 29024256,
+    "budgeted_bytes" : 34829108,
+    "write_units_per_hour" : 115.0
+  }, {
+    "methods" : [ "brin", "btree" ],
+    "cost_by_query_id" : {
+      "all_rows" : 37500.0,
+      "range" : 636.73
+    },
+    "estimated_bytes" : 29048832,
+    "budgeted_bytes" : 34858600,
+    "write_units_per_hour" : 230.0
+  } ],
+  "note" : "Planner costs and estimated bytes only. Write proxy is not measured maintenance cost."
+}

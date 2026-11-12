@@ -1,0 +1,815 @@
+{
+  "schema_version" : 4,
+  "spec_version" : "0.2",
+  "run_id" : "3b53d765-4e0a-4265-8a0a-4bbe82c0138a",
+  "input_hash" : "ecabc65c03de2587a043a6dad4f032789748a82a27fd726abc4504770f70c668",
+  "duration_millis" : 224,
+  "environment" : {
+    "application_version" : "0.1.0-SNAPSHOT",
+    "java_version" : "25.0.2",
+    "kotlin_version" : "2.4.21",
+    "postgres_version" : null,
+    "hypopg_version" : null
+  },
+  "status" : "completed",
+  "analysis_mode" : "normal",
+  "candidate_ranking" : "frequency",
+  "index_methods" : [ "btree", "brin" ],
+  "selected_objective" : "robust",
+  "comparison_scope" : "evaluated_sets",
+  "incumbents_coincide" : true,
+  "price_of_robustness" : 0.0,
+  "summary" : {
+    "status" : "completed",
+    "selected_index_ids" : [ "ebb9838d0774a31eb6a097b81e483368d8f0c4e5411150b11de76e703966c227" ],
+    "mean_effect" : {
+      "baseline_cost" : 3369340.0,
+      "cost" : 101173.0,
+      "gain" : 3268167.0,
+      "ratio" : 0.030027542486065522,
+      "gain_percent" : 96.99724575139345,
+      "relative_status" : "available"
+    },
+    "worst_ratio" : 0.030027542486065522,
+    "budget_usage" : {
+      "estimated_bytes" : 29024256,
+      "budgeted_bytes" : 34829108,
+      "write_units_per_hour" : 115.0,
+      "index_count" : 1,
+      "size_safety_factor" : 1.2
+    },
+    "budget_limits" : {
+      "storage_budget_bytes" : 100000000,
+      "write_budget_units_per_hour" : 100000.0,
+      "max_indexes" : 2,
+      "query_cost_guards" : { }
+    },
+    "write_limit_enabled" : true,
+    "regressed_query_count" : 0,
+    "comparison_scope" : "evaluated_sets",
+    "incumbents_coincide" : true,
+    "price_of_robustness" : 0.0,
+    "stop_reasons" : [ "NO_IMPROVEMENT", "SEARCH_COMPLETE" ],
+    "errors" : [ ]
+  },
+  "profile_comparisons" : [ {
+    "id" : "day",
+    "baseline" : {
+      "baseline_cost" : 3369340.0,
+      "cost" : 3369340.0,
+      "gain" : 0.0,
+      "ratio" : 1.0,
+      "gain_percent" : 0.0,
+      "relative_status" : "available"
+    },
+    "selected" : {
+      "baseline_cost" : 3369340.0,
+      "cost" : 101173.0,
+      "gain" : 3268167.0,
+      "ratio" : 0.030027542486065522,
+      "gain_percent" : 96.99724575139345,
+      "relative_status" : "available"
+    },
+    "best_robust" : {
+      "baseline_cost" : 3369340.0,
+      "cost" : 101173.0,
+      "gain" : 3268167.0,
+      "ratio" : 0.030027542486065522,
+      "gain_percent" : 96.99724575139345,
+      "relative_status" : "available"
+    },
+    "best_mean" : {
+      "baseline_cost" : 3369340.0,
+      "cost" : 101173.0,
+      "gain" : 3268167.0,
+      "ratio" : 0.030027542486065522,
+      "gain_percent" : 96.99724575139345,
+      "relative_status" : "available"
+    }
+  } ],
+  "query_effects" : [ {
+    "id" : "range",
+    "baseline" : {
+      "baseline_cost" : 33318.4,
+      "cost" : 33318.4,
+      "gain" : 0.0,
+      "ratio" : 1.0,
+      "gain_percent" : 0.0,
+      "relative_status" : "available"
+    },
+    "selected" : {
+      "baseline_cost" : 33318.4,
+      "cost" : 636.73,
+      "gain" : 32681.670000000002,
+      "ratio" : 0.019110461486746062,
+      "gain_percent" : 98.08895385132539,
+      "relative_status" : "available"
+    },
+    "best_robust" : {
+      "baseline_cost" : 33318.4,
+      "cost" : 636.73,
+      "gain" : 32681.670000000002,
+      "ratio" : 0.019110461486746062,
+      "gain_percent" : 98.08895385132539,
+      "relative_status" : "available"
+    },
+    "best_mean" : {
+      "baseline_cost" : 33318.4,
+      "cost" : 636.73,
+      "gain" : 32681.670000000002,
+      "ratio" : 0.019110461486746062,
+      "gain_percent" : 98.08895385132539,
+      "relative_status" : "available"
+    }
+  }, {
+    "id" : "all_rows",
+    "baseline" : {
+      "baseline_cost" : 37500.0,
+      "cost" : 37500.0,
+      "gain" : 0.0,
+      "ratio" : 1.0,
+      "gain_percent" : 0.0,
+      "relative_status" : "available"
+    },
+    "selected" : {
+      "baseline_cost" : 37500.0,
+      "cost" : 37500.0,
+      "gain" : 0.0,
+      "ratio" : 1.0,
+      "gain_percent" : 0.0,
+      "relative_status" : "available"
+    },
+    "best_robust" : {
+      "baseline_cost" : 37500.0,
+      "cost" : 37500.0,
+      "gain" : 0.0,
+      "ratio" : 1.0,
+      "gain_percent" : 0.0,
+      "relative_status" : "available"
+    },
+    "best_mean" : {
+      "baseline_cost" : 37500.0,
+      "cost" : 37500.0,
+      "gain" : 0.0,
+      "ratio" : 1.0,
+      "gain_percent" : 0.0,
+      "relative_status" : "available"
+    }
+  } ],
+  "workload_provenance" : null,
+  "profiles" : [ {
+    "id" : "day",
+    "weight" : 1.0,
+    "normalized_weight" : 1.0,
+    "calls_per_hour" : {
+      "all_rows" : 1.0,
+      "range" : 100.0
+    }
+  } ],
+  "budgets" : {
+    "storage_budget_bytes" : 100000000,
+    "write_budget_units_per_hour" : 100000.0,
+    "max_indexes" : 2,
+    "query_cost_guards" : { }
+  },
+  "cost_guards" : {
+    "basis" : "planner_cost_ratio",
+    "note" : "Optional per-query constraints on planner cost ratios; not latency or SLA.",
+    "max_ratio_by_query_id" : { },
+    "outcomes" : [ ]
+  },
+  "write_proxy_model" : "row_changes_times_key_and_include_columns",
+  "write_proxy_note" : "Equal column counts do not imply equal real maintenance costs across index methods.",
+  "table_write_rates" : {
+    "brin_demo.events" : {
+      "inserts_per_hour" : 100.0,
+      "updates_per_hour" : 10.0,
+      "deletes_per_hour" : 5.0,
+      "source" : "manual"
+    }
+  },
+  "queries" : [ {
+    "id" : "range",
+    "sql" : "SELECT * FROM brin_demo.events WHERE sequence BETWEEN 500000 AND 510000",
+    "baseline_cost" : 33318.4,
+    "selected_cost" : 636.73,
+    "regression" : false
+  }, {
+    "id" : "all_rows",
+    "sql" : "SELECT * FROM brin_demo.events WHERE sequence > 0",
+    "baseline_cost" : 37500.0,
+    "selected_cost" : 37500.0,
+    "regression" : false
+  } ],
+  "baseline" : {
+    "candidate_ids" : [ ],
+    "cost_by_query_id" : {
+      "all_rows" : 37500.0,
+      "range" : 33318.4
+    },
+    "plans_by_query_id" : {
+      "all_rows" : [ {
+        "Plan" : {
+          "Node Type" : "Seq Scan",
+          "Parallel Aware" : false,
+          "Async Capable" : false,
+          "Relation Name" : "events",
+          "Alias" : "events",
+          "Startup Cost" : 0.0,
+          "Total Cost" : 37500.0,
+          "Plan Rows" : 999900,
+          "Plan Width" : 175,
+          "Filter" : "(sequence > 0)"
+        }
+      } ],
+      "range" : [ {
+        "Plan" : {
+          "Node Type" : "Gather",
+          "Parallel Aware" : false,
+          "Async Capable" : false,
+          "Startup Cost" : 1000.0,
+          "Total Cost" : 33318.4,
+          "Plan Rows" : 10684,
+          "Plan Width" : 175,
+          "Workers Planned" : 2,
+          "Single Copy" : false,
+          "Plans" : [ {
+            "Node Type" : "Seq Scan",
+            "Parent Relationship" : "Outer",
+            "Parallel Aware" : true,
+            "Async Capable" : false,
+            "Relation Name" : "events",
+            "Alias" : "events",
+            "Startup Cost" : 0.0,
+            "Total Cost" : 31250.0,
+            "Plan Rows" : 4452,
+            "Plan Width" : 175,
+            "Filter" : "((sequence >= 500000) AND (sequence <= 510000))"
+          } ]
+        }
+      } ]
+    },
+    "metrics" : {
+      "profiles" : [ {
+        "profile_id" : "day",
+        "normalized_weight" : 1.0,
+        "baseline_cost" : 3369340.0,
+        "cost" : 3369340.0,
+        "gain" : 0.0,
+        "ratio" : 1.0,
+        "gain_percent" : 0.0
+      } ],
+      "baseline_mean_cost" : 3369340.0,
+      "mean_cost" : 3369340.0,
+      "mean_ratio" : 1.0,
+      "worst_ratio" : 1.0,
+      "budget_usage" : {
+        "estimated_bytes" : 0,
+        "budgeted_bytes" : 0,
+        "write_units_per_hour" : 0.0,
+        "index_count" : 0,
+        "size_safety_factor" : 1.2
+      }
+    }
+  },
+  "selected" : {
+    "candidate_ids" : [ "ebb9838d0774a31eb6a097b81e483368d8f0c4e5411150b11de76e703966c227" ],
+    "cost_by_query_id" : {
+      "all_rows" : 37500.0,
+      "range" : 636.73
+    },
+    "plans_by_query_id" : {
+      "all_rows" : [ {
+        "Plan" : {
+          "Node Type" : "Seq Scan",
+          "Parallel Aware" : false,
+          "Async Capable" : false,
+          "Relation Name" : "events",
+          "Alias" : "events",
+          "Startup Cost" : 0.0,
+          "Total Cost" : 37500.0,
+          "Plan Rows" : 999900,
+          "Plan Width" : 175,
+          "Filter" : "(sequence > 0)"
+        }
+      } ],
+      "range" : [ {
+        "Plan" : {
+          "Node Type" : "Index Scan",
+          "Parallel Aware" : false,
+          "Async Capable" : false,
+          "Scan Direction" : "Forward",
+          "Index Name" : "<13561>btree_brin_demo_events_sequence",
+          "Relation Name" : "events",
+          "Alias" : "events",
+          "Startup Cost" : 0.05,
+          "Total Cost" : 636.73,
+          "Plan Rows" : 10684,
+          "Plan Width" : 175,
+          "Index Cond" : "((sequence >= 500000) AND (sequence <= 510000))"
+        }
+      } ]
+    },
+    "metrics" : {
+      "profiles" : [ {
+        "profile_id" : "day",
+        "normalized_weight" : 1.0,
+        "baseline_cost" : 3369340.0,
+        "cost" : 101173.0,
+        "gain" : 3268167.0,
+        "ratio" : 0.030027542486065522,
+        "gain_percent" : 96.99724575139345
+      } ],
+      "baseline_mean_cost" : 3369340.0,
+      "mean_cost" : 101173.0,
+      "mean_ratio" : 0.030027542486065522,
+      "worst_ratio" : 0.030027542486065522,
+      "budget_usage" : {
+        "estimated_bytes" : 29024256,
+        "budgeted_bytes" : 34829108,
+        "write_units_per_hour" : 115.0,
+        "index_count" : 1,
+        "size_safety_factor" : 1.2
+      }
+    }
+  },
+  "best_robust" : {
+    "candidate_ids" : [ "ebb9838d0774a31eb6a097b81e483368d8f0c4e5411150b11de76e703966c227" ],
+    "cost_by_query_id" : {
+      "all_rows" : 37500.0,
+      "range" : 636.73
+    },
+    "plans_by_query_id" : {
+      "all_rows" : [ {
+        "Plan" : {
+          "Node Type" : "Seq Scan",
+          "Parallel Aware" : false,
+          "Async Capable" : false,
+          "Relation Name" : "events",
+          "Alias" : "events",
+          "Startup Cost" : 0.0,
+          "Total Cost" : 37500.0,
+          "Plan Rows" : 999900,
+          "Plan Width" : 175,
+          "Filter" : "(sequence > 0)"
+        }
+      } ],
+      "range" : [ {
+        "Plan" : {
+          "Node Type" : "Index Scan",
+          "Parallel Aware" : false,
+          "Async Capable" : false,
+          "Scan Direction" : "Forward",
+          "Index Name" : "<13561>btree_brin_demo_events_sequence",
+          "Relation Name" : "events",
+          "Alias" : "events",
+          "Startup Cost" : 0.05,
+          "Total Cost" : 636.73,
+          "Plan Rows" : 10684,
+          "Plan Width" : 175,
+          "Index Cond" : "((sequence >= 500000) AND (sequence <= 510000))"
+        }
+      } ]
+    },
+    "metrics" : {
+      "profiles" : [ {
+        "profile_id" : "day",
+        "normalized_weight" : 1.0,
+        "baseline_cost" : 3369340.0,
+        "cost" : 101173.0,
+        "gain" : 3268167.0,
+        "ratio" : 0.030027542486065522,
+        "gain_percent" : 96.99724575139345
+      } ],
+      "baseline_mean_cost" : 3369340.0,
+      "mean_cost" : 101173.0,
+      "mean_ratio" : 0.030027542486065522,
+      "worst_ratio" : 0.030027542486065522,
+      "budget_usage" : {
+        "estimated_bytes" : 29024256,
+        "budgeted_bytes" : 34829108,
+        "write_units_per_hour" : 115.0,
+        "index_count" : 1,
+        "size_safety_factor" : 1.2
+      }
+    }
+  },
+  "best_mean" : {
+    "candidate_ids" : [ "ebb9838d0774a31eb6a097b81e483368d8f0c4e5411150b11de76e703966c227" ],
+    "cost_by_query_id" : {
+      "all_rows" : 37500.0,
+      "range" : 636.73
+    },
+    "plans_by_query_id" : {
+      "all_rows" : [ {
+        "Plan" : {
+          "Node Type" : "Seq Scan",
+          "Parallel Aware" : false,
+          "Async Capable" : false,
+          "Relation Name" : "events",
+          "Alias" : "events",
+          "Startup Cost" : 0.0,
+          "Total Cost" : 37500.0,
+          "Plan Rows" : 999900,
+          "Plan Width" : 175,
+          "Filter" : "(sequence > 0)"
+        }
+      } ],
+      "range" : [ {
+        "Plan" : {
+          "Node Type" : "Index Scan",
+          "Parallel Aware" : false,
+          "Async Capable" : false,
+          "Scan Direction" : "Forward",
+          "Index Name" : "<13561>btree_brin_demo_events_sequence",
+          "Relation Name" : "events",
+          "Alias" : "events",
+          "Startup Cost" : 0.05,
+          "Total Cost" : 636.73,
+          "Plan Rows" : 10684,
+          "Plan Width" : 175,
+          "Index Cond" : "((sequence >= 500000) AND (sequence <= 510000))"
+        }
+      } ]
+    },
+    "metrics" : {
+      "profiles" : [ {
+        "profile_id" : "day",
+        "normalized_weight" : 1.0,
+        "baseline_cost" : 3369340.0,
+        "cost" : 101173.0,
+        "gain" : 3268167.0,
+        "ratio" : 0.030027542486065522,
+        "gain_percent" : 96.99724575139345
+      } ],
+      "baseline_mean_cost" : 3369340.0,
+      "mean_cost" : 101173.0,
+      "mean_ratio" : 0.030027542486065522,
+      "worst_ratio" : 0.030027542486065522,
+      "budget_usage" : {
+        "estimated_bytes" : 29024256,
+        "budgeted_bytes" : 34829108,
+        "write_units_per_hour" : 115.0,
+        "index_count" : 1,
+        "size_safety_factor" : 1.2
+      }
+    }
+  },
+  "selected_indexes" : [ {
+    "id" : "ebb9838d0774a31eb6a097b81e483368d8f0c4e5411150b11de76e703966c227",
+    "definition" : {
+      "table" : {
+        "schema" : "brin_demo",
+        "name" : "events"
+      },
+      "method" : "btree",
+      "included_columns" : [ ],
+      "unique" : false,
+      "keys" : [ {
+        "column" : {
+          "table" : {
+            "schema" : "brin_demo",
+            "name" : "events"
+          },
+          "name" : "sequence"
+        },
+        "direction" : "asc",
+        "nulls" : "last",
+        "collation" : null,
+        "operator_class" : "\"pg_catalog\".\"int8_ops\""
+      } ]
+    },
+    "source_query_ids" : [ "all_rows", "range" ],
+    "source_branches" : [ ],
+    "generation_reasons" : [ "SINGLE_COLUMN" ],
+    "ddl" : "CREATE INDEX \"ib_ebb9838d0774a31eb6a097b81e483368d8f0c4e5411150b11de76e703966\" ON \"brin_demo\".\"events\" USING btree (\"sequence\" \"pg_catalog\".\"int8_ops\" ASC NULLS LAST);",
+    "estimated_bytes" : 29024256,
+    "budgeted_bytes" : 34829108,
+    "write_units_per_hour" : 115.0
+  } ],
+  "candidates" : [ {
+    "id" : "39c4ca8de3f95c1cfb0083badb5f3a47bee36be585612fdd419169dda6ae9673",
+    "definition" : {
+      "table" : {
+        "schema" : "brin_demo",
+        "name" : "events"
+      },
+      "method" : "brin",
+      "included_columns" : [ ],
+      "unique" : false,
+      "keys" : [ {
+        "column" : {
+          "table" : {
+            "schema" : "brin_demo",
+            "name" : "events"
+          },
+          "name" : "sequence"
+        },
+        "direction" : null,
+        "nulls" : null,
+        "collation" : null,
+        "operator_class" : "\"pg_catalog\".\"int8_minmax_ops\""
+      } ]
+    },
+    "source_query_ids" : [ "all_rows", "range" ],
+    "source_branches" : [ ],
+    "generation_reasons" : [ "BRIN_RANGE" ],
+    "ddl" : "CREATE INDEX \"ib_39c4ca8de3f95c1cfb0083badb5f3a47bee36be585612fdd419169dda6ae\" ON \"brin_demo\".\"events\" USING brin (\"sequence\" \"pg_catalog\".\"int8_minmax_ops\");",
+    "estimated_bytes" : 24576,
+    "budgeted_bytes" : 29492,
+    "write_units_per_hour" : 115.0
+  }, {
+    "id" : "ebb9838d0774a31eb6a097b81e483368d8f0c4e5411150b11de76e703966c227",
+    "definition" : {
+      "table" : {
+        "schema" : "brin_demo",
+        "name" : "events"
+      },
+      "method" : "btree",
+      "included_columns" : [ ],
+      "unique" : false,
+      "keys" : [ {
+        "column" : {
+          "table" : {
+            "schema" : "brin_demo",
+            "name" : "events"
+          },
+          "name" : "sequence"
+        },
+        "direction" : "asc",
+        "nulls" : "last",
+        "collation" : null,
+        "operator_class" : "\"pg_catalog\".\"int8_ops\""
+      } ]
+    },
+    "source_query_ids" : [ "all_rows", "range" ],
+    "source_branches" : [ ],
+    "generation_reasons" : [ "SINGLE_COLUMN" ],
+    "ddl" : "CREATE INDEX \"ib_ebb9838d0774a31eb6a097b81e483368d8f0c4e5411150b11de76e703966\" ON \"brin_demo\".\"events\" USING btree (\"sequence\" \"pg_catalog\".\"int8_ops\" ASC NULLS LAST);",
+    "estimated_bytes" : 29024256,
+    "budgeted_bytes" : 34829108,
+    "write_units_per_hour" : 115.0
+  } ],
+  "manual_requested_indexes" : [ {
+    "schema" : "brin_demo",
+    "table" : "events",
+    "method" : "btree",
+    "keys" : [ {
+      "column" : "sequence",
+      "direction" : "asc",
+      "nulls" : "last"
+    } ]
+  }, {
+    "schema" : "brin_demo",
+    "table" : "events",
+    "method" : "brin",
+    "keys" : [ {
+      "column" : "sequence",
+      "direction" : null,
+      "nulls" : null
+    } ]
+  } ],
+  "manual_comparison" : {
+    "origin" : "manual_outside_automatic_shortlist",
+    "comparison_scope" : "separate_manual_evaluation",
+    "status" : "completed",
+    "admissible" : true,
+    "candidates" : [ {
+      "id" : "39c4ca8de3f95c1cfb0083badb5f3a47bee36be585612fdd419169dda6ae9673",
+      "definition" : {
+        "table" : {
+          "schema" : "brin_demo",
+          "name" : "events"
+        },
+        "method" : "brin",
+        "included_columns" : [ ],
+        "unique" : false,
+        "keys" : [ {
+          "column" : {
+            "table" : {
+              "schema" : "brin_demo",
+              "name" : "events"
+            },
+            "name" : "sequence"
+          },
+          "direction" : null,
+          "nulls" : null,
+          "collation" : null,
+          "operator_class" : "\"pg_catalog\".\"int8_minmax_ops\""
+        } ]
+      },
+      "source_query_ids" : [ ],
+      "source_branches" : [ ],
+      "generation_reasons" : [ ],
+      "ddl" : "CREATE INDEX \"ib_39c4ca8de3f95c1cfb0083badb5f3a47bee36be585612fdd419169dda6ae\" ON \"brin_demo\".\"events\" USING brin (\"sequence\" \"pg_catalog\".\"int8_minmax_ops\");",
+      "estimated_bytes" : 24576,
+      "budgeted_bytes" : 29492,
+      "write_units_per_hour" : 115.0
+    }, {
+      "id" : "ebb9838d0774a31eb6a097b81e483368d8f0c4e5411150b11de76e703966c227",
+      "definition" : {
+        "table" : {
+          "schema" : "brin_demo",
+          "name" : "events"
+        },
+        "method" : "btree",
+        "included_columns" : [ ],
+        "unique" : false,
+        "keys" : [ {
+          "column" : {
+            "table" : {
+              "schema" : "brin_demo",
+              "name" : "events"
+            },
+            "name" : "sequence"
+          },
+          "direction" : "asc",
+          "nulls" : "last",
+          "collation" : null,
+          "operator_class" : "\"pg_catalog\".\"int8_ops\""
+        } ]
+      },
+      "source_query_ids" : [ ],
+      "source_branches" : [ ],
+      "generation_reasons" : [ ],
+      "ddl" : "CREATE INDEX \"ib_ebb9838d0774a31eb6a097b81e483368d8f0c4e5411150b11de76e703966\" ON \"brin_demo\".\"events\" USING btree (\"sequence\" \"pg_catalog\".\"int8_ops\" ASC NULLS LAST);",
+      "estimated_bytes" : 29024256,
+      "budgeted_bytes" : 34829108,
+      "write_units_per_hour" : 115.0
+    } ],
+    "decisions" : [ ],
+    "configuration" : {
+      "candidate_ids" : [ "39c4ca8de3f95c1cfb0083badb5f3a47bee36be585612fdd419169dda6ae9673", "ebb9838d0774a31eb6a097b81e483368d8f0c4e5411150b11de76e703966c227" ],
+      "cost_by_query_id" : {
+        "all_rows" : 37500.0,
+        "range" : 636.73
+      },
+      "plans_by_query_id" : {
+        "all_rows" : [ {
+          "Plan" : {
+            "Node Type" : "Seq Scan",
+            "Parallel Aware" : false,
+            "Async Capable" : false,
+            "Relation Name" : "events",
+            "Alias" : "events",
+            "Startup Cost" : 0.0,
+            "Total Cost" : 37500.0,
+            "Plan Rows" : 999900,
+            "Plan Width" : 175,
+            "Filter" : "(sequence > 0)"
+          }
+        } ],
+        "range" : [ {
+          "Plan" : {
+            "Node Type" : "Index Scan",
+            "Parallel Aware" : false,
+            "Async Capable" : false,
+            "Scan Direction" : "Forward",
+            "Index Name" : "<13562>btree_brin_demo_events_sequence",
+            "Relation Name" : "events",
+            "Alias" : "events",
+            "Startup Cost" : 0.05,
+            "Total Cost" : 636.73,
+            "Plan Rows" : 10684,
+            "Plan Width" : 175,
+            "Index Cond" : "((sequence >= 500000) AND (sequence <= 510000))"
+          }
+        } ]
+      },
+      "metrics" : {
+        "profiles" : [ {
+          "profile_id" : "day",
+          "normalized_weight" : 1.0,
+          "baseline_cost" : 3369340.0,
+          "cost" : 101173.0,
+          "gain" : 3268167.0,
+          "ratio" : 0.030027542486065522,
+          "gain_percent" : 96.99724575139345
+        } ],
+        "baseline_mean_cost" : 3369340.0,
+        "mean_cost" : 101173.0,
+        "mean_ratio" : 0.030027542486065522,
+        "worst_ratio" : 0.030027542486065522,
+        "budget_usage" : {
+          "estimated_bytes" : 29048832,
+          "budgeted_bytes" : 34858600,
+          "write_units_per_hour" : 230.0,
+          "index_count" : 2,
+          "size_safety_factor" : 1.2
+        }
+      }
+    },
+    "budget_violations" : [ ],
+    "evaluation_violations" : [ ],
+    "queries" : [ {
+      "query_id" : "range",
+      "baseline_cost" : 33318.4,
+      "manual_cost" : 636.73,
+      "regression" : false
+    }, {
+      "query_id" : "all_rows",
+      "baseline_cost" : 37500.0,
+      "manual_cost" : 37500.0,
+      "regression" : false
+    } ],
+    "error" : null
+  },
+  "candidate_diagnostics" : {
+    "column_limit_per_query_table" : 16,
+    "local_candidate_limit" : 32,
+    "global_candidate_limit" : 16,
+    "candidates_before_global_deduplication" : 4,
+    "candidates_after_global_deduplication" : 2,
+    "shortlisted_candidates" : 2,
+    "initial_shortlisted_candidates" : 2,
+    "reserve_candidates" : 0,
+    "reserve_candidate_limit" : 48,
+    "max_size_attempts" : 32,
+    "preparation_scope" : "run",
+    "fixed_pool_selection" : null,
+    "preparation" : {
+      "examined_candidates" : 2,
+      "size_attempts" : 2,
+      "budget_rejected_candidates" : 0,
+      "candidate_errors" : 0,
+      "refilled_candidates" : 0,
+      "final_shortlisted_candidates" : 2,
+      "stop_reason" : "RESERVE_EXHAUSTED"
+    },
+    "ungenerated_definitions" : null,
+    "local_scopes" : [ {
+      "query_id" : "all_rows",
+      "table" : {
+        "schema" : "brin_demo",
+        "name" : "events"
+      },
+      "discovered_columns" : 1,
+      "retained_columns" : 1,
+      "enumerated_definitions" : 2,
+      "deduplicated_definitions" : 2,
+      "unindexable_variants" : 0,
+      "retained_definitions" : 2,
+      "excluded_columns" : [ ],
+      "enumerated_include_definitions" : 0,
+      "retained_include_definitions" : 0
+    }, {
+      "query_id" : "range",
+      "table" : {
+        "schema" : "brin_demo",
+        "name" : "events"
+      },
+      "discovered_columns" : 1,
+      "retained_columns" : 1,
+      "enumerated_definitions" : 2,
+      "deduplicated_definitions" : 2,
+      "unindexable_variants" : 0,
+      "retained_definitions" : 2,
+      "excluded_columns" : [ ],
+      "enumerated_include_definitions" : 0,
+      "retained_include_definitions" : 0
+    } ],
+    "decisions" : [ ],
+    "warnings" : [ ]
+  },
+  "diagnostics" : {
+    "completed_phases" : [ "validation", "introspection", "baseline", "candidates", "greedy", "repair" ],
+    "stop_reasons" : [ "NO_IMPROVEMENT", "SEARCH_COMPLETE" ],
+    "statistics" : {
+      "explain_attempts" : 10,
+      "evaluation_attempts" : 5,
+      "completed_evaluations" : 5,
+      "cache_hits" : 1,
+      "repair_attempts" : 0
+    },
+    "limits" : {
+      "command_timeout_millis" : 90000,
+      "search_timeout_millis" : 60000,
+      "explain_timeout_millis" : 2000,
+      "connect_timeout_millis" : 5000,
+      "max_explain_attempts" : 2000,
+      "max_repair_attempts" : 28
+    },
+    "warnings" : [ ],
+    "errors" : [ ],
+    "candidate_decisions" : [ {
+      "reason" : "NO_MARGINAL_IMPROVEMENT",
+      "candidate_id" : "39c4ca8de3f95c1cfb0083badb5f3a47bee36be585612fdd419169dda6ae9673",
+      "query_id" : null,
+      "table" : null,
+      "phase" : "greedy",
+      "details" : {
+        "candidate_ids" : "39c4ca8de3f95c1cfb0083badb5f3a47bee36be585612fdd419169dda6ae9673,ebb9838d0774a31eb6a097b81e483368d8f0c4e5411150b11de76e703966c227",
+        "current_ids" : "ebb9838d0774a31eb6a097b81e483368d8f0c4e5411150b11de76e703966c227"
+      }
+    }, {
+      "reason" : "NOT_SELECTED",
+      "candidate_id" : "39c4ca8de3f95c1cfb0083badb5f3a47bee36be585612fdd419169dda6ae9673",
+      "query_id" : null,
+      "table" : null,
+      "phase" : null,
+      "details" : { }
+    } ],
+    "unexamined_configurations" : 0
+  },
+  "error" : null
+}

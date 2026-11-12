@@ -109,6 +109,7 @@ class IndexBudgetCli(
                 AnalysisError(ErrorCode.INVALID_INPUT, "Workload JSON does not match the v2 input structure."), effectiveRanking)
         }
         printRunLimits(err, context, input.candidateRanking)
+        err.println("stage=validation index_methods=" + input.indexMethods.sortedBy { it.ordinal }.joinToString(",") { it.wireName })
 
         return try {
             val result = analysisRunner.run(input, outputPath, context)
@@ -179,7 +180,9 @@ class IndexBudgetCli(
               indexbudget import-workload --help
 
             Validates JSON v2, shared queries, frequency profiles and budgets.
-            Optional manual_indexes: 1–5 structured B-tree definitions, evaluated separately after search.
+            Optional index_methods: ["btree"] (default), ["brin"], or ["btree", "brin"]; shared limits.
+            Optional manual_indexes: 1–5 structured B-tree/BRIN definitions; method defaults to btree.
+            BRIN: one range WHERE column, default parameters/opclass, no INCLUDE or sort options.
             Use a new or empty output directory for each run.
             Runs SQL resolution, bounded shortlist, HypoPG, greedy + repair and HTML/JSON/SQL export.
             Requires a prepared PostgreSQL database with HypoPG; analysis creates no physical indexes.

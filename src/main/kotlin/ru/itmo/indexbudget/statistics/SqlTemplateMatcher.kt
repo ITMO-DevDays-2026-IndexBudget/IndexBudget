@@ -10,27 +10,95 @@ import ru.itmo.indexbudget.sql.decodePostgresIdentifier
 import ru.itmo.indexbudget.sql.JSqlParserAstValidator
 import ru.itmo.indexbudget.sql.PostgresParserTokens
 import ru.itmo.indexbudget.sql.postgresName
+import ru.itmo.indexbudget.sql.ValidatedSql
+import net.sf.jsqlparser.statement.update.Update
+import net.sf.jsqlparser.statement.delete.Delete
 
 /** Conservative AST substitution: only parameter leaves change; the entire resulting AST must match. */
 internal class SqlTemplateMatcher(private val context: RunContext) {
-    fun referencedTables(sql: String): Set<TableName> = parse(sql).let { select ->
-        (listOf(select.fromItem as Table) + select.joins.orEmpty().map { it.fromItem as Table }).map {
+    fun referencedTables(sql: String): Set<TableName> = parse(sql).let { validated ->
+        validated.tables.map {
             TableName(decodePostgresIdentifier(it.postgresName), it.schemaName?.let(::decodePostgresIdentifier))
         }.toSet()
     }
+
     fun match(template: String, example: String, catalog: CatalogSnapshot): Boolean {
-        val original = parse(template)
-        val sample = parse(example)
-        qualify(original, catalog)
-        qualify(sample, catalog)
-        val values = mutableMapOf<String, String>()
+        val source = parse(template)
+        val exampleAst = parse(example)
+        if (source.kind != exampleAst.kind) return false
+        qualify(source.scope, catalog)
+        qualify(exampleAst.scope, catalog)
+
+        // All clauses share one binding table, including repeated parameters in SET and WHERE.
+        val binder = ParameterBinder()
+        bindWhere(source.scope, exampleAst.scope, binder)
+        if (!bindJoins(source.scope, exampleAst.scope, binder)) return false
+        bindLimit(source.scope, exampleAst.scope, binder)
+        if (!bindDml(source, exampleAst, binder)) return false
+
+        if (source.statement.toString() != exampleAst.statement.toString()) return false
+        // Validate source-only dialect flags too: canonical SQL text is not itself a whitelist.
+        JSqlParserAstValidator("template", context).validateStatement(source.statement)
+        context.checkDeadline()
+        return true
+    }
+
+    private fun bindWhere(source: PlainSelect, example: PlainSelect, binder: ParameterBinder) {
+        source.where = binder.bind(source.where, example.where)
+    }
+
+    private fun bindJoins(source: PlainSelect, example: PlainSelect, binder: ParameterBinder): Boolean {
+        val sourceJoins = source.joins.orEmpty()
+        val exampleJoins = example.joins.orEmpty()
+        if (sourceJoins.size != exampleJoins.size) return false
+        sourceJoins.zip(exampleJoins).forEach { (sourceJoin, exampleJoin) ->
+            if (sourceJoin.onExpressions.size != exampleJoin.onExpressions.size) return false
+            sourceJoin.setOnExpressions(sourceJoin.onExpressions.zip(exampleJoin.onExpressions).map { (left, right) ->
+                binder.bind(left, right)
+            })
+        }
+        return true
+    }
+
+    private fun bindLimit(source: PlainSelect, example: PlainSelect, binder: ParameterBinder) {
+        if (source.limit != null && example.limit != null) {
+            source.limit.rowCount = binder.bind(source.limit.rowCount, example.limit.rowCount)
+        }
+    }
+
+    private fun bindDml(source: ValidatedSql, example: ValidatedSql, binder: ParameterBinder): Boolean {
+        if (source.statement is Update && example.statement is Update) {
+            if (!bindUpdateAssignments(source.statement, example.statement, binder)) return false
+            source.statement.where = source.scope.where
+        } else if (source.statement is Delete) {
+            source.statement.where = source.scope.where
+        }
+        return true
+    }
+
+    private fun bindUpdateAssignments(source: Update, example: Update, binder: ParameterBinder): Boolean {
+        val sourceAssignments = source.updateSets
+        val exampleAssignments = example.updateSets
+        if (sourceAssignments.size != exampleAssignments.size) return false
+        for (index in sourceAssignments.indices) {
+            val assignment = sourceAssignments[index]
+            val bound = requireNotNull(binder.bind(assignment.values[0], exampleAssignments[index].values[0]))
+            // The validator admits exactly one scalar value per SET assignment.
+            assignment.setValues(ExpressionList<Expression>(bound))
+        }
+        return true
+    }
+
+    private inner class ParameterBinder {
+        private val literalsByParameter = mutableMapOf<String, String>()
+
         fun bind(left: Expression?, right: Expression?): Expression? {
             context.checkDeadline()
             if (left == null || right == null) return left
             if (left is JdbcParameter) {
                 if (!scalar(right)) return left
                 val key = left.toString()
-                val previous = values.putIfAbsent(key, right.toString())
+                val previous = literalsByParameter.putIfAbsent(key, right.toString())
                 if (previous != null && previous != right.toString()) return left
                 return right
             }
@@ -42,11 +110,7 @@ internal class SqlTemplateMatcher(private val context: RunContext) {
                     left.rightExpression = bind(left.rightExpression, right.rightExpression)
                 }
                 is ParenthesedExpressionList<*> -> {
-                    right as ParenthesedExpressionList<*>
-                    if (left.size == right.size) {
-                        @Suppress("UNCHECKED_CAST") val mutable = left as MutableList<Expression>
-                        for (i in mutable.indices) mutable[i] = requireNotNull(bind(mutable[i], right[i]))
-                    }
+                    return bindExpressionList(left, right as ParenthesedExpressionList<*>)
                 }
                 is InExpression -> {
                     right as InExpression
@@ -65,24 +129,25 @@ internal class SqlTemplateMatcher(private val context: RunContext) {
             }
             return left
         }
-        original.where = bind(original.where, sample.where)
-        val joins = original.joins.orEmpty()
-        val samples = sample.joins.orEmpty()
-        if (joins.size != samples.size) return false
-        joins.zip(samples).forEach { (left, right) ->
-            if (left.onExpressions.size != right.onExpressions.size) return false
-            left.setOnExpressions(left.onExpressions.zip(right.onExpressions).map { (a, b) -> bind(a, b) })
+
+        private fun bindExpressionList(
+            source: ParenthesedExpressionList<*>,
+            example: ParenthesedExpressionList<*>,
+        ): ParenthesedExpressionList<*> {
+            if (source.size != example.size) return source
+            val expressions = source.mapIndexed { index, expression ->
+                requireNotNull(bind(expression, example[index]))
+            }
+            return ParenthesedExpressionList<Expression>(expressions).apply { astNode = source.astNode }
         }
-        if (original.limit != null && sample.limit != null) original.limit.rowCount = bind(original.limit.rowCount, sample.limit.rowCount)
-        if (original.toString() != sample.toString()) return false
-        // Validate source-only dialect flags too: canonical SQL text is not itself a whitelist.
-        JSqlParserAstValidator("template", context).validate(original)
-        context.checkDeadline()
-        return true
     }
 
     /** Freeze table resolution in exported SQL; never carry an implicit historical search_path. */
-    fun qualifiedExample(sql: String, catalog: CatalogSnapshot): String = parse(sql).let { qualify(it, catalog); it.toString() }
+    fun qualifiedExample(sql: String, catalog: CatalogSnapshot): String {
+        val example = parse(sql)
+        qualify(example.scope, catalog)
+        return example.statement.toString()
+    }
 
     private fun qualify(select: PlainSelect, catalog: CatalogSnapshot) {
         val tables = listOf(select.fromItem) + select.joins.orEmpty().map { it.fromItem }
@@ -108,20 +173,16 @@ internal class SqlTemplateMatcher(private val context: RunContext) {
         else -> false
     }
 
-    private fun parse(sql: String): PlainSelect {
+    private fun parse(sql: String): ValidatedSql {
         if (sql.toByteArray(Charsets.UTF_8).size > 64 * 1024) ImportJson.fail("Template SQL exceeds 64 KiB.")
         context.checkDeadline()
         val tokens = PostgresParserTokens(sql, context)
         val statements = try { CCJSqlParserUtil.parseStatements(sql, java.util.function.Consumer(tokens::configure)) }
-            catch (_: Exception) { ImportJson.fail("Template cannot be parsed as one SELECT.") }
+            catch (_: net.sf.jsqlparser.JSQLParserException) { ImportJson.fail("Template cannot be parsed as one supported statement.") }
         finally { context.checkDeadline() }
         tokens.restoreImages(context)
-        if (statements.size != 1 || statements[0] !is PlainSelect) ImportJson.fail("Template must be one plain SELECT.")
-        return (statements[0] as PlainSelect).also {
-            // Reuse token-based restoration, including quoted names containing dots. Only template
-            // scalar parameters are temporarily allowed; bound ASTs are validated strictly in match.
-            JSqlParserAstValidator("template", context, tokens::restoreIdentifier).validateTemplate(it)
-        }
+        if (statements.size != 1) ImportJson.fail("Template must contain one supported statement.")
+        return JSqlParserAstValidator("template", context, tokens::restoreIdentifier).validateStatement(statements[0], template = true)
     }
     private fun quote(value: String) = "\"" + value.replace("\"", "\"\"") + "\""
 }

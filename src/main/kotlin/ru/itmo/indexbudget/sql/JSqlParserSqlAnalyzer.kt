@@ -4,6 +4,7 @@ import net.sf.jsqlparser.JSQLParserException
 import net.sf.jsqlparser.parser.CCJSqlParser
 import net.sf.jsqlparser.parser.CCJSqlParserUtil
 import net.sf.jsqlparser.statement.Statements
+import net.sf.jsqlparser.statement.Statement
 import net.sf.jsqlparser.statement.select.PlainSelect
 import org.springframework.stereotype.Component
 import ru.itmo.indexbudget.domain.AnalysisError
@@ -26,15 +27,18 @@ class JSqlParserSqlAnalyzer internal constructor(
 
     override fun parse(input: WorkloadInput, context: RunContext): ParsedWorkload {
         val parsedQueries = linkedMapOf<String, PlainSelect>()
+        val parsedStatements = linkedMapOf<String, ValidatedSql>()
         val referencedTables = linkedSetOf<TableName>()
 
         input.queries.forEach { query ->
-            val (select, tables) = parseAndValidateQuery(query, context)
-            parsedQueries[query.id] = select
+            val (validated, tables) = parseAndValidateQuery(query, context)
+            parsedQueries[query.id] = validated.scope
+            parsedStatements[query.id] = validated
+            context.recordStatementKind(query.id, validated.kind)
             referencedTables += tables
         }
 
-        return JSqlParserParsedWorkload(input, referencedTables, parsedQueries)
+        return JSqlParserParsedWorkload(input, referencedTables, parsedQueries, parsedStatements)
     }
 
     override fun resolve(
@@ -49,14 +53,14 @@ class JSqlParserSqlAnalyzer internal constructor(
         return JSqlParserNameResolver(catalog, context).resolve(parsed)
     }
 
-    private fun parseAndValidateQuery(query: QueryInput, context: RunContext): Pair<PlainSelect, List<TableName>> =
+    private fun parseAndValidateQuery(query: QueryInput, context: RunContext): Pair<ValidatedSql, List<TableName>> =
         try {
             context.checkDeadline()
             validateSqlSize(query)
             val tokens = PostgresParserTokens(query.sql, context)
-            val select = parseSingleSelect(query, context, tokens)
-            val tables = JSqlParserAstValidator(query.id, context, tokens::restoreIdentifier).validate(select)
-            select to tables.map { TableName(name = decodePostgresIdentifier(it.postgresName), schema = it.schemaName?.let(::decodePostgresIdentifier)) }
+            val statement = parseSingleStatement(query, context, tokens)
+            val validated = JSqlParserAstValidator(query.id, context, tokens::restoreIdentifier).validateStatement(statement)
+            validated to validated.tables.map { TableName(name = decodePostgresIdentifier(it.postgresName), schema = it.schemaName?.let(::decodePostgresIdentifier)) }
         } catch (error: AnalysisException) {
             if (error.error.queryId != null) throw error
             throw AnalysisException(error.error.copy(queryId = query.id), error)
@@ -68,24 +72,21 @@ class JSqlParserSqlAnalyzer internal constructor(
         }
     }
 
-    private fun parseSingleSelect(query: QueryInput, context: RunContext, tokens: PostgresParserTokens): PlainSelect {
+    private fun parseSingleStatement(query: QueryInput, context: RunContext, tokens: PostgresParserTokens): Statement {
         context.checkDeadline()
         val statements = try {
             statementParser(query.sql, Consumer(tokens::configure))
         } catch (_: JSQLParserException) {
-            fail(ErrorCode.UNSUPPORTED_SQL, query.id, "SQL cannot be parsed as a supported SELECT.")
+            fail(ErrorCode.UNSUPPORTED_SQL, query.id, "SQL cannot be parsed as a supported statement.")
         } finally {
             context.checkDeadline()
         }
         tokens.restoreImages(context)
 
         if (statements.size != 1) {
-            fail(ErrorCode.UNSUPPORTED_SQL, query.id, "Exactly one SELECT statement is required.")
+            fail(ErrorCode.UNSUPPORTED_SQL, query.id, "Exactly one SQL statement is required.")
         }
         val statement = statements[0]
-        if (statement !is PlainSelect) {
-            fail(ErrorCode.UNSUPPORTED_SQL, query.id, "Only a plain SELECT statement is supported.")
-        }
         return statement
     }
 
@@ -101,6 +102,7 @@ internal data class JSqlParserParsedWorkload(
     override val input: WorkloadInput,
     override val referencedTables: Set<TableName>,
     val queriesById: Map<String, PlainSelect>,
+    val statementsById: Map<String, ValidatedSql> = emptyMap(),
 ) : ParsedWorkload
 
 /** Decode AST tokens at the SQL -> domain boundary; keep the AST and original SQL unchanged.
