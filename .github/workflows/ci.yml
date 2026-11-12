@@ -56,7 +56,7 @@ jobs:
           else:
               raise SystemExit('Frontend did not become ready')
           PY
-          python3 frontend/tests/smoke.py
+          python3 frontend/tests/smoke.py --verify-local-database
       - name: Verify observed write profile through real snapshots, demo and CLI
         env:
           FRONTEND_TEST_DB_IMAGE: indexbudget-frontend-db:local
