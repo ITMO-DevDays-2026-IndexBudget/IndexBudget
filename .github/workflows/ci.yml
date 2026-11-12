@@ -171,7 +171,7 @@ jobs:
   hypopg-integration:
     name: postgres-hypopg-integration
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
@@ -183,6 +183,16 @@ jobs:
         run: bash demo/check-hypopg.sh
       - name: Verify published demo SQL scenarios on exact seed v1
         run: bash demo/check-scenarios.sh
+      - name: Verify observed write rates and independent budget transitions
+        run: bash demo/check-scenarios.sh --observed-budgets
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: observed-budget-experiment
+          path: |
+            build/observed-budget-runs-*/
+            build/observed-budget-latest.txt
+          if-no-files-found: warn
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:

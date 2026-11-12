@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "base_revision": "26c10c5",
+  "source_files": {
+    "src/test/kotlin/ru/itmo/indexbudget/experiments/ObservedBudgetIntegrationTest.kt": "600e1eaf6df75c6701777056b937ee4f605d3edc11a42d57487f8b32949442fe",
+    "demo/check-scenarios.sh": "dd50e05c8573c420b2a1b09cfd17e6d6bdf2b52060767de5d5fd4ae89a1d7ec5",
+    "demo/scenarios/observe-writes.sql": "246ae80aeff621de23d43bcc41c39b498682bdc76a3ac55933604b64d9266970",
+    "demo/postgres/Dockerfile": "7bdb78cdc0d5c8547fbde74d250c88299e7af71b0e4dcdd022325cbf9d4774ac",
+    "demo/postgres/init/001-seed.sql": "2697dafaa6b53aa8f1e563fb57e63782994eb0dbebd28a58c1e8356a12a7f9db",
+    "demo/scenarios/prepare-role.sql": "cda8d9fe0842a2ce34a0ef454eaff3586e63ea5631397aba70dcf50ab26703b8",
+    "build.gradle.kts": "70cbdeab12efa6f1b8d0c2b1e4fd151cf390ba56f6efa30de2b04b1919a32e77",
+    "gradle/wrapper/gradle-wrapper.properties": "da66a5ffe08e2edfed40553bb83548943a0b522603a833852bce317699e6fa9c"
+  },
+  "files": {
+    "catalog.json": "0caba8bbad63429fda1a5369069d2ff6cd20179a75e220e875ba492edc36dd0f",
+    "observe-writes.sql": "246ae80aeff621de23d43bcc41c39b498682bdc76a3ac55933604b64d9266970",
+    "reports.zip": "2de1db890e1cec5e8715d01a759484eba7a13065b4099ae1f3bd0de457a82f50",
+    "seed.sql": "2697dafaa6b53aa8f1e563fb57e63782994eb0dbebd28a58c1e8356a12a7f9db",
+    "settings.json": "73d0554edb13a073733a70eada9922343faf42dba33e5ce0d550b5c7d8dd6adb",
+    "source-workload.json": "dacab809cbc0dfad9cb147e3433bb806ba3b4996e89a250331b44224c3c9490c",
+    "storage-series.json": "d9835ca93949fb4ebfa368f6ee297ed552f2c14a2a3e94bd3bc2162267f3f738",
+    "summary.json": "034473cdde66287d40ca1f599a179faa3421a811ca143c45ba9f34e4bb750eb6",
+    "workload.json": "01e1d766b09e951a6cad64846df42c61d186dc7a86d5cbcdac8734936a7b21f4",
+    "write-after.json": "5626c7467cea77550e5d9f7a91496b5bc1ccbb2a583becf0902fc25ed958e4e8",
+    "write-before.json": "3d9588d88fcc333f32135b414e5172e503b70cf3107299effe179150951d0ec5",
+    "write-series.json": "30b7f0742e7b7e63b603e1cdf2e0120ddb06aede355a67f0cb28fb53bdd72532",
+    "write-workload.json": "f59a2523f0728a8bea50f61e057652024015b703ce73a2e2c363b05dffc9537f"
+  }
+}
