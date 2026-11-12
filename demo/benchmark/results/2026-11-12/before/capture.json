@@ -1,0 +1,1 @@
+{"schema_version":1,"kind":"pg_table_statistics_capture","status":"completed","error":null,"interval_seconds":null,"conditions_match":null,"diagnostics":[],"reset_detection":"best_effort_pg16","snapshots":[{"path":"snapshot-1.json","snapshot_id":"d370f9ad-1553-4873-adf9-dac4e116d7c5","status":"completed"}]}

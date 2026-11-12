@@ -1,0 +1,91 @@
+{
+  "read": [
+    [
+      "SELECT",
+      "records_by_group",
+      "SELECT id, value FROM public.records WHERE group_id = 42"
+    ],
+    [
+      "SELECT",
+      "records_by_value",
+      "SELECT id, payload FROM public.records WHERE value = 7"
+    ],
+    [
+      "SELECT",
+      "time_window",
+      "SELECT id, value FROM public.records WHERE created_at BETWEEN '2026-01-03 07:30:00'::timestamp AND '2026-01-03 07:31:00'::timestamp"
+    ],
+    [
+      "SELECT",
+      "group_list",
+      "SELECT id, value FROM public.records WHERE group_id IN (42, 43, 44)"
+    ],
+    [
+      "SELECT",
+      "alternative_filters",
+      "SELECT id, value FROM public.records WHERE (group_id = 42 AND value >= 500) OR (group_id = 43 AND value < 10)"
+    ],
+    [
+      "SELECT",
+      "category_join",
+      "SELECT r.id, g.name FROM public.records r INNER JOIN public.groups g ON r.group_id = g.id WHERE g.category = 7 AND r.value >= 990 ORDER BY r.created_at DESC LIMIT 20"
+    ],
+    [
+      "SELECT",
+      "all_records",
+      "SELECT * FROM public.records WHERE group_id >= 0"
+    ]
+  ],
+  "mixed": [
+    [
+      "SELECT",
+      "records_by_group",
+      "SELECT id, value FROM public.records WHERE group_id = 42"
+    ],
+    [
+      "SELECT",
+      "records_by_value",
+      "SELECT id, payload FROM public.records WHERE value = 7"
+    ],
+    [
+      "SELECT",
+      "time_window",
+      "SELECT id, value FROM public.records WHERE created_at BETWEEN '2026-01-03 07:30:00'::timestamp AND '2026-01-03 07:31:00'::timestamp"
+    ],
+    [
+      "SELECT",
+      "group_list",
+      "SELECT id, value FROM public.records WHERE group_id IN (42, 43, 44)"
+    ],
+    [
+      "SELECT",
+      "alternative_filters",
+      "SELECT id, value FROM public.records WHERE (group_id = 42 AND value >= 500) OR (group_id = 43 AND value < 10)"
+    ],
+    [
+      "SELECT",
+      "category_join",
+      "SELECT r.id, g.name FROM public.records r INNER JOIN public.groups g ON r.group_id = g.id WHERE g.category = 7 AND r.value >= 990 ORDER BY r.created_at DESC LIMIT 20"
+    ],
+    [
+      "SELECT",
+      "all_records",
+      "SELECT * FROM public.records WHERE group_id >= 0"
+    ],
+    [
+      "INSERT",
+      "insert_records",
+      "INSERT INTO public.records (id,group_id,value,created_at,payload) SELECT i,42,7,timestamp '2026-01-03 08:00:00','benchmark-only' FROM generate_series(200001,200100) i"
+    ],
+    [
+      "UPDATE",
+      "update_payload",
+      "UPDATE public.records r SET payload = 'demo-updated' WHERE r.group_id = 42 AND r.value >= 900"
+    ],
+    [
+      "DELETE",
+      "delete_recent",
+      "DELETE FROM public.records WHERE created_at < '2026-01-01 00:10:00'::timestamp AND group_id IN (42, 43)"
+    ]
+  ]
+}

@@ -1,0 +1,518 @@
+[
+  {
+    "exposure_seconds": 2.5012627079850063,
+    "mode": "read",
+    "variant": "baseline",
+    "repeat": 0,
+    "initial_fingerprint": {
+      "records": 200000,
+      "groups": 1000,
+      "heap_bytes": 38166528,
+      "checksum": "1cf6afcff9222c813b5cb06f43482ece",
+      "indexes": [
+        "CREATE UNIQUE INDEX groups_pkey ON public.groups USING btree (id)",
+        "CREATE UNIQUE INDEX records_pkey ON public.records USING btree (id)"
+      ]
+    },
+    "indexes": [
+      "CREATE UNIQUE INDEX groups_pkey ON public.groups USING btree (id)",
+      "CREATE UNIQUE INDEX records_pkey ON public.records USING btree (id)"
+    ],
+    "physical_sizes": {
+      "database_bytes": 55090199,
+      "indexes": [
+        {
+          "name": "records_pkey",
+          "bytes": 4513792
+        },
+        {
+          "name": "groups_pkey",
+          "bytes": 40960
+        }
+      ]
+    }
+  },
+  {
+    "exposure_seconds": 2.5197974159382284,
+    "mode": "read",
+    "variant": "selected",
+    "repeat": 0,
+    "initial_fingerprint": {
+      "records": 200000,
+      "groups": 1000,
+      "heap_bytes": 38166528,
+      "checksum": "1cf6afcff9222c813b5cb06f43482ece",
+      "indexes": [
+        "CREATE UNIQUE INDEX groups_pkey ON public.groups USING btree (id)",
+        "CREATE UNIQUE INDEX records_pkey ON public.records USING btree (id)"
+      ]
+    },
+    "indexes": [
+      "CREATE UNIQUE INDEX groups_pkey ON public.groups USING btree (id)",
+      "CREATE INDEX ib_03dfa4d6f086896e7252ee7c3baf17c8b3c4e1770b4e7183c1eac7462f33 ON public.records USING btree (created_at)",
+      "CREATE INDEX ib_13506513486f8f4f9dba27e45cf56d3f5baaca8ae99a2588288fcfb4a9f8 ON public.records USING btree (group_id, value)",
+      "CREATE INDEX ib_1f49313917f0cb8f6e95d7235bbe9373111322427785df823b321729583b ON public.records USING btree (group_id, created_at)",
+      "CREATE INDEX ib_6b42a62519609891a2964994b65f43644d345af6b165e1220092a348dbb0 ON public.records USING btree (value)",
+      "CREATE UNIQUE INDEX records_pkey ON public.records USING btree (id)"
+    ],
+    "physical_sizes": {
+      "database_bytes": 71834647,
+      "indexes": [
+        {
+          "name": "records_pkey",
+          "bytes": 4513792
+        },
+        {
+          "name": "groups_pkey",
+          "bytes": 40960
+        },
+        {
+          "name": "ib_03dfa4d6f086896e7252ee7c3baf17c8b3c4e1770b4e7183c1eac7462f33",
+          "bytes": 4513792
+        },
+        {
+          "name": "ib_13506513486f8f4f9dba27e45cf56d3f5baaca8ae99a2588288fcfb4a9f8",
+          "bytes": 4513792
+        },
+        {
+          "name": "ib_1f49313917f0cb8f6e95d7235bbe9373111322427785df823b321729583b",
+          "bytes": 6332416
+        },
+        {
+          "name": "ib_6b42a62519609891a2964994b65f43644d345af6b165e1220092a348dbb0",
+          "bytes": 1384448
+        }
+      ]
+    }
+  },
+  {
+    "exposure_seconds": 2.4659289580304176,
+    "mode": "read",
+    "variant": "selected",
+    "repeat": 1,
+    "initial_fingerprint": {
+      "records": 200000,
+      "groups": 1000,
+      "heap_bytes": 38166528,
+      "checksum": "1cf6afcff9222c813b5cb06f43482ece",
+      "indexes": [
+        "CREATE UNIQUE INDEX groups_pkey ON public.groups USING btree (id)",
+        "CREATE UNIQUE INDEX records_pkey ON public.records USING btree (id)"
+      ]
+    },
+    "indexes": [
+      "CREATE UNIQUE INDEX groups_pkey ON public.groups USING btree (id)",
+      "CREATE INDEX ib_03dfa4d6f086896e7252ee7c3baf17c8b3c4e1770b4e7183c1eac7462f33 ON public.records USING btree (created_at)",
+      "CREATE INDEX ib_13506513486f8f4f9dba27e45cf56d3f5baaca8ae99a2588288fcfb4a9f8 ON public.records USING btree (group_id, value)",
+      "CREATE INDEX ib_1f49313917f0cb8f6e95d7235bbe9373111322427785df823b321729583b ON public.records USING btree (group_id, created_at)",
+      "CREATE INDEX ib_6b42a62519609891a2964994b65f43644d345af6b165e1220092a348dbb0 ON public.records USING btree (value)",
+      "CREATE UNIQUE INDEX records_pkey ON public.records USING btree (id)"
+    ],
+    "physical_sizes": {
+      "database_bytes": 71834647,
+      "indexes": [
+        {
+          "name": "records_pkey",
+          "bytes": 4513792
+        },
+        {
+          "name": "groups_pkey",
+          "bytes": 40960
+        },
+        {
+          "name": "ib_03dfa4d6f086896e7252ee7c3baf17c8b3c4e1770b4e7183c1eac7462f33",
+          "bytes": 4513792
+        },
+        {
+          "name": "ib_13506513486f8f4f9dba27e45cf56d3f5baaca8ae99a2588288fcfb4a9f8",
+          "bytes": 4513792
+        },
+        {
+          "name": "ib_1f49313917f0cb8f6e95d7235bbe9373111322427785df823b321729583b",
+          "bytes": 6332416
+        },
+        {
+          "name": "ib_6b42a62519609891a2964994b65f43644d345af6b165e1220092a348dbb0",
+          "bytes": 1384448
+        }
+      ]
+    }
+  },
+  {
+    "exposure_seconds": 2.572441666969098,
+    "mode": "read",
+    "variant": "baseline",
+    "repeat": 1,
+    "initial_fingerprint": {
+      "records": 200000,
+      "groups": 1000,
+      "heap_bytes": 38166528,
+      "checksum": "1cf6afcff9222c813b5cb06f43482ece",
+      "indexes": [
+        "CREATE UNIQUE INDEX groups_pkey ON public.groups USING btree (id)",
+        "CREATE UNIQUE INDEX records_pkey ON public.records USING btree (id)"
+      ]
+    },
+    "indexes": [
+      "CREATE UNIQUE INDEX groups_pkey ON public.groups USING btree (id)",
+      "CREATE UNIQUE INDEX records_pkey ON public.records USING btree (id)"
+    ],
+    "physical_sizes": {
+      "database_bytes": 55090199,
+      "indexes": [
+        {
+          "name": "records_pkey",
+          "bytes": 4513792
+        },
+        {
+          "name": "groups_pkey",
+          "bytes": 40960
+        }
+      ]
+    }
+  },
+  {
+    "exposure_seconds": 2.6374619159614667,
+    "mode": "read",
+    "variant": "baseline",
+    "repeat": 2,
+    "initial_fingerprint": {
+      "records": 200000,
+      "groups": 1000,
+      "heap_bytes": 38166528,
+      "checksum": "1cf6afcff9222c813b5cb06f43482ece",
+      "indexes": [
+        "CREATE UNIQUE INDEX groups_pkey ON public.groups USING btree (id)",
+        "CREATE UNIQUE INDEX records_pkey ON public.records USING btree (id)"
+      ]
+    },
+    "indexes": [
+      "CREATE UNIQUE INDEX groups_pkey ON public.groups USING btree (id)",
+      "CREATE UNIQUE INDEX records_pkey ON public.records USING btree (id)"
+    ],
+    "physical_sizes": {
+      "database_bytes": 55090199,
+      "indexes": [
+        {
+          "name": "records_pkey",
+          "bytes": 4513792
+        },
+        {
+          "name": "groups_pkey",
+          "bytes": 40960
+        }
+      ]
+    }
+  },
+  {
+    "exposure_seconds": 2.588797124917619,
+    "mode": "read",
+    "variant": "selected",
+    "repeat": 2,
+    "initial_fingerprint": {
+      "records": 200000,
+      "groups": 1000,
+      "heap_bytes": 38166528,
+      "checksum": "1cf6afcff9222c813b5cb06f43482ece",
+      "indexes": [
+        "CREATE UNIQUE INDEX groups_pkey ON public.groups USING btree (id)",
+        "CREATE UNIQUE INDEX records_pkey ON public.records USING btree (id)"
+      ]
+    },
+    "indexes": [
+      "CREATE UNIQUE INDEX groups_pkey ON public.groups USING btree (id)",
+      "CREATE INDEX ib_03dfa4d6f086896e7252ee7c3baf17c8b3c4e1770b4e7183c1eac7462f33 ON public.records USING btree (created_at)",
+      "CREATE INDEX ib_13506513486f8f4f9dba27e45cf56d3f5baaca8ae99a2588288fcfb4a9f8 ON public.records USING btree (group_id, value)",
+      "CREATE INDEX ib_1f49313917f0cb8f6e95d7235bbe9373111322427785df823b321729583b ON public.records USING btree (group_id, created_at)",
+      "CREATE INDEX ib_6b42a62519609891a2964994b65f43644d345af6b165e1220092a348dbb0 ON public.records USING btree (value)",
+      "CREATE UNIQUE INDEX records_pkey ON public.records USING btree (id)"
+    ],
+    "physical_sizes": {
+      "database_bytes": 71834647,
+      "indexes": [
+        {
+          "name": "records_pkey",
+          "bytes": 4513792
+        },
+        {
+          "name": "groups_pkey",
+          "bytes": 40960
+        },
+        {
+          "name": "ib_03dfa4d6f086896e7252ee7c3baf17c8b3c4e1770b4e7183c1eac7462f33",
+          "bytes": 4513792
+        },
+        {
+          "name": "ib_13506513486f8f4f9dba27e45cf56d3f5baaca8ae99a2588288fcfb4a9f8",
+          "bytes": 4513792
+        },
+        {
+          "name": "ib_1f49313917f0cb8f6e95d7235bbe9373111322427785df823b321729583b",
+          "bytes": 6332416
+        },
+        {
+          "name": "ib_6b42a62519609891a2964994b65f43644d345af6b165e1220092a348dbb0",
+          "bytes": 1384448
+        }
+      ]
+    }
+  },
+  {
+    "exposure_seconds": 3.1854868750087917,
+    "mode": "mixed",
+    "variant": "baseline",
+    "repeat": 0,
+    "initial_fingerprint": {
+      "records": 200000,
+      "groups": 1000,
+      "heap_bytes": 38166528,
+      "checksum": "1cf6afcff9222c813b5cb06f43482ece",
+      "indexes": [
+        "CREATE UNIQUE INDEX groups_pkey ON public.groups USING btree (id)",
+        "CREATE UNIQUE INDEX records_pkey ON public.records USING btree (id)"
+      ]
+    },
+    "indexes": [
+      "CREATE UNIQUE INDEX groups_pkey ON public.groups USING btree (id)",
+      "CREATE UNIQUE INDEX records_pkey ON public.records USING btree (id)"
+    ],
+    "physical_sizes": {
+      "database_bytes": 55090199,
+      "indexes": [
+        {
+          "name": "records_pkey",
+          "bytes": 4513792
+        },
+        {
+          "name": "groups_pkey",
+          "bytes": 40960
+        }
+      ]
+    }
+  },
+  {
+    "exposure_seconds": 3.182263333001174,
+    "mode": "mixed",
+    "variant": "selected",
+    "repeat": 0,
+    "initial_fingerprint": {
+      "records": 200000,
+      "groups": 1000,
+      "heap_bytes": 38166528,
+      "checksum": "1cf6afcff9222c813b5cb06f43482ece",
+      "indexes": [
+        "CREATE UNIQUE INDEX groups_pkey ON public.groups USING btree (id)",
+        "CREATE UNIQUE INDEX records_pkey ON public.records USING btree (id)"
+      ]
+    },
+    "indexes": [
+      "CREATE UNIQUE INDEX groups_pkey ON public.groups USING btree (id)",
+      "CREATE INDEX ib_03dfa4d6f086896e7252ee7c3baf17c8b3c4e1770b4e7183c1eac7462f33 ON public.records USING btree (created_at)",
+      "CREATE INDEX ib_13506513486f8f4f9dba27e45cf56d3f5baaca8ae99a2588288fcfb4a9f8 ON public.records USING btree (group_id, value)",
+      "CREATE INDEX ib_1f49313917f0cb8f6e95d7235bbe9373111322427785df823b321729583b ON public.records USING btree (group_id, created_at)",
+      "CREATE INDEX ib_6b42a62519609891a2964994b65f43644d345af6b165e1220092a348dbb0 ON public.records USING btree (value)",
+      "CREATE UNIQUE INDEX records_pkey ON public.records USING btree (id)"
+    ],
+    "physical_sizes": {
+      "database_bytes": 71834647,
+      "indexes": [
+        {
+          "name": "records_pkey",
+          "bytes": 4513792
+        },
+        {
+          "name": "groups_pkey",
+          "bytes": 40960
+        },
+        {
+          "name": "ib_03dfa4d6f086896e7252ee7c3baf17c8b3c4e1770b4e7183c1eac7462f33",
+          "bytes": 4513792
+        },
+        {
+          "name": "ib_13506513486f8f4f9dba27e45cf56d3f5baaca8ae99a2588288fcfb4a9f8",
+          "bytes": 4513792
+        },
+        {
+          "name": "ib_1f49313917f0cb8f6e95d7235bbe9373111322427785df823b321729583b",
+          "bytes": 6332416
+        },
+        {
+          "name": "ib_6b42a62519609891a2964994b65f43644d345af6b165e1220092a348dbb0",
+          "bytes": 1384448
+        }
+      ]
+    }
+  },
+  {
+    "exposure_seconds": 3.2310492920223624,
+    "mode": "mixed",
+    "variant": "selected",
+    "repeat": 1,
+    "initial_fingerprint": {
+      "records": 200000,
+      "groups": 1000,
+      "heap_bytes": 38166528,
+      "checksum": "1cf6afcff9222c813b5cb06f43482ece",
+      "indexes": [
+        "CREATE UNIQUE INDEX groups_pkey ON public.groups USING btree (id)",
+        "CREATE UNIQUE INDEX records_pkey ON public.records USING btree (id)"
+      ]
+    },
+    "indexes": [
+      "CREATE UNIQUE INDEX groups_pkey ON public.groups USING btree (id)",
+      "CREATE INDEX ib_03dfa4d6f086896e7252ee7c3baf17c8b3c4e1770b4e7183c1eac7462f33 ON public.records USING btree (created_at)",
+      "CREATE INDEX ib_13506513486f8f4f9dba27e45cf56d3f5baaca8ae99a2588288fcfb4a9f8 ON public.records USING btree (group_id, value)",
+      "CREATE INDEX ib_1f49313917f0cb8f6e95d7235bbe9373111322427785df823b321729583b ON public.records USING btree (group_id, created_at)",
+      "CREATE INDEX ib_6b42a62519609891a2964994b65f43644d345af6b165e1220092a348dbb0 ON public.records USING btree (value)",
+      "CREATE UNIQUE INDEX records_pkey ON public.records USING btree (id)"
+    ],
+    "physical_sizes": {
+      "database_bytes": 71834647,
+      "indexes": [
+        {
+          "name": "records_pkey",
+          "bytes": 4513792
+        },
+        {
+          "name": "groups_pkey",
+          "bytes": 40960
+        },
+        {
+          "name": "ib_03dfa4d6f086896e7252ee7c3baf17c8b3c4e1770b4e7183c1eac7462f33",
+          "bytes": 4513792
+        },
+        {
+          "name": "ib_13506513486f8f4f9dba27e45cf56d3f5baaca8ae99a2588288fcfb4a9f8",
+          "bytes": 4513792
+        },
+        {
+          "name": "ib_1f49313917f0cb8f6e95d7235bbe9373111322427785df823b321729583b",
+          "bytes": 6332416
+        },
+        {
+          "name": "ib_6b42a62519609891a2964994b65f43644d345af6b165e1220092a348dbb0",
+          "bytes": 1384448
+        }
+      ]
+    }
+  },
+  {
+    "exposure_seconds": 3.285480833030306,
+    "mode": "mixed",
+    "variant": "baseline",
+    "repeat": 1,
+    "initial_fingerprint": {
+      "records": 200000,
+      "groups": 1000,
+      "heap_bytes": 38166528,
+      "checksum": "1cf6afcff9222c813b5cb06f43482ece",
+      "indexes": [
+        "CREATE UNIQUE INDEX groups_pkey ON public.groups USING btree (id)",
+        "CREATE UNIQUE INDEX records_pkey ON public.records USING btree (id)"
+      ]
+    },
+    "indexes": [
+      "CREATE UNIQUE INDEX groups_pkey ON public.groups USING btree (id)",
+      "CREATE UNIQUE INDEX records_pkey ON public.records USING btree (id)"
+    ],
+    "physical_sizes": {
+      "database_bytes": 55090199,
+      "indexes": [
+        {
+          "name": "records_pkey",
+          "bytes": 4513792
+        },
+        {
+          "name": "groups_pkey",
+          "bytes": 40960
+        }
+      ]
+    }
+  },
+  {
+    "exposure_seconds": 3.3204581669997424,
+    "mode": "mixed",
+    "variant": "baseline",
+    "repeat": 2,
+    "initial_fingerprint": {
+      "records": 200000,
+      "groups": 1000,
+      "heap_bytes": 38166528,
+      "checksum": "1cf6afcff9222c813b5cb06f43482ece",
+      "indexes": [
+        "CREATE UNIQUE INDEX groups_pkey ON public.groups USING btree (id)",
+        "CREATE UNIQUE INDEX records_pkey ON public.records USING btree (id)"
+      ]
+    },
+    "indexes": [
+      "CREATE UNIQUE INDEX groups_pkey ON public.groups USING btree (id)",
+      "CREATE UNIQUE INDEX records_pkey ON public.records USING btree (id)"
+    ],
+    "physical_sizes": {
+      "database_bytes": 55090199,
+      "indexes": [
+        {
+          "name": "records_pkey",
+          "bytes": 4513792
+        },
+        {
+          "name": "groups_pkey",
+          "bytes": 40960
+        }
+      ]
+    }
+  },
+  {
+    "exposure_seconds": 3.171727041946724,
+    "mode": "mixed",
+    "variant": "selected",
+    "repeat": 2,
+    "initial_fingerprint": {
+      "records": 200000,
+      "groups": 1000,
+      "heap_bytes": 38166528,
+      "checksum": "1cf6afcff9222c813b5cb06f43482ece",
+      "indexes": [
+        "CREATE UNIQUE INDEX groups_pkey ON public.groups USING btree (id)",
+        "CREATE UNIQUE INDEX records_pkey ON public.records USING btree (id)"
+      ]
+    },
+    "indexes": [
+      "CREATE UNIQUE INDEX groups_pkey ON public.groups USING btree (id)",
+      "CREATE INDEX ib_03dfa4d6f086896e7252ee7c3baf17c8b3c4e1770b4e7183c1eac7462f33 ON public.records USING btree (created_at)",
+      "CREATE INDEX ib_13506513486f8f4f9dba27e45cf56d3f5baaca8ae99a2588288fcfb4a9f8 ON public.records USING btree (group_id, value)",
+      "CREATE INDEX ib_1f49313917f0cb8f6e95d7235bbe9373111322427785df823b321729583b ON public.records USING btree (group_id, created_at)",
+      "CREATE INDEX ib_6b42a62519609891a2964994b65f43644d345af6b165e1220092a348dbb0 ON public.records USING btree (value)",
+      "CREATE UNIQUE INDEX records_pkey ON public.records USING btree (id)"
+    ],
+    "physical_sizes": {
+      "database_bytes": 71834647,
+      "indexes": [
+        {
+          "name": "records_pkey",
+          "bytes": 4513792
+        },
+        {
+          "name": "groups_pkey",
+          "bytes": 40960
+        },
+        {
+          "name": "ib_03dfa4d6f086896e7252ee7c3baf17c8b3c4e1770b4e7183c1eac7462f33",
+          "bytes": 4513792
+        },
+        {
+          "name": "ib_13506513486f8f4f9dba27e45cf56d3f5baaca8ae99a2588288fcfb4a9f8",
+          "bytes": 4513792
+        },
+        {
+          "name": "ib_1f49313917f0cb8f6e95d7235bbe9373111322427785df823b321729583b",
+          "bytes": 6332416
+        },
+        {
+          "name": "ib_6b42a62519609891a2964994b65f43644d345af6b165e1220092a348dbb0",
+          "bytes": 1384448
+        }
+      ]
+    }
+  }
+]
