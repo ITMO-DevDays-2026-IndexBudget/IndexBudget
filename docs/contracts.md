@@ -700,3 +700,13 @@ EXPLAIN, deadline без нового cleanup SQL, rollback, повтор пос
 `BudgetSeriesWriter` передаёт тот же сериализованный снимок v1 в `HtmlBudgetSeriesRenderer.render(JsonNode)` для `series.html`, а сохранённые `AnalysisReport` точек передаёт дополнительной картой для единого корневого `report.html` рядом с `series.json`. Рендерер форматирует готовые метрики; только координаты графика вычисляются локально. Он не читает файлы точек, не вызывает domain/JDBC и не меняет выбранный набор. Обновление выполняется до подготовки, после точек и в конце; каждый файл заменяется атомарно, три файла — последовательно. При обработанной ошибке старые HTML убираются, точки сохраняются, наружу выходит `EXPORT_FAILED`. Правила графиков, состояний, ссылок и переносимости описаны в [контракте HTML-сводки](budget-series.md#автономная-html-сводка-76); версии JSON и флаги CLI сохраняются.
 
 `SeriesPointRun.report` и `BudgetSeriesPoint.report` — внутренний сохранённый `AnalysisReport?`, полученный после успешного экспорта точки. Он не добавляется к JSON v1. `HtmlReportRenderer.renderContent(report, prefix)` переиспользует полные секции обычного отчёта, задавая изолированные `variant-N-` ID для общей страницы. Отсутствие модели допускается для подставных producer; production `AnalysisPipeline` возвращает её при успешной публикации.
+
+## B1 / #102: источник табличных counters для #107
+
+`TableStatisticsCollector` возвращает отдельный `TableSnapshot` v1. Идентичность:
+source UUID + database OID + relation OID; n_tup_hot_upd не вычитается из n_tup_upd.
+Nullable counters и partial обязательны для потребителей; отсутствие/track_counts=off
+не означает нулевую запись. `JdbcSnapshotReader` общий с query collector и отвечает
+за deadline/socket/guard при JDBC-чтении. `TableStatisticsCommand` управляет одиночным
+чтением/парой и публикацией, не вычисляет write rates (#107).
+Полный формат, ограничения обнаружения reset и примеры — [table-statistics-v1.md](table-statistics-v1.md).

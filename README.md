@@ -368,3 +368,10 @@ indexbudget analyze --workload imported/workload.json --output-dir analysis
 К ключам из условий и сортировки генератор может добавить до двух колонок явной проекции. Звёздочка отключает INCLUDE; подмножества широкой проекции не перебираются. Caps 16/32/16 и 976 определений на область сохранены, отсечения и происхождение видны в отчёте. Payload участвует в оценке размера и write proxy: изменения строк × (число ключей + число INCLUDE-колонок).
 
 Выходной `report.json` теперь имеет `schema_version: 3` с `included_columns` и `write_proxy_model`; reader v2 требует обновления. Вход workload по-прежнему v2, CLI не меняется. HTML/SQL показывают тот же INCLUDE; index-only scan не гарантирует отсутствие heap fetches. [Контракт v3](docs/report-v3.md), [реальный пример и команды](demo/include/README.md).
+
+## Табличные счётчики записи (#102)
+
+`indexbudget table-stats --help` — отдельный снимок или пара pg_stat_user_tables
+в PostgreSQL 16. Сохраняются INSERT/UPDATE/DELETE и отдельный HOT counter без изменения
+целевой БД. Формат, лимиты, задержка публикации, ограничения reset detection и проверка:
+[docs/table-statistics-v1.md](docs/table-statistics-v1.md).
