@@ -48,6 +48,14 @@ async function queryAgreement(page, saved, prefix = '') {
         assert.equal(await page.locator('.profile-plot, .chart-track, .budget-meter').count(), 0,
           'Repeated charts and resource bars are replaced by saved-value tables');
         await queryAgreement(page, saved);
+        assert.equal(await page.locator('.query-sort-button').count(), 4);
+        assert.equal(await page.locator('h3').filter({hasText: 'Ограничения planner cost'}).count(), 0);
+        if (saved.status === 'partial') {
+          assert.equal(await page.locator('#overview .badge.partial').count(), 0);
+          const limitation = page.locator('#overview .workload-context a[href="#search"]');
+          await limitation.click();
+          assert.ok(await page.locator('#search').evaluate(section => section.closest('details').open));
+        }
         const groupedIndexes = await page.locator('#overview .recommended-table tbody tr').evaluateAll(groups =>
           groups.map(group => ({table: group.querySelector('th').textContent, count: group.querySelectorAll('li').length})));
         const selectedByTable = new Map();
@@ -117,6 +125,20 @@ async function queryAgreement(page, saved, prefix = '') {
     assert.deepEqual(await page.locator('#query-comparison tbody tr').evaluateAll(rows => rows.map(row => row.dataset.order)), ['0', '1']);
     await page.selectOption('#query-sort', 'regression');
     assert.equal(await page.locator('#query-comparison tbody tr').first().getAttribute('data-regression'), '1');
+    for (const key of ['order', 'before', 'cost', 'gain']) {
+      const header = page.locator(`#query-comparison th[data-sort-key="${key}"]`);
+      for (const direction of [key === 'order' ? 'ascending' : 'descending', key === 'order' ? 'descending' : 'ascending']) {
+        await header.locator('button').click();
+        assert.equal(await header.getAttribute('aria-sort'), direction);
+        const values = await page.locator('#query-comparison tbody tr').evaluateAll(
+          (rows, key) => rows.map(row => row.dataset[key]), key);
+        const known = values.filter(value => value !== '').map(Number);
+        assert.deepEqual(known, [...known].sort((a, b) => direction === 'ascending' ? a - b : b - a));
+        assert.ok(values.slice(known.length).every(value => value === ''), 'Unknown values stay last');
+      }
+    }
+    await page.selectOption('#query-sort', 'original');
+    assert.equal(await page.locator('th[data-sort-key="order"]').getAttribute('aria-sort'), 'ascending');
     const after = await page.locator('#query-comparison tbody tr').evaluateAll(rows => rows.map(row => ({...row.dataset})));
     const byOrder = (a, b) => Number(a.order) - Number(b.order);
     assert.deepEqual(after.sort(byOrder), original.sort(byOrder), 'View controls do not mutate saved data');

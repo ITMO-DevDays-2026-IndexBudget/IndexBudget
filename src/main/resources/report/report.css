@@ -861,6 +861,18 @@ footer {
   font-size:12px;
   margin-left:8px;
 }
+.query-sort-button {
+  padding:0;
+  border:0;
+  background:transparent;
+  color:inherit;
+  font:inherit;
+  text-align:inherit;
+  cursor:pointer;
+}
+.query-sort-button::after { content:" ↕"; }
+[aria-sort="ascending"] .query-sort-button::after { content:" ↑"; }
+[aria-sort="descending"] .query-sort-button::after { content:" ↓"; }
 .query-comparison td:nth-child(2),.query-comparison td:nth-child(3) {
   text-align:right;
 }

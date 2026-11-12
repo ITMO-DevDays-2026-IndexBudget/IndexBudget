@@ -149,11 +149,11 @@ class HtmlReportRenderer : ReportRenderer {
         val summary = report.summary
         val selected = result.selected
         append("<section id=\"overview\" class=\"overview\"><div class=\"title-row\"><h1>Результат анализа</h1>")
-        badge(statusLabel(result.status), result.status.name.lowercase(Locale.ROOT))
+        if (result.status != RunStatus.PARTIAL) badge(statusLabel(result.status), result.status.name.lowercase(Locale.ROOT))
         append("</div>")
-        if (result.status != RunStatus.COMPLETED) {
+        if (result.status == RunStatus.FAILED) {
             append("<p class=\"notice warning\">")
-            text(if (result.status == RunStatus.PARTIAL) "Поиск остановлен досрочно. Сохранён лучший полный допустимый результат. " else "Анализ завершился ошибкой. ")
+            text("Анализ завершился ошибкой. ")
             text(summary.stopReasons.joinToString { stopLabel(it) })
             summary.errors.forEach { append("<br>").append(h(it.code.name)).append(": ").append(h(it.message)) }
             append("</p>")
@@ -226,8 +226,8 @@ class HtmlReportRenderer : ReportRenderer {
             else -> "ручной"
         })).append(". <a href=\"#provenance\">Строки/час и происхождение</a></p>")
         val warnings = (report.result.diagnostics.warnings + report.candidates.diagnostics.warnings).distinct()
-        if (warnings.isNotEmpty()) {
-            append("<p class=\"warning-text\">Есть ограничения данных: <a href=\"#search\">подробности</a></p>")
+        if (report.result.status == RunStatus.PARTIAL || warnings.isNotEmpty()) {
+            append("<p>Есть ограничения данных: <a href=\"#search\">подробности</a></p>")
         }
         append("</div>")
     }
@@ -538,9 +538,9 @@ class HtmlReportRenderer : ReportRenderer {
             before != null && after != null && after > before
         }
         append("<div class=\"query-controls\" hidden><label for=\"query-sort\">Порядок запросов</label> ")
-        append("<select id=\"query-sort\"><option value=\"regression\">Сначала ухудшения</option><option value=\"gain\">Сначала наибольшее снижение, %</option><option value=\"cost\">Сначала высокая стоимость после</option><option value=\"original\">Исходный порядок</option></select></div>")
+        append("<select id=\"query-sort\"><option value=\"regression\">Сначала ухудшения</option><option value=\"gain\">Сначала наибольшее снижение, %</option><option value=\"before\">Сначала высокая стоимость до</option><option value=\"cost\">Сначала высокая стоимость после</option><option value=\"original\">Исходный порядок</option><option value=\"column\" hidden>По столбцу</option></select></div>")
         append("<div id=\"query-comparison\" class=\"query-comparison\">")
-        table(listOf("SQL", "До", "С набором", "Изменение")) {
+        table(listOf("SQL", "До", "С набором", "Изменение"), listOf("order", "before", "cost", "gain")) {
             queryIds.withIndex().sortedWith(compareBy<IndexedValue<String>> { if (hasRegression(it.value)) 0 else 1 }.thenBy { it.index }).forEach { (index, id) ->
                 val effect = effects[id]?.selected
                 val before = baseline?.costByQueryId?.get(id)
@@ -548,6 +548,7 @@ class HtmlReportRenderer : ReportRenderer {
                 val regression = hasRegression(id)
                 append("<tr data-order=\"").append(index).append("\" data-regression=\"").append(if (regression) 1 else 0)
                     .append("\" data-gain=\"").append(h(effect?.gainPercent ?: ""))
+                    .append("\" data-before=\"").append(h(before ?: ""))
                     .append("\" data-cost=\"").append(h(after ?: "")).append("\"")
                 if (regression) append(" class=\"regression\"")
                 append("><th scope=\"row\"><a href=\"#query-").append(index).append("\">SQL ").append(index + 1).append("</a>")
@@ -565,7 +566,6 @@ class HtmlReportRenderer : ReportRenderer {
             }
         }
         append("</div>")
-        costGuards(report)
         if (includeDetails) queryDetailsGroup(report)
         append("</section>")
     }
@@ -613,45 +613,14 @@ class HtmlReportRenderer : ReportRenderer {
         }
     }
 
-    private fun StringBuilder.costGuards(report: AnalysisReport) {
-        val guards = report.input?.constraints?.queryCostGuards.orEmpty()
-        if (guards.isEmpty()) return
-        append("<h3>Ограничения planner cost для критических SQL</h3>")
-        append("<p class=\"muted\">Предел — максимальное отношение final/baseline planner cost; равенство порогу допустимо. ")
-        append("Лимит применяется к planner cost, не к времени или SLA. Наборы с нарушением отклоняются целиком ")
-        append("и не обновляют лучшие результаты.</p>")
-        val outcomes = report.costGuards.associateBy { it.queryId }
-        table(listOf("SQL", "Предел отношения", "Baseline cost", "Final cost", "Наблюдаемое отношение", "Статус")) {
-            guards.keys.sorted().forEach { queryId ->
-                val outcome = outcomes[queryId]
-                if (outcome == null) {
-                    row(queryId, number(guards.getValue(queryId)), "Нет данных", "Нет данных", "Нет данных", "Нет данных")
-                    return@forEach
-                }
-                append(if (outcome.violated) "<tr class=\"regression\">" else "<tr>")
-                cell(queryId)
-                cell(number(outcome.maxRatio))
-                cell(number(outcome.baselineCost))
-                cell(number(outcome.selectedCost))
-                cell(when {
-                    outcome.zeroBaseline -> "Неприменимо (нулевой baseline)"
-                    else -> number(outcome.observedRatio)
-                })
-                cell(when {
-                    outcome.violated && outcome.zeroBaseline -> "Нарушено: положительный cost при нулевом baseline"
-                    outcome.violated -> "Нарушено"
-                    else -> "Соблюдено"
-                })
-                append("</tr>")
-            }
-        }
-    }
-
     private fun StringBuilder.search(report: AnalysisReport, includeCandidateCatalog: Boolean = true) {
         section("search", "Границы поиска", "Что было исследовано и где сработали ограничения")
         append("<p>Режим анализа: ").append(h(modeName(report.analysisMode))).append(".</p>")
         append("<p>Порядок кандидатов: ").append(h(rankingName(report.candidateRanking)))
             .append(". Рейтинг задаёт порядок сценарных очередей; критерии поиска и бюджеты сохраняются.</p>")
+        if (report.result.status == RunStatus.PARTIAL) {
+            append("<p>Поиск остановлен досрочно. Сохранён лучший полный допустимый результат.</p>")
+        }
         val search = report.result.diagnostics
         val candidates = report.candidates.diagnostics
         val stats = search.statistics
@@ -848,9 +817,13 @@ class HtmlReportRenderer : ReportRenderer {
         append("<span class=\"badge ").append(style).append("\">").append(h(label)).append("</span>")
     }
 
-    private fun StringBuilder.table(headers: List<String>, body: StringBuilder.() -> Unit) {
+    private fun StringBuilder.table(headers: List<String>, sortKeys: List<String> = emptyList(), body: StringBuilder.() -> Unit) {
         append("<div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Таблица: ").append(h(headers.joinToString(", "))).append("\"><table><thead><tr>")
-        headers.forEach { append("<th scope=\"col\">").append(h(it)).append("</th>") }
+        headers.forEachIndexed { index, label ->
+            append("<th scope=\"col\"")
+            sortKeys.getOrNull(index)?.let { append(" data-sort-key=\"").append(h(it)).append("\"") }
+            append(">").append(h(label)).append("</th>")
+        }
         append("</tr></thead><tbody>")
         body()
         append("</tbody></table></div>")

@@ -11,7 +11,7 @@ class HtmlReportRendererTest {
     private val renderer = HtmlReportRenderer()
 
     @Test
-    fun `critical query guards render as planner cost limits with observed ratios`() {
+    fun `query details remain available without a separate critical query guards table`() {
         val source = HtmlReportFixtures.completed()
         val report = source.copy(
             input = source.input?.let {
@@ -25,14 +25,10 @@ class HtmlReportRendererTest {
         )
 
         val queries = section(renderer.render(report), "queries")
-        val guardsTable = capture(queries, "(Ограничения planner cost для критических SQL.*?</table>)", stripTags = false)
-
-        assertTrue(queries.contains("Ограничения planner cost для критических SQL"))
-        assertTrue(queries.contains("не к времени или SLA"))
-        assertEquals(listOf("records_by_group", "1,5", "100", "120", "1,2", "Соблюдено"),
-            rowByKey(guardsTable, "records_by_group"))
-        assertEquals(listOf("records_by_value", "1", "0", "5", "Неприменимо (нулевой baseline)",
-            "Нарушено: положительный cost при нулевом baseline"), rowByKey(guardsTable, "records_by_value"))
+        assertFalse(queries.contains("Ограничения planner cost"))
+        assertTrue(queries.contains("Подробности по запросам"))
+        assertTrue(queries.contains("Исходный SQL"))
+        assertTrue(queries.contains("EXPLAIN JSON"))
     }
 
     @Test
@@ -231,9 +227,11 @@ class HtmlReportRendererTest {
         assertTrue(same.contains("Оба критерия выбрали один набор"))
         val partialReport = ContractFixtures.report(status = RunStatus.PARTIAL)
         val partial = renderer.render(partialReport)
-        assertTrue(partial.contains("Частичный результат"))
+        assertFalse(partial.contains("Частичный результат"))
         assertEquals("partial", entryValue(section(partial, "run"), "Статус"))
-        assertTrue(section(partial, "overview").contains("Поиск остановлен досрочно"))
+        assertFalse(section(partial, "overview").contains("Поиск остановлен досрочно"))
+        assertTrue(section(partial, "overview").contains("Есть ограничения данных:"))
+        assertTrue(section(partial, "search").contains("Поиск остановлен досрочно"))
         assertTrue(partial.contains("EXPLAIN_FAILED"))
         assertTrue(partial.contains("EVALUATION_FAILED"))
         assertEquals(partialReport.result.selected?.evaluation?.candidateIds, selectedIds(partial))
