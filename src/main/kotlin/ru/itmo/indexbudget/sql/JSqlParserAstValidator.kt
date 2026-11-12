@@ -64,7 +64,7 @@ internal class JSqlParserAstValidator(
                 is Update -> {
                     if (!statement.withItemsList.isNullOrEmpty() || statement.fromItem != null || !statement.joins.isNullOrEmpty() ||
                         !statement.startJoins.isNullOrEmpty() || statement.returningClause != null || statement.outputClause != null ||
-                        statement.select != null || statement.isUseSelect || statement.isUseColumnsBrackets || statement.isFromBeforeSet ||
+                        statement.select != null || statement.isUseSelect || statement.isFromBeforeSet ||
                         !statement.orderByElements.isNullOrEmpty() || statement.limit != null || statement.option != null ||
                         statement.forPortionClause != null || statement.preferringClause != null || statement.oracleHint != null ||
                         statement.modifierPriority != null || statement.isModifierIgnore)
@@ -73,7 +73,9 @@ internal class JSqlParserAstValidator(
                     if (sets.isEmpty() || sets.size > 256) fail(ErrorCode.INPUT_LIMIT_EXCEEDED, "UPDATE requires 1–256 SET assignments.")
                     assignments = sets.map {
                         context.checkDeadline()
-                        if (it.columns.size != 1 || it.values.size != 1) fail(ErrorCode.UNSUPPORTED_SQL, "Tuple SET assignments are unsupported.")
+                        // Preserve tuple shape even for a single target: SET (column) = (value).
+                        if (it.columns is ParenthesedExpressionList<*> || it.columns.size != 1 || it.values.size != 1)
+                            fail(ErrorCode.UNSUPPORTED_SQL, "Tuple SET assignments are unsupported.")
                         it.columns.single() to it.values.single()
                     }
                     target = statement.table
@@ -81,7 +83,7 @@ internal class JSqlParserAstValidator(
                     kind = StatementKind.UPDATE
                 }
                 is Delete -> {
-                    if (!statement.withItemsList.isNullOrEmpty() || !statement.tables.isNullOrEmpty() || !statement.usingList.isNullOrEmpty() ||
+                    if (!statement.withItemsList.isNullOrEmpty() || !statement.tables.isNullOrEmpty() ||
                         !statement.usingFromItemList.isNullOrEmpty() || !statement.joins.isNullOrEmpty() || !statement.isHasFrom ||
                         statement.returningClause != null || statement.outputClause != null || !statement.orderByElements.isNullOrEmpty() ||
                         statement.limit != null || statement.option != null || statement.forPortionClause != null ||

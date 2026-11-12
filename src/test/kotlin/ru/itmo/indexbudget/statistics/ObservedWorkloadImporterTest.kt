@@ -228,6 +228,28 @@ class ObservedWorkloadImporterTest {
         assertEquals(7200.0, tree(result.manifest)["periods"][0]["available_calls_per_hour"].doubleValue())
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = [
+        "DELETE FROM public.records USING (SELECT id FROM public.records) AS other WHERE records.id = other.id",
+        "UPDATE public.records SET (value) = (1) WHERE id = 1",
+    ])
+    fun `unsupported DML excludes only that observation and retains valid SELECT`(unsupported: String) {
+        val before = listOf(row(100), row(100).copy(queryid = 2, query = unsupported))
+        val after = listOf(row(160), row(160).copy(queryid = 2, query = unsupported))
+        val input = FrequencyCalculator().calculate(listOf(FrequencyWindow("day", 1.0,
+            capture(0, before), capture(60, after))))
+        val result = build(input)
+        val entries = tree(result.manifest)["entries"].toList()
+        val excluded = entries.single { it["key"]["queryid"].asString() == "2" }
+        assertEquals("excluded", excluded["status"].asString())
+        assertEquals("UNSUPPORTED_STATEMENT", excluded["reason"].asString())
+        assertEquals("UNSUPPORTED_SQL", excluded["details"].asString())
+        assertEquals("selected", entries.single { it["key"]["queryid"].asString() == "1" }["status"].asString())
+        assertEquals(1, read(result).queries.size)
+        assertEquals(3600.0, read(result).profiles.single().callsPerHour.values.single())
+        assertEquals(StatementKind.SELECT, result.resolvedQueries.single().statementKind)
+    }
+
     @Test fun `unknown windows never become zero and all excluded identities keep reasons`() {
         val before = listOf(row(100), row(100).copy(queryid = 2), row(100).copy(queryid = 3, query = "DELETE FROM public.records"))
         val after = listOf(row(160), row(160).copy(queryid = 3, query = "DELETE FROM public.records"), row(1).copy(queryid = 4))
