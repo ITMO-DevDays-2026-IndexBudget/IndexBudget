@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable
 import ru.itmo.indexbudget.application.*
 import ru.itmo.indexbudget.candidates.ProfileAwareCandidateGenerator
+import ru.itmo.indexbudget.candidates.BtreeCandidateCanonicalizer
 import ru.itmo.indexbudget.domain.*
 import ru.itmo.indexbudget.optimizer.LimitedRepairOptimizer
 import ru.itmo.indexbudget.report.*
@@ -79,7 +80,9 @@ class HashHypopgIntegrationTest {
                         execute(admin, "CREATE INDEX real_hash ON hash_demo.events USING hash (sequence)")
                         var after = session.readCatalog(parsed.referencedTables, context)
                         assertEquals("hash", after.tables.single().existingIndexes.single().method)
-                        assertEquals(original.definition.keys, after.tables.single().existingIndexes.single().keys)
+                        val realDefinition = IndexDefinition(after.tables.single().ref,
+                            after.tables.single().existingIndexes.single().keys, method = "hash")
+                        assertEquals(original.definition, BtreeCandidateCanonicalizer(after, context).canonicalize(realDefinition))
                         var generated = ProfileAwareCandidateGenerator().generate(resolved, after, context)
                         assertEquals("btree", generated.candidates.single().definition.method)
                         assertTrue(generated.diagnostics.decisions.any { it.reason == CandidateReason.EXACT_EXISTING_DUPLICATE })
