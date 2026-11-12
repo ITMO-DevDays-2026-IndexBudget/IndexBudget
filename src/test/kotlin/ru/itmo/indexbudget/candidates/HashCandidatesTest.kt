@@ -81,11 +81,24 @@ class HashCandidatesTest {
         val snapshot = CatalogSnapshot(listOf(CatalogTable(table, refs.map { CatalogColumn(it.name, "int4",
             defaultOperatorClass = "pg_catalog.int4_ops", defaultOperatorClasses = mapOf(
                 "brin" to "pg_catalog.int4_minmax_ops", "hash" to "pg_catalog.int4_ops")) })))
-        val result = ProfileAwareCandidateGenerator().generate(ResolvedWorkload(input, listOf(query)), snapshot, RunContext())
+        val workload = ResolvedWorkload(input, listOf(query))
+        val scopes = mutableListOf<CandidateScope>()
+        BtreeCandidateEnumerator().forEachScope(workload, RunContext(), scopes::add)
+        val variants = scopes.single().variants
+        assertEquals(288, variants.size)
+        assertEquals(mapOf("btree" to 256, "brin" to 16, "hash" to 16),
+            variants.groupingBy { it.definition.method }.eachCount())
+        assertEquals(16, variants.count { it.definition.method == "btree" && it.definition.keys.size == 1 })
+        assertEquals(240, variants.count { it.definition.keys.size == 2 })
+        for (method in listOf("brin", "hash")) {
+            assertEquals(scopes.single().retainedColumns.toSet(), variants.filter { it.definition.method == method }
+                .map { it.definition.keys.single().column }.toSet())
+        }
+        val result = ProfileAwareCandidateGenerator().generate(workload, snapshot, RunContext())
         val stats = result.diagnostics.localScopes.single()
         assertEquals(100, stats.discoveredColumns)
         assertEquals(16, stats.retainedColumns)
-        assertTrue(stats.enumeratedDefinitions <= 976)
+        assertEquals(288, stats.enumeratedDefinitions)
         assertEquals(32, stats.retainedDefinitions)
         assertEquals(16, result.candidates.size)
         assertTrue(result.reserve.size <= 48)

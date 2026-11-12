@@ -222,34 +222,29 @@ class BtreeCandidateEnumerator : CandidateEnumerator {
     }
 
     private fun brinVariants(query: ResolvedQuery, table: TableRef, retained: List<ColumnRef>,
-        contexts: PredicateContexts, context: RunContext): List<CandidateVariant> = retained.sortedWith(columnOrder).mapNotNull { column ->
-        context.checkDeadline()
-        val leaves = BitSet()
-        query.predicates.forEachIndexed { index, predicate ->
-            context.checkDeadline()
-            if (predicate.leftColumn == column && predicate.rightColumn == null && predicate.source == PredicateSource.WHERE &&
-                predicate.operator in setOf(ComparisonOperator.LESS_THAN, ComparisonOperator.LESS_THAN_OR_EQUAL,
-                    ComparisonOperator.GREATER_THAN, ComparisonOperator.GREATER_THAN_OR_EQUAL, ComparisonOperator.BETWEEN)) {
-                leaves.set(index)
-            }
-        }
-        if (leaves.isEmpty) null else CandidateVariant(IndexDefinition(table, listOf(IndexKey(column)), method = "brin"),
-            setOf(query.id), setOf(GenerationReason.BRIN_RANGE), contexts.branches(leaves, false))
-    }
+        contexts: PredicateContexts, context: RunContext): List<CandidateVariant> = singleColumnVariants(
+            query, table, retained, contexts, context, "brin", GenerationReason.BRIN_RANGE,
+            setOf(ComparisonOperator.LESS_THAN, ComparisonOperator.LESS_THAN_OR_EQUAL,
+                ComparisonOperator.GREATER_THAN, ComparisonOperator.GREATER_THAN_OR_EQUAL, ComparisonOperator.BETWEEN))
 
     private fun hashVariants(query: ResolvedQuery, table: TableRef, retained: List<ColumnRef>,
-        contexts: PredicateContexts, context: RunContext): List<CandidateVariant> = retained.sortedWith(columnOrder).mapNotNull { column ->
+        contexts: PredicateContexts, context: RunContext): List<CandidateVariant> = singleColumnVariants(
+            query, table, retained, contexts, context, "hash", GenerationReason.HASH_EQUALITY, setOf(ComparisonOperator.EQUAL))
+
+    private fun singleColumnVariants(query: ResolvedQuery, table: TableRef, retained: List<ColumnRef>,
+        contexts: PredicateContexts, context: RunContext, method: String, reason: GenerationReason,
+        operators: Set<ComparisonOperator>): List<CandidateVariant> = retained.sortedWith(columnOrder).mapNotNull { column ->
         context.checkDeadline()
         val leaves = BitSet()
         query.predicates.forEachIndexed { index, predicate ->
             context.checkDeadline()
             if (predicate.leftColumn == column && predicate.rightColumn == null &&
-                predicate.source == PredicateSource.WHERE && predicate.operator == ComparisonOperator.EQUAL) {
+                predicate.source == PredicateSource.WHERE && predicate.operator in operators) {
                 leaves.set(index)
             }
         }
-        if (leaves.isEmpty) null else CandidateVariant(IndexDefinition(table, listOf(IndexKey(column)), method = "hash"),
-            setOf(query.id), setOf(GenerationReason.HASH_EQUALITY), contexts.branches(leaves, false))
+        if (leaves.isEmpty) null else CandidateVariant(IndexDefinition(table, listOf(IndexKey(column)), method = method),
+            setOf(query.id), setOf(reason), contexts.branches(leaves, false))
     }
 
     private data class CoveringVariants(

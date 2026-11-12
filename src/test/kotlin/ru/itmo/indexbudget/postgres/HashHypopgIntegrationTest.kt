@@ -119,9 +119,7 @@ class HashHypopgIntegrationTest {
                 assertTrue(html.contains(report.runId) && sql.contains(report.runId))
                 assertTrue(html.contains(report.inputHash!!) && sql.contains(report.inputHash))
                 assertTrue(html.contains("btree, hash") && sql.contains("-- index_methods: btree,hash"))
-                for (candidate in report.candidates.candidates.filter { it.id in report.result.selected!!.evaluation.candidateIds }) {
-                    assertTrue(sql.contains(candidate.ddl!!))
-                }
+                assertSelectedArtifacts(report, output.resolve("analysis"))
                 val seriesJson = mapper.readTree(Files.readString(source)) as tools.jackson.databind.node.ObjectNode
                 seriesJson.remove("manual_indexes")
                 val seriesSource = output.resolve("workload-series.json")
@@ -141,6 +139,15 @@ class HashHypopgIntegrationTest {
                     val summary = mapper.readTree(Files.readString(output.resolve("series-${budget.name}/series.json")))
                     assertEquals(2, summary["schema_version"].intValue())
                     assertEquals(setOf("btree", "hash"), summary["preparation"]["candidates"].toList().map { it["method"].stringValue() }.toSet())
+                    assertEquals(result.points.size, summary["points"].size())
+                    for ((point, saved) in result.points.zip(summary["points"].toList())) {
+                        val pointReport = requireNotNull(point.report)
+                        assertEquals(point.ordinal, saved["ordinal"].intValue())
+                        assertEquals(pointReport.result.selected!!.evaluation.candidateIds,
+                            saved["selected_index_ids"].toList().map { it.stringValue() })
+                        val pointJson = output.resolve("series-${budget.name}").resolve(point.artifacts.getValue("report.json"))
+                        assertSelectedArtifacts(pointReport, pointJson.parent)
+                    }
                 }
                 assertTrue(connections.all { it.isClosed })
                 assertEquals(0, scalar(admin, "SELECT count(*) FROM pg_catalog.pg_indexes WHERE schemaname = 'hash_demo'"))
@@ -167,8 +174,10 @@ class HashHypopgIntegrationTest {
                         return actual.estimateSize(candidate, context)
                     }
                     override fun close() {
-                        assertEquals(0, scalar(connection, "SELECT count(*) FROM public.hypopg()"))
-                        actual.close()
+                        // use closes on assertion/query failure and preserves it if close also fails.
+                        actual.use {
+                            assertEquals(0, scalar(connection, "SELECT count(*) FROM public.hypopg()"))
+                        }
                     }
                 }
             }
@@ -181,6 +190,34 @@ class HashHypopgIntegrationTest {
             assertEquals(before, context.statistics())
             reports += report
         }, shutdownCancellation = ShutdownCancellation { AutoCloseable {} })
+
+    private fun assertSelectedArtifacts(report: AnalysisReport, directory: Path) {
+        val ids = requireNotNull(report.result.selected).evaluation.candidateIds
+        val candidates = report.candidates.candidates.associateBy { it.id }
+        val selected = ids.map { candidates.getValue(it) }
+        val json = mapper.readTree(Files.readString(directory.resolve("report.json")))
+        assertEquals(report.runId, json["run_id"].stringValue())
+        assertEquals(report.inputHash, json["input_hash"].stringValue())
+        assertEquals(ids, json["selected"]["candidate_ids"].toList().map { it.stringValue() })
+        assertEquals(ids.sorted(), json["selected_indexes"].toList().map { it["id"].stringValue() })
+        for ((candidate, saved) in selected.sortedBy { it.id }.zip(json["selected_indexes"].toList())) {
+            val definition = candidate.definition
+            fun table(ref: TableRef) = mapOf("schema" to ref.schema, "name" to ref.name)
+            fun column(ref: ColumnRef) = mapOf("table" to table(ref.table), "name" to ref.name)
+            val expected = mapOf("table" to table(definition.table), "method" to definition.method,
+                "included_columns" to definition.includedColumns.map(::column), "unique" to definition.unique,
+                "keys" to definition.keys.map { key -> mapOf("column" to column(key.column),
+                    "direction" to key.direction.name.lowercase().takeIf { definition.method == "btree" },
+                    "nulls" to key.nulls.name.lowercase().takeIf { definition.method == "btree" },
+                    "collation" to key.collation, "operator_class" to key.operatorClass) })
+            assertEquals(mapper.readTree(mapper.writeValueAsString(expected)), saved["definition"])
+            assertEquals(candidate.ddl, saved["ddl"].stringValue())
+        }
+        // Exact command list also rejects extra DDL when selected is empty (zero-budget points).
+        val commands = Files.readAllLines(directory.resolve("indexes.sql"))
+            .map { it.trim() }.filter { it.isNotEmpty() && !it.startsWith("--") }
+        assertEquals(selected.map { requireNotNull(it.ddl) }, commands)
+    }
 
     private fun connect() = DriverManager.getConnection(System.getenv("INDEXBUDGET_HYPOPG_TEST_URL"),
         System.getenv("INDEXBUDGET_HYPOPG_TEST_USER"), System.getenv("INDEXBUDGET_HYPOPG_TEST_PASSWORD"))
