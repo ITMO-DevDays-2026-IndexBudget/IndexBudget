@@ -83,7 +83,7 @@ ISNULL/NOTNULL, null-test над выражением) дают `UNSUPPORTED_SQL
 `unresolvedTables` даёт `UNKNOWN_TABLE` с ID использующего запроса. Quoted-токены AST
 декодируются тем же правилом, что `TableName`; имена доменного каталога повторно не декодируются.
 
-Проверяются SELECT, WHERE, JOIN ON и ORDER BY. Алиас таблицы скрывает исходное имя;
+Проверяются SELECT, WHERE, JOIN ON и ORDER BY, а у UPDATE — также SET-колонки. Алиас таблицы скрывает исходное имя;
 ON видит только таблицы уже построенной части JOIN. Неизвестные колонки дают `UNKNOWN_COLUMN`,
 неоднозначные ссылки — `AMBIGUOUS_COLUMN`. В ORDER BY простое выходное имя/алиас проекции
 имеет приоритет над входной колонкой; в WHERE и ON выходные алиасы не видны. Views,
