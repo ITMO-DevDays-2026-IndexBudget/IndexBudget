@@ -293,9 +293,16 @@ class SearchComparisonExperiments {
     ): Map<String, Any?> = Objective.entries.associateWith { objective ->
         val byStrategy = runs.getValue(objective)
         val exhaustive = byStrategy.getValue(Strategy.EXHAUSTIVE)
-        val optimum = exhaustive.reference!!.selected(objective)
+        val optimum = checkNotNull(exhaustive.reference) { "Expected reference to be available" }.selected(objective)
         fun matches(strategy: Strategy) =
             byStrategy.getValue(strategy).selectedIds == optimum.evaluation.candidateIds
+        fun meanRatioGap(strategy: Strategy): Double {
+            val selectedMetrics = checkNotNull(byStrategy.getValue(strategy).metricsOfSelected) {
+                "Expected selected metrics for $strategy"
+            }
+            return checkNotNull(selectedMetrics.meanRatio) { "Expected selected mean ratio for $strategy" } -
+                checkNotNull(optimum.metrics.meanRatio) { "Expected optimum mean ratio" }
+        }
         linkedMapOf<String, Any?>(
             "objective" to objective.name.lowercase(),
             "verified_optimum_ids" to optimum.evaluation.candidateIds,
@@ -303,12 +310,8 @@ class SearchComparisonExperiments {
             "verified_optimum_worst_ratio" to optimum.metrics.worstRatio,
             "greedy_matches_optimum" to matches(Strategy.GREEDY),
             "greedy_repair_matches_optimum" to matches(Strategy.GREEDY_REPAIR),
-            "greedy_mean_ratio_gap_to_optimum" to
-                (byStrategy.getValue(Strategy.GREEDY).metricsOfSelected!!.meanRatio!! -
-                    optimum.metrics.meanRatio!!),
-            "greedy_repair_mean_ratio_gap_to_optimum" to
-                (byStrategy.getValue(Strategy.GREEDY_REPAIR).metricsOfSelected!!.meanRatio!! -
-                    optimum.metrics.meanRatio!!),
+            "greedy_mean_ratio_gap_to_optimum" to meanRatioGap(Strategy.GREEDY),
+            "greedy_repair_mean_ratio_gap_to_optimum" to meanRatioGap(Strategy.GREEDY_REPAIR),
         )
     }.let { byObjective ->
         linkedMapOf(

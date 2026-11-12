@@ -112,7 +112,7 @@ class LogicalConditionsTest {
         val card = Regex("<article class=\"index-card\" data-selected-index=\"${id("a")}\">.*?</article>",
             RegexOption.DOT_MATCHES_ALL).find(html)?.value
         assertNotNull(card)
-        assertTrue(card!!.contains("<dt>Ветви условий</dt><dd>$escapedId: condition/L</dd>"))
+        assertTrue(checkNotNull(card) { "Expected card to be available" }.contains("<dt>Ветви условий</dt><dd>$escapedId: condition/L</dd>"))
         assertFalse(card.contains("condition/R"))
     }
 

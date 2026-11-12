@@ -142,7 +142,7 @@ class DefaultReportBuilderTest {
 
         assertEquals(QueryCostComparison("records_by_value", 100.0, 110.0, true), report.queryComparisons.last())
         assertEquals(QueryCostComparison("records_by_group", 100.0, 10.0, false), report.queryComparisons.first())
-        assertTrue(requireNotNull(report.result.selected).metrics.meanRatio!! < 1.0)
+        assertTrue(checkNotNull(requireNotNull(report.result.selected).metrics.meanRatio) { "Expected meanRatio to be available" } < 1.0)
     }
 
     @Test

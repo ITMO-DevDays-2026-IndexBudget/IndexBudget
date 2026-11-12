@@ -27,7 +27,7 @@ class SearchScenariosTest {
                 val estimated = candidate.estimatedBytes
                 assertTrue(estimated != null, "${scenario.name}: ${candidate.id} missing estimated size")
                 assertEquals(
-                    expectedBudgeted(estimated!!),
+                    expectedBudgeted(checkNotNull(estimated) { "Expected estimated to be available" }),
                     candidate.budgetedBytes,
                     "${scenario.name}: ${candidate.id} budgeted must be ceil(1.2 * estimated)",
                 )
@@ -82,7 +82,7 @@ class SearchScenariosTest {
         val k = scenario.metricsFor(listOf("records_budget_k"))
         val pair = scenario.metricsFor(listOf("records_budget_j", "records_budget_k"))
         fun budgetedSize(ids: List<String>) =
-            ids.sumOf { id -> scenario.candidates.first { it.id == id }.budgetedBytes!! }
+            ids.sumOf { id -> checkNotNull(scenario.candidates.first { it.id == id }.budgetedBytes) { "Expected budgetedBytes to be available" } }
 
         // i is the best single
         assertTrue(round9(i.worstRatio) < round9(j.worstRatio))
@@ -114,7 +114,7 @@ class SearchScenariosTest {
         val budget = scenario.workload.constraints.storageBudgetBytes
         val maxIndexes = scenario.workload.constraints.maxIndexes
         fun size(ids: List<String>) =
-            ids.sumOf { id -> scenario.candidates.first { it.id == id }.budgetedBytes!! }
+            ids.sumOf { id -> checkNotNull(scenario.candidates.first { it.id == id }.budgetedBytes) { "Expected budgetedBytes to be available" } }
 
         // budgeted sizes A=6, B=5, C=5 against budget 10
         assertEquals(6L, size(listOf("records_trap_a")))
@@ -289,7 +289,7 @@ class SearchScenariosTest {
             cMean += p * cost
             bMean += p * base
         }
-        return ReferenceMetrics(ratios, cMean / bMean, ratios.values.maxOrNull()!!)
+        return ReferenceMetrics(ratios, cMean / bMean, checkNotNull(ratios.values.maxOrNull()) { "Expected maxOrNull to be available" })
     }
 
     private fun expectedBudgeted(estimated: Long): Long =

@@ -54,7 +54,7 @@ class HashHypopgIntegrationTest {
                         assertEquals(setOf("btree", "hash"), batch.candidates.map { it.definition.method }.toSet())
                         assertEquals(2, batch.candidates.size)
                         val sized = batch.candidates.map { it.copy(estimatedBytes = session.estimateSize(it, context)) }
-                        assertTrue(sized.all { it.estimatedBytes!! > 0 })
+                        assertTrue(sized.all { checkNotNull(it.estimatedBytes) { "Expected estimatedBytes to be available" } > 0 })
                         val metrics = MetricsCalculatorImpl()
                         largestBudgeted = metrics.assessBudget(sized, input).usage.budgetedBytes
                         for (set in listOf(emptyList<IndexCandidate>()) + sized.map { listOf(it) } + listOf(sized)) {
@@ -108,16 +108,16 @@ class HashHypopgIntegrationTest {
                 assertEquals(RunStatus.COMPLETED, run.status)
                 val report = reports.single()
                 assertEquals(4, report.schemaVersion)
-                assertEquals(ManualComparisonStatus.COMPLETED, report.manualComparison!!.status)
+                assertEquals(ManualComparisonStatus.COMPLETED, checkNotNull(report.manualComparison) { "Expected manualComparison to be available" }.status)
                 assertTrue(report.manualComparison.admissible)
-                assertTrue(report.candidates.diagnostics.preparation!!.sizeAttempts <= 32)
+                assertTrue(checkNotNull(report.candidates.diagnostics.preparation) { "Expected preparation to be available" }.sizeAttempts <= 32)
                 assertTrue(report.result.diagnostics.statistics.explainAttempts <= 2000)
                 val json = mapper.readTree(Files.readString(output.resolve("analysis/report.json")))
                 assertEquals(listOf("btree", "hash"), json["index_methods"].toList().map { it.stringValue() })
                 val html = Files.readString(output.resolve("analysis/report.html"))
                 val sql = Files.readString(output.resolve("analysis/indexes.sql"))
                 assertTrue(html.contains(report.runId) && sql.contains(report.runId))
-                assertTrue(html.contains(report.inputHash!!) && sql.contains(report.inputHash))
+                assertTrue(html.contains(checkNotNull(report.inputHash) { "Expected inputHash to be available" }) && sql.contains(report.inputHash))
                 assertTrue(html.contains("btree, hash") && sql.contains("-- index_methods: btree,hash"))
                 assertSelectedArtifacts(report, output.resolve("analysis"))
                 val seriesJson = mapper.readTree(Files.readString(source)) as tools.jackson.databind.node.ObjectNode
@@ -134,8 +134,10 @@ class HashHypopgIntegrationTest {
                         BudgetSeriesRequest(budget, values.map(BigDecimal::valueOf)), output.resolve("series-${budget.name}"), seriesContext)
                     assertEquals(SeriesStatus.COMPLETED, result.status)
                     assertEquals(listOf(2, 0, 0, 0), sizeCalls.drop(before))
-                    assertTrue(result.points.first().report!!.result.selected!!.evaluation.candidateIds.isEmpty())
-                    assertTrue(result.points.all { it.report!!.schemaVersion == 4 })
+                    val firstReport = checkNotNull(result.points.first().report) { "Expected first point report" }
+                    val firstSelected = checkNotNull(firstReport.result.selected) { "Expected first point selection" }
+                    assertTrue(firstSelected.evaluation.candidateIds.isEmpty())
+                    assertTrue(result.points.all { checkNotNull(it.report) { "Expected report to be available" }.schemaVersion == 4 })
                     val summary = mapper.readTree(Files.readString(output.resolve("series-${budget.name}/series.json")))
                     assertEquals(2, summary["schema_version"].intValue())
                     assertEquals(setOf("btree", "hash"), summary["preparation"]["candidates"].toList().map { it["method"].stringValue() }.toSet())
@@ -143,7 +145,7 @@ class HashHypopgIntegrationTest {
                     for ((point, saved) in result.points.zip(summary["points"].toList())) {
                         val pointReport = requireNotNull(point.report)
                         assertEquals(point.ordinal, saved["ordinal"].intValue())
-                        assertEquals(pointReport.result.selected!!.evaluation.candidateIds,
+                        assertEquals(checkNotNull(pointReport.result.selected) { "Expected selected to be available" }.evaluation.candidateIds,
                             saved["selected_index_ids"].toList().map { it.stringValue() })
                         val pointJson = output.resolve("series-${budget.name}").resolve(point.artifacts.getValue("report.json"))
                         assertSelectedArtifacts(pointReport, pointJson.parent)

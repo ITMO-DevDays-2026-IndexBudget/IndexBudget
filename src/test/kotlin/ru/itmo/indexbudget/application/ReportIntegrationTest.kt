@@ -54,10 +54,10 @@ class ReportIntegrationTest {
             assertEquals(objective.name.lowercase(), json.get("selected_objective").stringValue())
             assertEquals("evaluated_sets", json.get("comparison_scope").stringValue())
             val expectedId = if (objective == Objective.ROBUST) "records_created_at" else "records_group_created_at"
-            assertEquals(listOf(expectedId), report.result.selected!!.evaluation.candidateIds)
+            assertEquals(listOf(expectedId), checkNotNull(report.result.selected) { "Expected selected to be available" }.evaluation.candidateIds)
             assertEquals(listOf(expectedId), json.get("selected").get("candidate_ids").toList().map { it.stringValue() })
             assertEquals(listOf(expectedId), json.get("selected_indexes").toList().map { it.get("id").stringValue() })
-            for ((queryId, plan) in report.result.selected!!.evaluation.plansByQueryId) {
+            for ((queryId, plan) in checkNotNull(report.result.selected) { "Expected selected to be available" }.evaluation.plansByQueryId) {
                 assertEquals(mapper.readTree(plan.json), json.get("selected").get("plans_by_query_id").get(queryId))
             }
             val sql = Files.readString(run.output.resolve("indexes.sql"))
@@ -78,7 +78,7 @@ class ReportIntegrationTest {
         val report = requireNotNull(run.rendered)
         assertSame(run.built, report)
         assertEquals(RunStatus.PARTIAL, report.result.status)
-        assertEquals(listOf("records_created_at"), report.result.selected!!.evaluation.candidateIds)
+        assertEquals(listOf("records_created_at"), checkNotNull(report.result.selected) { "Expected selected to be available" }.evaluation.candidateIds)
         assertTrue(StopReason.EVALUATION_FAILED in report.result.diagnostics.stopReasons)
         assertEquals(3, run.evaluationCalls)
         assertEquals(2, report.result.diagnostics.statistics.completedEvaluations)

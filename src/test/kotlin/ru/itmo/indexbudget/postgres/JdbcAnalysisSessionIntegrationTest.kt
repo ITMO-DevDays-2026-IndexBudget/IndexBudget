@@ -283,7 +283,7 @@ class JdbcAnalysisSessionIntegrationTest {
             }
             assertTrue(size > 0)
             assertEquals(0, hypothesisCount(connection))
-            mapOf("query_id" to source, "ddl" to candidate.ddl!!.replace(schema, "include_demo"),
+            mapOf("query_id" to source, "ddl" to checkNotNull(candidate.ddl) { "Expected ddl to be available" }.replace(schema, "include_demo"),
                 "estimated_bytes" to size, "budgeted_bytes" to assessment.usage.budgetedBytes,
                 "write_units_per_hour" to assessment.usage.writeUnitsPerHour,
                 "storage_budget_bytes" to input.constraints.storageBudgetBytes,
@@ -292,7 +292,7 @@ class JdbcAnalysisSessionIntegrationTest {
         }
         // Real catalog distinguishes included positions from search keys, then exact dedup consumes it.
         val positive = covering.single { "positive" in it.sourceQueryIds }
-        sql(admin, positive.ddl!!)
+        sql(admin, checkNotNull(positive.ddl) { "Expected ddl to be available" })
         val after = session.readCatalog(parsed.referencedTables, context)
         assertTrue(after.tables.single().existingIndexes.any {
             it.includedColumns == positive.definition.includedColumns &&

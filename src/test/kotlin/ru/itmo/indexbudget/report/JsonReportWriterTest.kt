@@ -13,7 +13,7 @@ class JsonReportWriterTest {
     @Test
     fun `DML report metadata is explicit and does not imply physical write costs`() {
         val source = ContractFixtures.report()
-        val kinds = source.input!!.queries.mapIndexed { index, query ->
+        val kinds = checkNotNull(source.input) { "Expected input to be available" }.queries.mapIndexed { index, query ->
             query.id to if (index == 0) StatementKind.UPDATE else StatementKind.DELETE
         }.toMap()
         val report = source.copy(statementKinds = kinds)

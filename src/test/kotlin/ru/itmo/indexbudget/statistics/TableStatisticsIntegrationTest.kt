@@ -45,11 +45,11 @@ class TableStatisticsIntegrationTest {
             assertEquals(a.relationOid, b.relationOid)
             assertEquals(source, after.source.sourceId)
             assertEquals(before.source.databaseOid, after.source.databaseOid)
-            assertEquals(100L, b.nTupIns!! - a.nTupIns!!)
-            assertEquals(40L, b.nTupUpd!! - a.nTupUpd!!)
-            assertEquals(10L, b.nTupDel!! - a.nTupDel!!)
-            assertTrue(b.nTupHotUpd!! >= a.nTupHotUpd!!)
-            assertTrue(b.nTupHotUpd!! <= b.nTupUpd!!)
+            assertEquals(100L, checkNotNull(b.nTupIns) { "Expected nTupIns to be available" } - checkNotNull(a.nTupIns) { "Expected nTupIns to be available" })
+            assertEquals(40L, checkNotNull(b.nTupUpd) { "Expected nTupUpd to be available" } - checkNotNull(a.nTupUpd) { "Expected nTupUpd to be available" })
+            assertEquals(10L, checkNotNull(b.nTupDel) { "Expected nTupDel to be available" } - checkNotNull(a.nTupDel) { "Expected nTupDel to be available" })
+            assertTrue(checkNotNull(b.nTupHotUpd) { "Expected nTupHotUpd to be available" } >= checkNotNull(a.nTupHotUpd) { "Expected nTupHotUpd to be available" })
+            assertTrue(checkNotNull(b.nTupHotUpd) { "Expected nTupHotUpd to be available" } <= checkNotNull(b.nTupUpd) { "Expected nTupUpd to be available" })
             connection().use { c -> c.createStatement().use { statement ->
                 statement.executeQuery("SELECT n_tup_hot_upd FROM pg_catalog.pg_stat_user_tables WHERE relid='$schema.probe'::regclass").use { rows ->
                     assertTrue(rows.next())
@@ -75,7 +75,7 @@ class TableStatisticsIntegrationTest {
             val entry = result.entries.single { it.name == role }
             assertFalse(entry.selectAccess)
             assertNotNull(entry.nTupIns, "No SELECT grant is required to read public table counters")
-            assertTrue(opened!!.isClosed)
+            assertTrue(checkNotNull(opened) { "Expected opened to be available" }.isClosed)
         } finally { connection().use { c -> c.createStatement().use {
             it.execute("DROP TABLE public.$role"); it.execute("DROP ROLE $role")
         } } }
@@ -128,7 +128,7 @@ class TableStatisticsIntegrationTest {
             var metadataReads = 0
             val raw = connection()
             val wrapped = Proxy.newProxyInstance(Connection::class.java.classLoader, arrayOf(Connection::class.java)) { _, method, args ->
-                if (method.name == "prepareStatement" && (args!![0] as String).contains("FROM pg_catalog.pg_database")) {
+                if (method.name == "prepareStatement" && (checkNotNull(args) { "Expected args to be available" }[0] as String).contains("FROM pg_catalog.pg_database")) {
                     metadataReads++
                     if (metadataReads == 2) {
                         Thread.sleep(10) // Distinct published reset timestamps, including on coarse clocks.
@@ -162,7 +162,7 @@ class TableStatisticsIntegrationTest {
             val result = capture(connect = { connection().also { opened = it } }, limits = SnapshotLimits(maxRows = 1))
             assertEquals(1, result.entries.size)
             assertTrue(TableSnapshotReason.ROW_LIMIT in result.reasons)
-            assertTrue(opened!!.isClosed)
+            assertTrue(checkNotNull(opened) { "Expected opened to be available" }.isClosed)
         } finally { connection().use { c -> c.createStatement().use { it.execute("DROP TABLE public.limit_a, public.limit_b") } } }
     }
 }
