@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="320" viewBox="0 0 1100 320" role="img" aria-labelledby="title description">
+<title id="title">Поиск по строковому ключу — схема базы</title>
+<desc id="description">1 табл. · 0 внешних ключей · PK — первичный ключ · FK — внешний ключ. Статическая схема датасета версии 2.</desc>
+<style>text{font-family:Arial,sans-serif;fill:#203d34}.body{font-family:monospace;font-size:16px}.table{font-family:monospace;font-size:20px;font-weight:700}.key{font-size:12px;font-weight:700;fill:#357c55}.note{font-size:15px;fill:#697e70}</style>
+<rect width="1100" height="320" rx="16" fill="#f3f7f0"/>
+<g transform="translate(0,-110)"><g><rect x="50" y="140" width="1000" height="154" rx="12" fill="#fff" stroke="#b8cbbb"/><text x="70" y="175" class="table">public.lookup_entries</text><path d="M50 198 H1050" stroke="#d9e4d8"/><text x="66" y="220" class="key"></text><text x="102" y="220" class="body">external_key</text><text x="66" y="248" class="key"></text><text x="102" y="248" class="body">created_at</text><text x="566" y="220" class="key"></text><text x="602" y="220" class="body">payload</text><text x="70" y="280" class="note">200 000 строк · 0 индексов</text></g></g>
+</svg>

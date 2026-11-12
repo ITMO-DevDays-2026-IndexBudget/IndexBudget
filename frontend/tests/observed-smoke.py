@@ -15,7 +15,7 @@ from urllib.request import Request, urlopen
 from uuid import uuid4
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from server import FrontendHTTPServer, Jobs, LocalRunner, ROOT, make_handler, read_json, write_json
+from server import FrontendHTTPServer, Jobs, LocalRunner, ROOT, make_handler, read_json, write_json, load_templates
 
 
 def command(args, **kwargs):
@@ -49,8 +49,8 @@ def main():
         port = command(['docker', 'port', container, '5432/tcp']).rsplit(':', 1)[1]
         os.environ['FRONTEND_DB_PORT'] = port
         runner = DisposableRunner(container)
-        templates = {t['id']: t for t in (read_json(p) for p in (ROOT / 'templates').glob('*.json'))}
-        template = templates['01-records']
+        templates = load_templates(ROOT)
+        template = templates['04-scenarios']
         request = {'template_id': template['id'], 'template_version': template['version'], 'workload': copy.deepcopy(template['workload'])}
         runner.prepare({**request, 'schema_sql': template['schema_sql'], 'seed_sql': template['seed_sql']})
         runner.db('CREATE EXTENSION pg_stat_statements;')
@@ -84,6 +84,10 @@ def main():
         imported = read_json(output / 'imported/workload.json')
         assert imported['table_write_rates_origin']['complete'] is True
         assert imported['table_write_rates']['public.records']['updates_per_hour'] > 0
+        # Наблюдаемое окно содержит только records, поэтому JOIN на groups здесь не нужен.
+        request['workload']['queries'] = [q for q in request['workload']['queries'] if q['id'] != 'category_join']
+        for profile in request['workload']['profiles']:
+            profile['calls_per_hour'].pop('category_join')
         request['write_source'] = 'observed'
         for key in ['table_write_rates', 'table_write_rates_origin']: request['workload'][key] = imported[key]
         request['workload']['analysis_mode'] = 'normal'

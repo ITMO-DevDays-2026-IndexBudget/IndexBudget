@@ -1,80 +1,183 @@
 {
   "id": "02-shop",
-  "version": 1,
-  "name": "Магазин и заказы",
-  "tag": "Связанные таблицы",
-  "description": "Клиенты, заказы и JOIN. Посмотри, как частоты обычного дня и распродажи влияют на выбор.",
+  "version": 2,
+  "name": "Интернет-магазин",
+  "tag": "7 связанных таблиц",
+  "description": "Каталог, покупки, оплата и доставка. Обычный день, распродажа и обработка доставок: 12 запросов на 2 млн строк.",
   "accent": "sand",
-  "schema_sql": "CREATE TABLE public.customers (\n  id integer PRIMARY KEY,\n  region integer NOT NULL,\n  name text NOT NULL\n);\nCREATE TABLE public.orders (\n  id bigint PRIMARY KEY,\n  customer_id integer NOT NULL REFERENCES public.customers(id),\n  status integer NOT NULL,\n  total integer NOT NULL,\n  created_at timestamp NOT NULL\n);",
-  "seed_sql": "INSERT INTO public.customers\nSELECT i, i % 20, 'customer-' || i FROM generate_series(1, 2000) AS g(i);\nINSERT INTO public.orders\nSELECT i, (i % 2000 + 1)::integer, (i % 5)::integer,\n       ((i * 37) % 10000)::integer,\n       timestamp '2026-01-01' + i * interval '1 minute'\nFROM generate_series(1, 100000) AS g(i);",
+  "schema_sql": "CREATE TABLE public.customers (\n  id integer PRIMARY KEY,\n  region integer NOT NULL,\n  segment integer NOT NULL,\n  name text NOT NULL\n);\n\nCREATE TABLE public.categories (\n  id integer PRIMARY KEY,\n  name text NOT NULL\n);\n\nCREATE TABLE public.products (\n  id integer PRIMARY KEY,\n  category_id integer NOT NULL REFERENCES public.categories(id),\n  price integer NOT NULL,\n  stock integer NOT NULL,\n  name text NOT NULL\n);\n\nCREATE TABLE public.orders (\n  id bigint PRIMARY KEY,\n  customer_id integer NOT NULL REFERENCES public.customers(id),\n  status integer NOT NULL,\n  total integer NOT NULL,\n  created_at timestamp NOT NULL\n);\n\nCREATE TABLE public.order_items (\n  id bigint PRIMARY KEY,\n  order_id bigint NOT NULL REFERENCES public.orders(id),\n  product_id integer NOT NULL REFERENCES public.products(id),\n  quantity integer NOT NULL,\n  unit_price integer NOT NULL\n);\n\nCREATE TABLE public.payments (\n  id bigint PRIMARY KEY,\n  order_id bigint NOT NULL REFERENCES public.orders(id),\n  payer_id integer NOT NULL REFERENCES public.customers(id),\n  status integer NOT NULL,\n  method integer NOT NULL,\n  created_at timestamp NOT NULL\n);\n\nCREATE TABLE public.shipments (\n  id bigint PRIMARY KEY,\n  order_id bigint NOT NULL REFERENCES public.orders(id),\n  recipient_id integer NOT NULL REFERENCES public.customers(id),\n  status integer NOT NULL,\n  region integer NOT NULL,\n  created_at timestamp NOT NULL\n);",
+  "seed_sql": "INSERT INTO public.customers\nSELECT i, (i % 20)::integer, ((i / 20) % 4)::integer, 'customer-' || i\nFROM generate_series(1, 20000) AS g(i);\nINSERT INTO public.categories\nSELECT i, 'category-' || i FROM generate_series(1, 100) AS g(i);\nINSERT INTO public.products\nSELECT i, (i % 100 + 1)::integer, ((i * 37) % 10000 + 100)::integer,\n       ((i / 100) % 50)::integer, 'product-' || i\nFROM generate_series(1, 20000) AS g(i);\nINSERT INTO public.orders\nSELECT i, ((i * 73) % 20000 + 1)::integer, ((i / 20000) % 5)::integer,\n       ((i * 37) % 10000 + 500)::integer,\n       timestamp '2026-01-01' + i * interval '30 seconds'\nFROM generate_series(1, 300000) AS g(i);\nINSERT INTO public.order_items\nSELECT i, ((i - 1) / 4 + 1)::bigint, ((i * 97 + i / 20000) % 20000 + 1)::integer,\n       (i % 3 + 1)::integer, ((i * 37) % 10000 + 100)::integer\nFROM generate_series(1, 1200000) AS g(i);\nINSERT INTO public.payments\nSELECT id, id, customer_id, ((id / 1000 + id / 20000) % 4)::integer, ((id / 7) % 3)::integer,\n       created_at + interval '5 minutes'\nFROM public.orders;\nINSERT INTO public.shipments\nSELECT id, id, customer_id, ((id / 1000 + id / 20000) % 4)::integer, ((id * 73 + id / 20000) % 20)::integer,\n       created_at + interval '1 day'\nFROM public.orders WHERE id <= 210000;",
   "workload": {
     "schema_version": 2,
     "objective": "robust",
     "analysis_mode": "normal",
     "candidate_ranking": "frequency",
+    "index_methods": [
+      "btree",
+      "brin",
+      "hash"
+    ],
     "queries": [
       {
         "id": "orders_by_customer",
-        "sql": "SELECT id, total FROM public.orders WHERE customer_id = 42 ORDER BY created_at DESC LIMIT 20"
+        "sql": "SELECT o.id, o.total, c.name FROM public.orders o INNER JOIN public.customers c ON o.customer_id = c.id WHERE c.id = 42 ORDER BY o.created_at DESC LIMIT 20"
       },
       {
         "id": "orders_by_status",
-        "sql": "SELECT id, total FROM public.orders WHERE status = 1 ORDER BY created_at DESC LIMIT 20"
+        "sql": "SELECT id, customer_id, total FROM public.orders WHERE status = 1 ORDER BY created_at DESC LIMIT 50"
       },
       {
         "id": "regional_orders",
-        "sql": "SELECT o.id, o.total FROM public.orders o INNER JOIN public.customers c ON o.customer_id = c.id WHERE c.region = 7 AND o.total >= 5000 ORDER BY o.created_at DESC LIMIT 20"
+        "sql": "SELECT o.id, o.total, c.name FROM public.orders o INNER JOIN public.customers c ON o.customer_id = c.id WHERE c.region = 7 AND c.segment = 1 AND o.total >= 5000 ORDER BY o.created_at DESC LIMIT 50"
+      },
+      {
+        "id": "category_products",
+        "sql": "SELECT p.id, p.name, p.price, c.name FROM public.products p INNER JOIN public.categories c ON p.category_id = c.id WHERE c.id = 12 AND p.stock > 0 AND p.price BETWEEN 500 AND 5000 ORDER BY p.price ASC LIMIT 40"
+      },
+      {
+        "id": "low_stock",
+        "sql": "SELECT id, name, stock FROM public.products WHERE category_id IN (5, 12, 28) AND stock BETWEEN 1 AND 5 ORDER BY stock ASC LIMIT 50"
+      },
+      {
+        "id": "order_details",
+        "sql": "SELECT o.id, p.name, i.quantity, i.unit_price FROM public.orders o INNER JOIN public.order_items i ON i.order_id = o.id INNER JOIN public.products p ON i.product_id = p.id WHERE o.id = 120042 ORDER BY i.id ASC LIMIT 50"
+      },
+      {
+        "id": "product_orders",
+        "sql": "SELECT o.id, o.created_at, i.quantity FROM public.products p INNER JOIN public.order_items i ON i.product_id = p.id INNER JOIN public.orders o ON i.order_id = o.id WHERE p.id = 137 AND o.status IN (1, 2) ORDER BY o.created_at DESC LIMIT 50"
+      },
+      {
+        "id": "pending_payments",
+        "sql": "SELECT p.id, o.id, o.total FROM public.payments p INNER JOIN public.orders o ON p.order_id = o.id WHERE p.status = 0 AND p.method = 1 AND o.created_at >= '2026-03-01'::timestamp ORDER BY p.created_at ASC LIMIT 50"
+      },
+      {
+        "id": "customer_payments",
+        "sql": "SELECT p.id, o.total, c.name FROM public.customers c INNER JOIN public.payments p ON p.payer_id = c.id INNER JOIN public.orders o ON p.order_id = o.id WHERE c.id = 42 AND p.status = 2 ORDER BY p.created_at DESC LIMIT 20"
+      },
+      {
+        "id": "dispatch_queue",
+        "sql": "SELECT s.id, o.id, o.total FROM public.shipments s INNER JOIN public.orders o ON s.order_id = o.id WHERE s.region = 7 AND s.status = 0 AND o.status IN (1, 2) ORDER BY s.created_at ASC LIMIT 100"
+      },
+      {
+        "id": "customer_deliveries",
+        "sql": "SELECT s.id, s.status, o.total, c.name FROM public.customers c INNER JOIN public.shipments s ON s.recipient_id = c.id INNER JOIN public.orders o ON s.order_id = o.id WHERE c.id = 42 AND s.status IN (1, 2) ORDER BY s.created_at DESC LIMIT 20"
+      },
+      {
+        "id": "delivery_exceptions",
+        "sql": "SELECT s.id, p.id, o.total FROM public.shipments s INNER JOIN public.orders o ON s.order_id = o.id INNER JOIN public.payments p ON p.order_id = o.id WHERE s.status = 3 AND p.status IN (0, 3) AND s.created_at < '2026-03-01'::timestamp ORDER BY s.created_at ASC LIMIT 100"
       }
     ],
     "profiles": [
       {
         "id": "normal",
-        "weight": 9,
+        "weight": 7,
         "calls_per_hour": {
-          "orders_by_customer": 3000,
-          "orders_by_status": 100,
-          "regional_orders": 100
+          "orders_by_customer": 4000,
+          "orders_by_status": 300,
+          "regional_orders": 100,
+          "category_products": 6000,
+          "low_stock": 100,
+          "order_details": 3000,
+          "product_orders": 100,
+          "pending_payments": 400,
+          "customer_payments": 800,
+          "dispatch_queue": 300,
+          "customer_deliveries": 1500,
+          "delivery_exceptions": 50
         }
       },
       {
-        "id": "campaign",
+        "id": "sale",
+        "weight": 2,
+        "calls_per_hour": {
+          "orders_by_customer": 2000,
+          "orders_by_status": 1500,
+          "regional_orders": 600,
+          "category_products": 18000,
+          "low_stock": 5000,
+          "order_details": 10000,
+          "product_orders": 4000,
+          "pending_payments": 6000,
+          "customer_payments": 1000,
+          "dispatch_queue": 500,
+          "customer_deliveries": 1000,
+          "delivery_exceptions": 200
+        }
+      },
+      {
+        "id": "fulfillment",
         "weight": 1,
         "calls_per_hour": {
-          "orders_by_customer": 100,
-          "orders_by_status": 2000,
-          "regional_orders": 1000
+          "orders_by_customer": 300,
+          "orders_by_status": 6000,
+          "regional_orders": 2500,
+          "category_products": 200,
+          "low_stock": 300,
+          "order_details": 1500,
+          "product_orders": 500,
+          "pending_payments": 4000,
+          "customer_payments": 1500,
+          "dispatch_queue": 12000,
+          "customer_deliveries": 5000,
+          "delivery_exceptions": 6000
         }
       }
     ],
     "table_write_rates": {
+      "public.customers": {
+        "inserts_per_hour": 150,
+        "updates_per_hour": 100,
+        "deletes_per_hour": 0,
+        "source": "manual"
+      },
+      "public.categories": {
+        "inserts_per_hour": 0,
+        "updates_per_hour": 5,
+        "deletes_per_hour": 0,
+        "source": "manual"
+      },
+      "public.products": {
+        "inserts_per_hour": 100,
+        "updates_per_hour": 5000,
+        "deletes_per_hour": 20,
+        "source": "manual"
+      },
       "public.orders": {
-        "inserts_per_hour": 1000,
-        "updates_per_hour": 2000,
+        "inserts_per_hour": 3000,
+        "updates_per_hour": 6000,
+        "deletes_per_hour": 50,
+        "source": "manual"
+      },
+      "public.order_items": {
+        "inserts_per_hour": 12000,
+        "updates_per_hour": 500,
         "deletes_per_hour": 100,
         "source": "manual"
       },
-      "public.customers": {
-        "inserts_per_hour": 100,
-        "updates_per_hour": 50,
+      "public.payments": {
+        "inserts_per_hour": 3000,
+        "updates_per_hour": 4500,
+        "deletes_per_hour": 0,
+        "source": "manual"
+      },
+      "public.shipments": {
+        "inserts_per_hour": 2500,
+        "updates_per_hour": 5000,
         "deletes_per_hour": 0,
         "source": "manual"
       }
     },
     "constraints": {
-      "storage_budget_bytes": 33554432,
-      "write_budget_units_per_hour": 12000,
+      "storage_budget_bytes": 134217728,
+      "write_budget_units_per_hour": 120000,
       "max_indexes": 5
-    },
-    "index_methods": [
-      "btree",
-      "brin",
-      "hash"
-    ]
+    }
   },
   "catalog": {
     "tables": [
       {
         "name": "public.customers",
+        "rows": 20000,
         "columns": [
           {
             "name": "id",
@@ -89,19 +192,85 @@
             "nullable": false
           },
           {
+            "name": "segment",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
             "name": "name",
             "type": "text",
             "primary": false,
             "nullable": false
           }
         ],
-        "rows": 2000,
         "indexes": [
           "CREATE UNIQUE INDEX customers_pkey ON public.customers USING btree (id)"
         ]
       },
       {
+        "name": "public.categories",
+        "rows": 100,
+        "columns": [
+          {
+            "name": "id",
+            "type": "integer",
+            "primary": true,
+            "nullable": false
+          },
+          {
+            "name": "name",
+            "type": "text",
+            "primary": false,
+            "nullable": false
+          }
+        ],
+        "indexes": [
+          "CREATE UNIQUE INDEX categories_pkey ON public.categories USING btree (id)"
+        ]
+      },
+      {
+        "name": "public.products",
+        "rows": 20000,
+        "columns": [
+          {
+            "name": "id",
+            "type": "integer",
+            "primary": true,
+            "nullable": false
+          },
+          {
+            "name": "category_id",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "price",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "stock",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "name",
+            "type": "text",
+            "primary": false,
+            "nullable": false
+          }
+        ],
+        "indexes": [
+          "CREATE UNIQUE INDEX products_pkey ON public.products USING btree (id)"
+        ]
+      },
+      {
         "name": "public.orders",
+        "rows": 300000,
         "columns": [
           {
             "name": "id",
@@ -134,18 +303,395 @@
             "nullable": false
           }
         ],
-        "rows": 100000,
         "indexes": [
           "CREATE UNIQUE INDEX orders_pkey ON public.orders USING btree (id)"
+        ]
+      },
+      {
+        "name": "public.order_items",
+        "rows": 1200000,
+        "columns": [
+          {
+            "name": "id",
+            "type": "bigint",
+            "primary": true,
+            "nullable": false
+          },
+          {
+            "name": "order_id",
+            "type": "bigint",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "product_id",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "quantity",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "unit_price",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          }
+        ],
+        "indexes": [
+          "CREATE UNIQUE INDEX order_items_pkey ON public.order_items USING btree (id)"
+        ]
+      },
+      {
+        "name": "public.payments",
+        "rows": 300000,
+        "columns": [
+          {
+            "name": "id",
+            "type": "bigint",
+            "primary": true,
+            "nullable": false
+          },
+          {
+            "name": "order_id",
+            "type": "bigint",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "payer_id",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "status",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "method",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "created_at",
+            "type": "timestamp",
+            "primary": false,
+            "nullable": false
+          }
+        ],
+        "indexes": [
+          "CREATE UNIQUE INDEX payments_pkey ON public.payments USING btree (id)"
+        ]
+      },
+      {
+        "name": "public.shipments",
+        "rows": 210000,
+        "columns": [
+          {
+            "name": "id",
+            "type": "bigint",
+            "primary": true,
+            "nullable": false
+          },
+          {
+            "name": "order_id",
+            "type": "bigint",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "recipient_id",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "status",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "region",
+            "type": "integer",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "created_at",
+            "type": "timestamp",
+            "primary": false,
+            "nullable": false
+          }
+        ],
+        "indexes": [
+          "CREATE UNIQUE INDEX shipments_pkey ON public.shipments USING btree (id)"
         ]
       }
     ],
     "relations": [
       {
+        "from": "public.products",
+        "to": "public.categories",
+        "label": "FOREIGN KEY (category_id) REFERENCES categories(id)"
+      },
+      {
         "from": "public.orders",
         "to": "public.customers",
         "label": "FOREIGN KEY (customer_id) REFERENCES customers(id)"
+      },
+      {
+        "from": "public.order_items",
+        "to": "public.orders",
+        "label": "FOREIGN KEY (order_id) REFERENCES orders(id)"
+      },
+      {
+        "from": "public.order_items",
+        "to": "public.products",
+        "label": "FOREIGN KEY (product_id) REFERENCES products(id)"
+      },
+      {
+        "from": "public.payments",
+        "to": "public.orders",
+        "label": "FOREIGN KEY (order_id) REFERENCES orders(id)"
+      },
+      {
+        "from": "public.payments",
+        "to": "public.customers",
+        "label": "FOREIGN KEY (payer_id) REFERENCES customers(id)"
+      },
+      {
+        "from": "public.shipments",
+        "to": "public.orders",
+        "label": "FOREIGN KEY (order_id) REFERENCES orders(id)"
+      },
+      {
+        "from": "public.shipments",
+        "to": "public.customers",
+        "label": "FOREIGN KEY (recipient_id) REFERENCES customers(id)"
       }
     ]
-  }
+  },
+  "example_profiles": {
+    "normal": "Обычный день: Витрина, история покупок и отслеживание заказов",
+    "sale": "Распродажа: Рост просмотра товаров, проверки остатков, состава заказов и оплат",
+    "fulfillment": "Обработка доставок: Отправка по регионам, сверка оплат и разбор задержек"
+  },
+  "examples": [
+    {
+      "id": "orders_by_customer",
+      "name": "История покупок",
+      "purpose": "Заказы клиента с данными покупателя и сортировкой по времени.",
+      "sql": "SELECT o.id, o.total, c.name FROM public.orders o INNER JOIN public.customers c ON o.customer_id = c.id WHERE c.id = 42 ORDER BY o.created_at DESC LIMIT 20",
+      "statement_kind": "select",
+      "tables": [
+        "public.orders",
+        "public.customers"
+      ],
+      "syntax_hint": "INNER JOIN по внешним ключам, фильтры и ORDER BY.",
+      "calls_per_hour": {
+        "normal": 4000,
+        "sale": 2000,
+        "fulfillment": 300
+      }
+    },
+    {
+      "id": "orders_by_status",
+      "name": "Очередь заказов",
+      "purpose": "Новые заказы для обработки оператором.",
+      "sql": "SELECT id, customer_id, total FROM public.orders WHERE status = 1 ORDER BY created_at DESC LIMIT 50",
+      "statement_kind": "select",
+      "tables": [
+        "public.orders"
+      ],
+      "syntax_hint": "Фильтры по значениям и диапазонам, ORDER BY и LIMIT.",
+      "calls_per_hour": {
+        "normal": 300,
+        "sale": 1500,
+        "fulfillment": 6000
+      }
+    },
+    {
+      "id": "regional_orders",
+      "name": "Крупные заказы региона",
+      "purpose": "Крупные покупки выбранного сегмента клиентов в регионе.",
+      "sql": "SELECT o.id, o.total, c.name FROM public.orders o INNER JOIN public.customers c ON o.customer_id = c.id WHERE c.region = 7 AND c.segment = 1 AND o.total >= 5000 ORDER BY o.created_at DESC LIMIT 50",
+      "statement_kind": "select",
+      "tables": [
+        "public.orders",
+        "public.customers"
+      ],
+      "syntax_hint": "INNER JOIN по внешним ключам, фильтры и ORDER BY.",
+      "calls_per_hour": {
+        "normal": 100,
+        "sale": 600,
+        "fulfillment": 2500
+      }
+    },
+    {
+      "id": "category_products",
+      "name": "Витрина категории",
+      "purpose": "Доступные товары категории в заданном диапазоне цен.",
+      "sql": "SELECT p.id, p.name, p.price, c.name FROM public.products p INNER JOIN public.categories c ON p.category_id = c.id WHERE c.id = 12 AND p.stock > 0 AND p.price BETWEEN 500 AND 5000 ORDER BY p.price ASC LIMIT 40",
+      "statement_kind": "select",
+      "tables": [
+        "public.products",
+        "public.categories"
+      ],
+      "syntax_hint": "INNER JOIN по внешним ключам, фильтры и ORDER BY.",
+      "calls_per_hour": {
+        "normal": 6000,
+        "sale": 18000,
+        "fulfillment": 200
+      }
+    },
+    {
+      "id": "low_stock",
+      "name": "Остатки перед распродажей",
+      "purpose": "Товары популярных категорий, которые скоро закончатся.",
+      "sql": "SELECT id, name, stock FROM public.products WHERE category_id IN (5, 12, 28) AND stock BETWEEN 1 AND 5 ORDER BY stock ASC LIMIT 50",
+      "statement_kind": "select",
+      "tables": [
+        "public.products"
+      ],
+      "syntax_hint": "Фильтры по значениям и диапазонам, ORDER BY и LIMIT.",
+      "calls_per_hour": {
+        "normal": 100,
+        "sale": 5000,
+        "fulfillment": 300
+      }
+    },
+    {
+      "id": "order_details",
+      "name": "Состав заказа",
+      "purpose": "Заказ, его позиции и карточки товаров: соединение трёх таблиц.",
+      "sql": "SELECT o.id, p.name, i.quantity, i.unit_price FROM public.orders o INNER JOIN public.order_items i ON i.order_id = o.id INNER JOIN public.products p ON i.product_id = p.id WHERE o.id = 120042 ORDER BY i.id ASC LIMIT 50",
+      "statement_kind": "select",
+      "tables": [
+        "public.orders",
+        "public.order_items",
+        "public.products"
+      ],
+      "syntax_hint": "INNER JOIN по внешним ключам, фильтры и ORDER BY.",
+      "calls_per_hour": {
+        "normal": 3000,
+        "sale": 10000,
+        "fulfillment": 1500
+      }
+    },
+    {
+      "id": "product_orders",
+      "name": "Заказы товара",
+      "purpose": "Поиск оплачиваемых заказов с конкретным товаром.",
+      "sql": "SELECT o.id, o.created_at, i.quantity FROM public.products p INNER JOIN public.order_items i ON i.product_id = p.id INNER JOIN public.orders o ON i.order_id = o.id WHERE p.id = 137 AND o.status IN (1, 2) ORDER BY o.created_at DESC LIMIT 50",
+      "statement_kind": "select",
+      "tables": [
+        "public.products",
+        "public.order_items",
+        "public.orders"
+      ],
+      "syntax_hint": "INNER JOIN по внешним ключам, фильтры и ORDER BY.",
+      "calls_per_hour": {
+        "normal": 100,
+        "sale": 4000,
+        "fulfillment": 500
+      }
+    },
+    {
+      "id": "pending_payments",
+      "name": "Проверка оплат",
+      "purpose": "Ожидающие подтверждения оплаты свежих заказов.",
+      "sql": "SELECT p.id, o.id, o.total FROM public.payments p INNER JOIN public.orders o ON p.order_id = o.id WHERE p.status = 0 AND p.method = 1 AND o.created_at >= '2026-03-01'::timestamp ORDER BY p.created_at ASC LIMIT 50",
+      "statement_kind": "select",
+      "tables": [
+        "public.payments",
+        "public.orders"
+      ],
+      "syntax_hint": "INNER JOIN по внешним ключам, фильтры и ORDER BY.",
+      "calls_per_hour": {
+        "normal": 400,
+        "sale": 6000,
+        "fulfillment": 4000
+      }
+    },
+    {
+      "id": "customer_payments",
+      "name": "Платежи покупателя",
+      "purpose": "Плательщик, платёж и заказ в одном запросе службы поддержки.",
+      "sql": "SELECT p.id, o.total, c.name FROM public.customers c INNER JOIN public.payments p ON p.payer_id = c.id INNER JOIN public.orders o ON p.order_id = o.id WHERE c.id = 42 AND p.status = 2 ORDER BY p.created_at DESC LIMIT 20",
+      "statement_kind": "select",
+      "tables": [
+        "public.customers",
+        "public.payments",
+        "public.orders"
+      ],
+      "syntax_hint": "INNER JOIN по внешним ключам, фильтры и ORDER BY.",
+      "calls_per_hour": {
+        "normal": 800,
+        "sale": 1000,
+        "fulfillment": 1500
+      }
+    },
+    {
+      "id": "dispatch_queue",
+      "name": "Отправка по регионам",
+      "purpose": "Очередь отправлений с данными заказа для региональной доставки.",
+      "sql": "SELECT s.id, o.id, o.total FROM public.shipments s INNER JOIN public.orders o ON s.order_id = o.id WHERE s.region = 7 AND s.status = 0 AND o.status IN (1, 2) ORDER BY s.created_at ASC LIMIT 100",
+      "statement_kind": "select",
+      "tables": [
+        "public.shipments",
+        "public.orders"
+      ],
+      "syntax_hint": "INNER JOIN по внешним ключам, фильтры и ORDER BY.",
+      "calls_per_hour": {
+        "normal": 300,
+        "sale": 500,
+        "fulfillment": 12000
+      }
+    },
+    {
+      "id": "customer_deliveries",
+      "name": "Доставки получателя",
+      "purpose": "Получатель, отправление и заказ: отслеживание активных доставок.",
+      "sql": "SELECT s.id, s.status, o.total, c.name FROM public.customers c INNER JOIN public.shipments s ON s.recipient_id = c.id INNER JOIN public.orders o ON s.order_id = o.id WHERE c.id = 42 AND s.status IN (1, 2) ORDER BY s.created_at DESC LIMIT 20",
+      "statement_kind": "select",
+      "tables": [
+        "public.customers",
+        "public.shipments",
+        "public.orders"
+      ],
+      "syntax_hint": "INNER JOIN по внешним ключам, фильтры и ORDER BY.",
+      "calls_per_hour": {
+        "normal": 1500,
+        "sale": 1000,
+        "fulfillment": 5000
+      }
+    },
+    {
+      "id": "delivery_exceptions",
+      "name": "Разбор задержек",
+      "purpose": "Задержанные отправления и проблемные оплаты по общему заказу.",
+      "sql": "SELECT s.id, p.id, o.total FROM public.shipments s INNER JOIN public.orders o ON s.order_id = o.id INNER JOIN public.payments p ON p.order_id = o.id WHERE s.status = 3 AND p.status IN (0, 3) AND s.created_at < '2026-03-01'::timestamp ORDER BY s.created_at ASC LIMIT 100",
+      "statement_kind": "select",
+      "tables": [
+        "public.shipments",
+        "public.orders",
+        "public.payments"
+      ],
+      "syntax_hint": "INNER JOIN по внешним ключам, фильтры и ORDER BY.",
+      "calls_per_hour": {
+        "normal": 50,
+        "sale": 200,
+        "fulfillment": 6000
+      }
+    }
+  ]
 }

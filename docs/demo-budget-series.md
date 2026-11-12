@@ -5,7 +5,7 @@ Jobs/LocalRunner. Дополнен API v0.2 без изменения обяза
 
 ```json
 {
-  "template_id": "01-records",
+  "template_id": "04-scenarios",
   "template_version": 1,
   "workload": {"schema_version": 2},
   "series": {

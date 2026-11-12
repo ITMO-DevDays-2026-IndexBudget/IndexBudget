@@ -67,7 +67,7 @@ def main():
     health = json.loads(get('/api/health'))
     assert health['database'] and health['cli'], health
     templates = json.loads(get('/api/templates'))
-    assert {t['id'] for t in templates} == {'01-records', '02-shop', '03-wide', '04-scenarios', '04-events-brin', '05-lookup-hash'}
+    assert {t['id'] for t in templates} == {'02-shop', '03-wide', '04-scenarios', '04-events-brin', '05-lookup-hash'}
     for template in templates:
         assert template['workload']['index_methods'] == ['btree', 'brin', 'hash']
     request = payload(templates[0])
@@ -80,7 +80,7 @@ def main():
     preview = wait(post('/api/schema-previews', request))
     assert preview['status'] == 'completed', preview
     assert 'demo_note' not in [c['name'] for c in preview['catalog']['tables'][0]['columns']]
-    assert preview['catalog']['tables'][0]['rows'] == templates[0]['catalog']['tables'][0]['rows']
+    assert {t['name']: t['rows'] for t in preview['catalog']['tables']} == {t['name']: t['rows'] for t in templates[0]['catalog']['tables']}
     assert not preview['report_url']
     print('PASS client DDL/seed rejected; server dataset → PostgreSQL catalog', flush=True)
     qid = templates[0]['workload']['queries'][0]['id']
@@ -145,6 +145,8 @@ def main():
     source = json.loads((Path(__file__).resolve().parents[2] / 'demo/scenarios/workload.json').read_text())
     assert [{'id': example['id'], 'sql': example['sql']} for example in scenario['examples']] == source['queries']
     assert len(scenario['examples']) == 9
+    if database:
+        assert wait(post('/api/schema-previews', payload(scenario)))['status'] == 'completed'
     before = fingerprint() if database else None
     if database:
         assert json.loads(before)['records_count'] == 200_000 and json.loads(before)['groups_count'] == 1_000

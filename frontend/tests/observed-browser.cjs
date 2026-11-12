@@ -25,7 +25,10 @@ const output = path.resolve('build/frontend-observed-ui');
       await page.waitForFunction(() => document.querySelector('#write-origin').textContent.includes('Наблюдение'));
     }
     await openForm();
-    await page.locator('[data-template="01-records"]').click();
+    await page.locator('[data-template="04-scenarios"]').click();
+    // Окно импорта содержит только records: удаляем JOIN на groups через редактор.
+    await page.locator('[data-query="2"]').click();
+    await page.locator('#delete-query').click();
     await page.locator('#write-source').selectOption('observed');
     await page.locator('#analyze').click();
     assert.match(await page.locator('#error').innerText(), /Профиль записи не задан/);
