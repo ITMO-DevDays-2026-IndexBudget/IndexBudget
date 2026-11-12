@@ -3,7 +3,7 @@
   "version": 2,
   "name": "Поиск по строковому ключу",
   "tag": "Hash + B-tree · 16 MiB",
-  "description": "Точный поиск и последние записи. При 8 MiB выбирается Hash, при 16 MiB добавляется B-tree для сортировки по времени.",
+  "description": "Точный поиск и последние записи. Сравни hash и B-tree при бюджетах 8 MiB и 16 MiB.",
   "accent": "sand",
   "schema_sql": "CREATE TABLE public.lookup_entries (\n  external_key varchar(160) COLLATE \"C\" NOT NULL,\n  created_at timestamp NOT NULL,\n  payload text NOT NULL\n);",
   "seed_sql": "INSERT INTO public.lookup_entries\nSELECT repeat(md5(i::text), 5),\n       timestamp '2026-01-01 00:00:00' + i * interval '1 second',\n       repeat('x', 160)\nFROM generate_series(1, 200000) AS g(i);",

@@ -152,15 +152,15 @@ class BudgetSeriesCommand(
             budget: storage_budget_bytes (integer bytes) or write_budget_units_per_hour (finite numbers).
             Supply 3 to 5 distinct nonnegative budgets; their input order is preserved.
             SQL, profiles, objective, ranking, search mode and other budgets remain fixed.
-            Prepare one pool of up to 16 candidates at the maximum budget, with refill only during preparation.
-            Every point uses a fresh RunContext, JDBC session and cache, and publishes separate JSON/HTML/SQL.
+            The maximum budget prepares one pool of up to 16 candidates. Refill happens only at this stage.
+            Each budget uses its own context, database connection and cache, and saves separate JSON/HTML/SQL files.
             series.json records point statuses, selected indexes, metrics, budgets and relative artifact links.
             Open report.html for offline budget comparisons and full details of the selected variant.
             series.html remains available as a separate comparison summary.
-            Baseline/catalog changes are marked as non-comparable; planner cost is not runtime.
+            Baseline or catalog changes are flagged. They can affect the comparison; planner cost does not measure runtime.
             Stderr separates scope=preparation from scope=point ordinal=N, including progress and failures.
             Each completed invocation prints all six limits, five counters, stop reasons and saved errors.
-            Series deadline and cancellation preserve earlier published points; later points are marked stopped.
+            If the series times out or is cancelled, published results stay available. Later budgets are not evaluated.
             Connection: INDEXBUDGET_DATABASE_URL. No physical indexes or EXPLAIN ANALYZE.
             Exit: 0 completed; 3 partial; 2 invalid input; 1 failed.
         """.trimIndent()

@@ -30,7 +30,7 @@ internal object WriteProfileReport {
         append("<details class=\"write-profile\"><summary>Исходный профиль записи · строки/час · ")
             .append(if (observed) "Наблюдаемый" else if (rates.isObject && !rates.isEmpty) "Ручной" else "Не задан")
             .append("</summary>")
-        append("<p>Интенсивность изменения строк задаётся отдельно от частоты вызовов SQL. Write proxy — условная модель сопровождения индексов, не историческое время и не физическое измерение.</p>")
+        append("<p>Профиль записи задаёт число изменённых строк в час отдельно от вызовов SQL. По нему рассчитывается write proxy — условная цена обслуживания индексов. Время и WAL эта модель не измеряет.</p>")
         if (!rates.isObject || rates.isEmpty) {
             append("<p>Профиль записи не задан. Неизвестные write units не заменяются нулём.</p>")
         } else {
@@ -51,8 +51,8 @@ internal object WriteProfileReport {
                 )) append("<div><dt>").append(label).append("</dt><dd>").append(h(display(value))).append("</dd></div>")
                 append("</dl>")
                 for (reason in origin.path("reasons")) append("<p class=\"warning-text\">").append(h(display(reason))).append("</p>")
-                append("<p>PG16 не позволяет надёжно обнаружить все адресные сбросы. HOT — историческая диагностика; из будущей цены индекса он не вычитается.</p>")
-                if (!(origin.path("complete").isBoolean && origin.path("complete").booleanValue())) append("<p>Для включённого лимита нужен полный профиль: получите совместимое окно и повторите импорт либо явно задайте ручной профиль. Неизвестное не становится нулём.</p>")
+                append("<p>В PG16 часть сбросов счётчиков отдельной таблицы нельзя обнаружить. HOT сохраняется для диагностики и не вычитается из модели затрат индекса.</p>")
+                if (!(origin.path("complete").isBoolean && origin.path("complete").booleanValue())) append("<p>Для включённого лимита нужен полный профиль. Собери совместимую пару снимков и повтори импорт или заполни ручной профиль. Пропущенные значения не считаются нулевыми.</p>")
             } else append("<p>Ручной профиль записи. Окно наблюдения не задано.</p>")
             append("<div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Профиль записи\"><table><thead><tr><th>Таблица</th><th>INSERT, строк/час</th><th>UPDATE, строк/час</th><th>DELETE, строк/час</th><th>Источник</th></tr></thead><tbody>")
             for ((name, rate) in rates.properties().sortedBy { it.key }) {

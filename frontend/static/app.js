@@ -11,12 +11,12 @@ let templates = [], state, tab = 'queries', queryIndex = 0, busy = false, health
 let guardsText = '', manualText = '', activeJob = null, saveTimer;
 
 const helpTexts = {
-  storage: ['Бюджет места', 'Лимит только для новых индексов: оценка размера учитывается с запасом 20%. При нуле получите исходный план без новых индексов.'],
-  write: ['Бюджет записи', 'Условные единицы: изменения строк × число колонок индекса, включая INCLUDE. Выключено — без ограничения; ноль — нулевой бюджет, а не отключение.'],
+  storage: ['Бюджет места', 'Лимит для новых индексов. К оценке размера добавляется запас 20%. Нулевой бюджет оставляет базу без новых индексов.'],
+  write: ['Бюджет записи', 'Расход = изменённые строки × число колонок индекса, включая INCLUDE. Выключенный лимит не ограничивает запись. Значение 0 включает нулевой бюджет.'],
   objective: ['Robust или mean?', 'Robust выбирает набор по худшему отношению стоимости сценария к исходной. Mean — по отношению средних стоимостей с учётом весов.'],
-  mode: ['Глубина анализа', 'Быстрый режим — для первого эксперимента; глубокий даёт поиску больше времени и попыток, но не обещает лучший набор. При достижении лимита пригодный результат сохраняется как частичный.'],
-  profiles: ['Частота и вес', 'Частота задаёт модель нагрузки: целое число от 0 до 1 000 000 вызовов/ч. Анализ не запускает SQL указанное число раз. Вес — доля самого сценария: веса 9 и 1 означают 90% и 10%; в robust учитываются оба.'],
-  schema: ['Подготовленный датасет', 'Схема и данные заданы серверным шаблоном. Перед каждым анализом сервер автоматически восстанавливает датасет и читает его схему из PostgreSQL.']
+  mode: ['Глубина анализа', 'Быстрый режим подходит для первого запуска. Глубокий даёт больше времени и попыток, но может выбрать тот же набор. При остановке по лимиту сохраняется пригодный частичный результат.'],
+  profiles: ['Частота и вес', 'Частота: от 0 до 1 000 000 вызовов SQL в час, целое число. Это вход для расчёта, а не команда выполнить столько запросов. Веса 9 и 1 задают доли сценариев 90% и 10%. В robust участвуют оба сценария.'],
+  schema: ['Подготовленный датасет', 'У каждого датасета готовые схема и данные. Перед анализом сервер восстанавливает их и читает каталог PostgreSQL.']
 };
 
 function helpButton(key) {
@@ -92,15 +92,15 @@ function installHelp() {
 function installTour() {
   const seenKey = 'indexbudget.tour.v1';
   const steps = [
-    {target:'#templates', title:'Начните с демо-базы', text:'Каждый шаблон содержит настоящие данные, схему и готовую нагрузку. Выбор заполнит форму. Меняйте SQL, частоты и бюджеты; схема и данные фиксированы.'},
-    {target:'.editor-panel', tab:'examples', title:'Выберите понятный пример', text:'Во вкладке «Примеры» — поиск по группе, временной интервал, JOIN и другие сценарии. Посмотрите пояснение и добавьте запрос в нагрузку; его SQL и частоты можно изменить.'},
-    {target:'.editor-panel', tab:'queries', title:'Настройте запросы', text:'Здесь редактируются добавленные SQL: можно добавить свой запрос или удалить лишний. Вкладка JSON показывает точный вход анализа и позволяет его скачать.'},
-    {target:'.editor-panel', tab:'profiles', title:'Задайте сценарии нагрузки', text:'Частоты — модель вызовов SQL за час, от 0 до 1 000 000 целыми числами. Указанное число запросов не выполняется. Веса задают долю сценариев.'},
-    {target:'.schema-panel', title:'Посмотрите на связи', text:'На карте — таблицы, колонки, внешние ключи и существующие индексы. Схема и данные фиксированы выбранным шаблоном. Подпись сообщает, проверена ли схема в PostgreSQL.'},
-    {target:'.budget-panel', title:'Один запуск или серия бюджетов', text:'Выберите одиночный анализ или 3–5 значений одного бюджета. Серия сохраняет workload и общий подготовленный пул; единый отчёт покажет подробности вариантов. Для места в серии задавайте байты, для записи — ед./ч.'},
-    {target:'.strategy-grid', title:'Выберите цель и глубину', text:'Robust учитывает худший сценарий, mean — средний с учётом весов. Глубина задаёт ресурсы поиска; больше времени не гарантирует лучший результат.'},
-    {target:'.advanced', advanced:true, title:'Тонкая настройка — по желанию', text:'Выберите ручной профиль записи или загрузите рассчитанный workload.json из CLI. Строки/час отличаются от вызовов SQL. Здесь также доступны рейтинг кандидатов, ограничения ухудшения запросов и ручные индексы для сравнения. Для первого запуска достаточно значений шаблона.'},
-    {target:'.launch-bar', title:'Запустите эксперимент', text:'После подготовки базы начнётся реальный анализ. Готовый отчёт откроется автоматически; частичный результат тоже сохранится с объяснением причин остановки.'}
+    {target:'#templates', title:'Выбери демо-базу', text:'Датасет заполнит форму готовыми SQL, частотами и бюджетами. Их можно изменить. Схема и данные остаются фиксированными.'},
+    {target:'.editor-panel', tab:'examples', title:'Добавь пример запроса', text:'Во вкладке «Примеры» есть поиск по группе, диапазон дат и JOIN. Выбери запрос по описанию. После добавления его SQL и частоты можно изменить.'},
+    {target:'.editor-panel', tab:'queries', title:'Проверь SQL', text:'Добавь свой SQL или измени готовый. Во вкладке JSON можно посмотреть и скачать точный вход анализа.'},
+    {target:'.editor-panel', tab:'profiles', title:'Задай частоты и веса', text:'Для каждого сценария укажи частоты SQL в час и его вес. Частоты принимаются целыми числами от 0 до 1 000 000. Анализ использует их в расчёте, а не выполняет столько запросов.'},
+    {target:'.schema-panel', title:'Посмотри схему', text:'На карте видны таблицы, колонки, внешние ключи и существующие индексы датасета. Подпись показывает источник схемы: шаблон или PostgreSQL.'},
+    {target:'.budget-panel', title:'Один запуск или серия бюджетов', text:'Запусти один анализ или сравни 3–5 бюджетов. В серии SQL, частоты и исходный пул индексов общие. Место задаётся в байтах, запись в условных ед./ч. Результаты попадут в один отчёт.'},
+    {target:'.strategy-grid', title:'Выбери цель и глубину', text:'Robust учитывает худший сценарий, mean — средний с учётом весов. Глубина задаёт ресурсы поиска; больше времени не гарантирует лучший результат.'},
+    {target:'.advanced', advanced:true, title:'Дополнительные настройки', text:'Здесь можно загрузить профиль записи из CLI, задать предел ухудшения запросов и сравнить ручной набор индексов. Для первого запуска подойдут настройки датасета.'},
+    {target:'.launch-bar', title:'Запусти анализ', text:'Сервер подготовит базу и вызовет CLI. Отчёт откроется автоматически. Если поиск остановится по лимиту, в отчёте останутся пригодный результат и причина остановки.'}
   ];
   const layer = document.createElement('div');
   layer.className = 'tour-layer'; layer.hidden = true;
@@ -308,11 +308,11 @@ function manualExampleTables(workload) {
 function addExample(id) {
   const template = templates.find(t => t.id === state.template_id);
   const example = template?.examples?.find(item => item.id === id);
-  if (!example) throw new Error('Этот пример доступен в датасете «Чтение и запись». Сначала выберите его.');
+  if (!example) throw new Error('Этот пример доступен в датасете «Чтение и запись». Сначала выбери его.');
   const w = state.workload;
   const existing = w.queries.findIndex(query => query.sql === example.sql);
   if (existing !== -1) return {id: w.queries[existing].id, index: existing, alreadyAdded: true};
-  if (w.queries.length >= 20) throw new Error('В нагрузке уже 20 запросов. Удалите один запрос, чтобы добавить пример.');
+  if (w.queries.length >= 20) throw new Error('В нагрузке уже 20 запросов. Удали один запрос, чтобы добавить пример.');
   let guards = {};
   if (guardsText.trim()) {
     try { guards = JSON.parse(guardsText); } catch { throw new Error('Ограничения запросов: исправьте JSON в дополнительных параметрах перед добавлением примера.'); }
@@ -384,7 +384,7 @@ function writeSource() {
 function validateWriteProfile(w, required = false, source = null) {
   const rates = w.table_write_rates, origin = w.table_write_rates_origin;
   const observed = source === 'observed' || !!origin || Object.values(rates || {}).some(r => r?.source === 'observed');
-  const fix = 'Загрузите полный рассчитанный workload.json или явно выберите ручной источник и заполните строки/час.';
+  const fix = 'Загрузи полный workload.json из CLI или выбери ручной профиль и заполни строки/час.';
   if (!rates || !Object.keys(rates).length) {
     if (required || observed || rates) throw new Error(`Профиль записи не задан. ${fix}`);
     return;
@@ -392,19 +392,19 @@ function validateWriteProfile(w, required = false, source = null) {
   if (typeof rates !== 'object' || Array.isArray(rates)) throw new Error('Неверный профиль записи.');
   for (const rate of Object.values(rates)) {
     if (!rate || ['inserts_per_hour','updates_per_hour','deletes_per_hour'].some(k => typeof rate[k] !== 'number' || !Number.isFinite(rate[k]) || rate[k] < 0)) throw new Error(`Неизвестная или неверная интенсивность строк. ${fix}`);
-    if ((rate.source ?? 'manual') !== (observed ? 'observed' : 'manual')) throw new Error('Нельзя смешивать ручные и наблюдаемые rates.');
+    if ((rate.source ?? 'manual') !== (observed ? 'observed' : 'manual')) throw new Error('В одном профиле нельзя смешивать ручные значения и rates из наблюдения.');
   }
   if (source === 'manual' && observed) throw new Error('Наблюдаемый профиль не является ручным.');
   if (observed) {
     if (origin?.kind !== 'observed' || typeof origin.complete !== 'boolean' || !Array.isArray(origin.reasons)
         || !origin.reasons.every(r => typeof r === 'string') || !origin.window?.from || !origin.window?.to
-        || typeof origin.window.period_seconds !== 'number' || !Number.isFinite(origin.window.period_seconds) || origin.window.period_seconds <= 0) throw new Error(`Нет корректного происхождения окна. ${fix}`);
+        || typeof origin.window.period_seconds !== 'number' || !Number.isFinite(origin.window.period_seconds) || origin.window.period_seconds <= 0) throw new Error(`Не хватает корректных сведений об источнике или окне наблюдения. ${fix}`);
     if (required && !origin.complete) throw new Error(`Наблюдение неполное: ${origin.reasons.join(', ') || 'причина не указана'}. ${fix}`);
   }
 }
 
 function importWriteProfile(value) {
-  if (!value || value.schema_version !== 2) throw new Error('Загрузите workload.json v2 из import-workload.');
+  if (!value || value.schema_version !== 2) throw new Error('Загрузи workload.json v2 из import-workload.');
   validateWriteProfile(value, false, 'observed');
   // Copy the producer output; do not calculate rates or import SQL-call frequencies.
   state.workload.table_write_rates = clone(value.table_write_rates);
@@ -416,7 +416,7 @@ function renderRates() {
   const w = state.workload, observed = writeSource() === 'observed', origin = w.table_write_rates_origin;
   $('write-source').value = writeSource();
   $('observed-upload').hidden = !observed;
-  $('write-origin').innerHTML = observed ? origin ? `<p><strong>${origin.complete ? 'Наблюдение полное' : 'Наблюдение неполное'}</strong> · ${escape(origin.window?.from)} — ${escape(origin.window?.to)} · ${escape(origin.window?.period_seconds)} с</p><p class="field-note">Источник: ${escape(origin.source?.source_id || 'не сохранён')}; БД OID: ${escape(origin.source?.database_oid ?? 'неизвестен')}; PostgreSQL ${escape(origin.source?.postgres_version || 'неизвестен')}. ${escape((origin.reasons || []).join('; '))}</p><p class="field-note">PG16 не позволяет надёжно обнаружить все адресные сбросы. HOT — историческая диагностика, из будущей цены индекса не вычитается.</p>` : '<p class="field-note">Наблюдаемый профиль ещё не загружен. Загрузите рассчитанный workload.json. Ручные значения не подставляются.</p>' : '<p class="field-note">Ручная модель изменения строк; окно наблюдения не задано.</p>';
+  $('write-origin').innerHTML = observed ? origin ? `<p><strong>${origin.complete ? 'Наблюдение полное' : 'Наблюдение неполное'}</strong> · ${escape(origin.window?.from)} — ${escape(origin.window?.to)} · ${escape(origin.window?.period_seconds)} с</p><p class="field-note">Источник: ${escape(origin.source?.source_id || 'не сохранён')}; БД OID: ${escape(origin.source?.database_oid ?? 'неизвестен')}; PostgreSQL ${escape(origin.source?.postgres_version || 'неизвестен')}. ${escape((origin.reasons || []).join('; '))}</p><p class="field-note">В PG16 часть сбросов счётчиков отдельной таблицы нельзя обнаружить. HOT сохраняется для диагностики и не вычитается из модели затрат индекса.</p>` : '<p class="field-note">Загрузи workload.json с наблюдаемым профилем. Ручные значения не подставляются автоматически.</p>' : '<p class="field-note">Интенсивность записи задана вручную. Окна наблюдения нет.</p>';
   const rows = Object.entries(w.table_write_rates || {});
   $('write-rates').innerHTML = `${rows.length ? '<div class="rate-row rate-head"><span>Таблица</span><span>INSERT</span><span>UPDATE</span><span>DELETE</span><span></span></div>' : '<p class="field-note">Профиль записи не задан. При включённом бюджете нужны данные для всех таблиц запросов.</p>'}
     ${rows.map(([name, rate], i) => `<div class="rate-row"><span>${escape(name)}</span>${['inserts_per_hour','updates_per_hour','deletes_per_hour'].map(k => observed ? `<span class="observed-rate">${escape(rate[k] ?? 'Неизвестно')}</span>` : `<input type="number" min="0" step="any" value="${escape(rate[k])}" data-rate="${i}" data-rate-key="${k}" aria-label="${escape(name)} ${k}">`).join('')}${observed ? '<span></span>' : `<button type="button" data-remove-rate="${i}" aria-label="Удалить интенсивность записи ${escape(name)}">×</button>`}</div>`).join('')}
@@ -439,7 +439,7 @@ function renderQueries() {
   queryIndex = Math.min(queryIndex, queries.length - 1);
   const q = queries[queryIndex];
   const selectedExample = queryExample(q);
-  $('editor-content').innerHTML = `<div class="query-library-link"><span>Выберите готовый сценарий или напишите свой SQL.</span><button type="button" class="text-button" data-tab="examples">Выбрать пример</button></div><div class="editor-toolbar"><div class="query-tabs">${queries.map((q,i) => `<button type="button" class="query-tab ${i===queryIndex ? 'active' : ''}" data-query="${i}" title="${escape(q.id)}" aria-pressed="${i===queryIndex}"><span>Q${String(i+1).padStart(2,'0')}</span> ${escape(queryExample(q)?.name || q.id.replace(/^(records_|orders_|wide_)/,''))}</button>`).join('')}</div><button type="button" id="add-query" class="quiet-button" ${queries.length>=20?'disabled':''} aria-label="Добавить запрос">+ SQL</button></div>
+  $('editor-content').innerHTML = `<div class="query-library-link"><span>Выбери готовый сценарий или напишите свой SQL.</span><button type="button" class="text-button" data-tab="examples">Выбрать пример</button></div><div class="editor-toolbar"><div class="query-tabs">${queries.map((q,i) => `<button type="button" class="query-tab ${i===queryIndex ? 'active' : ''}" data-query="${i}" title="${escape(q.id)}" aria-pressed="${i===queryIndex}"><span>Q${String(i+1).padStart(2,'0')}</span> ${escape(queryExample(q)?.name || q.id.replace(/^(records_|orders_|wide_)/,''))}</button>`).join('')}</div><button type="button" id="add-query" class="quiet-button" ${queries.length>=20?'disabled':''} aria-label="Добавить запрос">+ SQL</button></div>
     ${selectedExample ? `<p class="query-purpose">${escape(selectedExample.purpose)}</p>` : ''}
     <div class="editor-meta"><label for="query-id">ID</label><input id="query-id" value="${escape(q.id)}" required><button type="button" id="delete-query" class="delete-button" ${queries.length<=1?'disabled':''}>Удалить запрос</button></div>
     <div class="code-editor"><div class="line-numbers" aria-hidden="true" id="line-numbers"></div><textarea id="sql-editor" spellcheck="false" aria-label="SQL запроса ${escape(q.id)}" required></textarea></div>
@@ -458,10 +458,10 @@ function renderExamples() {
   }
   const compatible = template.id === state.template_id;
   const limit = state.workload.queries.length >= 20;
-  $('editor-content').innerHTML = `<div class="examples-content"><h3>Примеры запросов</h3><p class="examples-intro">Выберите, что исследовать: поиск строк, связи таблиц или план изменения данных. Добавленный SQL можно отредактировать во вкладке «Запросы».</p>
+  $('editor-content').innerHTML = `<div class="examples-content"><h3>Примеры запросов</h3><p class="examples-intro">Добавь запрос чтения или изменения строк. Затем его можно изменить во вкладке «Запросы».</p>
     ${compatible ? '<p class="examples-dataset">Для датасета «Чтение и запись»: записи и группы. UPDATE и DELETE не меняют данные — анализатор получает только план.</p>' : `<div class="examples-switch"><p>Эти примеры используют записи и группы из датасета «Чтение и запись». Его выбор загрузит исходную нагрузку этого датасета.</p><button type="button" class="quiet-button" data-template="${escape(template.id)}">Открыть «Чтение и запись»</button></div>`}
     <p class="examples-frequency-note">Частоты указаны для обычного дня и пика. Для профиля с другим именем добавляется частота обычного дня; её можно изменить во вкладке «Нагрузка».</p>
-    ${compatible && limit ? '<p class="examples-limit" role="status">В нагрузке 20 запросов. Удалите один, чтобы добавить новый пример.</p>' : ''}
+    ${compatible && limit ? '<p class="examples-limit" role="status">В нагрузке 20 запросов. Удали один, чтобы добавить новый пример.</p>' : ''}
     <p id="example-status" class="example-status" role="status" aria-live="polite"></p>
     <div class="example-list">${template.examples.map(example => {
       const included = compatible && state.workload.queries.some(query => query.sql === example.sql);
@@ -476,9 +476,9 @@ function lineNumbers() {
 
 function renderProfiles() {
   const {queries, profiles} = state.workload;
-  $('editor-content').innerHTML = `<div class="profile-content"><p>Частоты — целые числа от 0 до 1 000 000 вызовов/ч. Это модель нагрузки: указанное число запросов не выполняется.</p><div class="profile-table-wrap"><table class="profile-table"><thead><tr><th>Запрос / профиль</th>${profiles.map((p,i) => `<th><div class="profile-name"><input value="${escape(p.id)}" data-profile-id="${i}" aria-label="ID профиля ${i+1}" required><button type="button" data-delete-profile="${i}" ${profiles.length===1?'disabled':''} aria-label="Удалить профиль ${escape(p.id)}">×</button></div></th>`).join('')}</tr></thead><tbody>
+  $('editor-content').innerHTML = `<div class="profile-content"><p>Укажи от 0 до 1 000 000 вызовов/ч целыми числами. Частоты участвуют в расчёте; анализ не выполняет столько запросов.</p><div class="profile-table-wrap"><table class="profile-table"><thead><tr><th>Запрос / профиль</th>${profiles.map((p,i) => `<th><div class="profile-name"><input value="${escape(p.id)}" data-profile-id="${i}" aria-label="ID профиля ${i+1}" required><button type="button" data-delete-profile="${i}" ${profiles.length===1?'disabled':''} aria-label="Удалить профиль ${escape(p.id)}">×</button></div></th>`).join('')}</tr></thead><tbody>
     <tr><td>Вес сценария</td>${profiles.map((p,i) => `<td><input type="number" min="0" step="any" value="${escape(p.weight)}" data-weight="${i}" aria-label="Вес ${escape(p.id)}" required><div class="profile-share" data-share="${i}"></div></td>`).join('')}</tr>
-    ${queries.map((q,qi) => `<tr><td>${escape(q.id)}</td>${profiles.map((p,pi) => `<td><input type="number" min="0" max="${maxCallsPerHour}" step="1" value="${escape(p.calls_per_hour[q.id])}" data-frequency-profile="${pi}" data-frequency-query="${qi}" aria-label="Частота ${escape(q.id)} в ${escape(p.id)}" required></td>`).join('')}</tr>`).join('')}</tbody><tfoot><tr><td>Всего вызовов/ч</td>${profiles.map((p,i)=>`<td data-total="${i}"></td>`).join('')}</tr></tfoot></table></div><div class="profile-actions"><button type="button" id="add-profile" class="quiet-button" ${profiles.length>=3?'disabled':''}>+ Профиль нагрузки</button></div><p class="profile-note">Вес задаёт относительную долю сценария для среднего результата. В robust каждый сценарий участвует в худшей оценке, даже с маленьким весом.</p></div>`;
+    ${queries.map((q,qi) => `<tr><td>${escape(q.id)}</td>${profiles.map((p,pi) => `<td><input type="number" min="0" max="${maxCallsPerHour}" step="1" value="${escape(p.calls_per_hour[q.id])}" data-frequency-profile="${pi}" data-frequency-query="${qi}" aria-label="Частота ${escape(q.id)} в ${escape(p.id)}" required></td>`).join('')}</tr>`).join('')}</tbody><tfoot><tr><td>Всего вызовов/ч</td>${profiles.map((p,i)=>`<td data-total="${i}"></td>`).join('')}</tr></tfoot></table></div><div class="profile-actions"><button type="button" id="add-profile" class="quiet-button" ${profiles.length>=3?'disabled':''}>+ Профиль нагрузки</button></div><p class="profile-note">Вес задаёт долю сценария при расчёте среднего. В robust учитывается и сценарий с маленьким весом.</p></div>`;
   const intro = $('editor-content').querySelector('.profile-content > p');
   intro.insertAdjacentHTML('beforeend', ' ' + helpButton('profiles'));
   updateProfiles();
@@ -486,17 +486,17 @@ function renderProfiles() {
 
 function updateProfiles() {
   const profiles = state.workload.profiles, sum = profiles.reduce((s,p) => s + p.weight, 0);
-  document.querySelectorAll('[data-share]').forEach(e => e.textContent = sum > 0 ? format(profiles[+e.dataset.share].weight/sum*100) + '% от времени' : 'Задайте веса');
+  document.querySelectorAll('[data-share]').forEach(e => e.textContent = sum > 0 ? format(profiles[+e.dataset.share].weight/sum*100) + '% от времени' : 'Задай веса');
   document.querySelectorAll('[data-total]').forEach(e => {
     const values = Object.values(profiles[+e.dataset.total].calls_per_hour);
     e.textContent = values.every(v => Number.isInteger(v) && v >= 0 && v <= maxCallsPerHour)
-      ? format(values.reduce((a,b) => a+b, 0)) : 'Проверьте частоты';
+      ? format(values.reduce((a,b) => a+b, 0)) : 'Проверь частоты';
   });
 }
 
 function renderSchema() {
   const template = templates.find(t => t.id === state.template_id);
-  $('editor-content').innerHTML = `<div class="schema-content"><p>Схема и данные фиксированы выбранным датасетом. Подготовка базы и чтение её схемы выполняются автоматически при запуске анализа.</p><h4 id="schema-sql-label">Схема и существующие индексы · только просмотр</h4><pre class="code" tabindex="0" aria-labelledby="schema-sql-label">${escape(template.schema_sql)}</pre></div>`;
+  $('editor-content').innerHTML = `<div class="schema-content"><p>Схема и данные принадлежат выбранному датасету. Сервер готовит их и читает каталог при каждом запуске.</p><h4 id="schema-sql-label">Схема и существующие индексы · только просмотр</h4><pre class="code" tabindex="0" aria-labelledby="schema-sql-label">${escape(template.schema_sql)}</pre></div>`;
   const intro = $('editor-content').querySelector('.schema-content > p');
   intro.insertAdjacentHTML('beforeend', ' ' + helpButton('schema'));
 }
@@ -522,7 +522,7 @@ function materialize() {
 function renderJson() {
   let text, valid = true;
   try { text = JSON.stringify(materialize(), null, 2); } catch (e) { text = e.message; valid = false; }
-  $('editor-content').innerHTML = `<div class="json-content"><p>Именно этот workload JSON v2 получит анализатор. Датасет выбирается отдельно по шаблону; его схема и данные фиксированы.${manualExampleTables(state.workload) ? ' В JSON включаются ручные частоты записи таблиц выбранных примеров; остальные значения сохраняются в черновике.' : writeSource() === 'observed' ? ' Наблюдаемый профиль и окно передаются без изменения; покрытие таблиц проверяет анализатор.' : ''}</p><div class="json-toolbar"><button type="button" id="download-json" class="quiet-button" ${valid?'':'disabled'}>↓ Скачать JSON</button><span class="hint">${valid ? format(new TextEncoder().encode(text).length) + ' байт' : 'Исправьте дополнительные параметры'}</span></div><pre>${escape(text)}</pre></div>`;
+  $('editor-content').innerHTML = `<div class="json-content"><p>Именно этот workload JSON v2 получит анализатор. Датасет выбирается отдельно по шаблону; его схема и данные фиксированы.${manualExampleTables(state.workload) ? ' В JSON включаются ручные частоты записи таблиц выбранных примеров; остальные значения сохраняются в черновике.' : writeSource() === 'observed' ? ' Наблюдаемый профиль и окно передаются без изменения; покрытие таблиц проверяет анализатор.' : ''}</p><div class="json-toolbar"><button type="button" id="download-json" class="quiet-button" ${valid?'':'disabled'}>↓ Скачать JSON</button><span class="hint">${valid ? format(new TextEncoder().encode(text).length) + ' байт' : 'Исправь дополнительные параметры'}</span></div><pre>${escape(text)}</pre></div>`;
 }
 
 function renderDiagram() {
@@ -588,7 +588,7 @@ function seriesRequest() {
     if ((value === 0 && nonzero) || (v.startsWith('-') && nonzero)) return NaN;
     return value;
   });
-  if (values.length < 3 || values.length > 5 || values.some(v => !Number.isFinite(v) || v < 0) || new Set(values).size !== values.length) throw new Error('Задайте 3–5 различных неотрицательных бюджетов.');
+  if (values.length < 3 || values.length > 5 || values.some(v => !Number.isFinite(v) || v < 0) || new Set(values).size !== values.length) throw new Error('Задай 3–5 различных неотрицательных бюджетов.');
   const budget = $('series-budget').value;
   if (budget === 'storage_budget_bytes' && values.some(v => !Number.isSafeInteger(v))) throw new Error('Для места задайте точные целые байты.');
   const timeout = Number($('series-timeout').value);
@@ -601,7 +601,7 @@ function requestSnapshot() {
   const workload = materialize();
   validateWorkload(workload);
   const invalid = [...$('workspace').querySelectorAll('input,textarea,select')].find(e=>!e.disabled && !e.checkValidity());
-  if (invalid) { invalid.reportValidity(); throw new Error('Проверьте выделенное поле.'); }
+  if (invalid) { invalid.reportValidity(); throw new Error('Проверь выделенное поле.'); }
   const series = seriesRequest();
   validateWriteProfile(workload, workload.constraints.write_budget_units_per_hour != null || series?.budget === 'write_budget_units_per_hour', writeSource());
   return {template_id: state.template_id, template_version: state.template_version, workload, ...(writeSource() === 'observed' ? {write_source: 'observed'} : {}), ...(series ? {series} : {})};
@@ -632,7 +632,7 @@ async function launch(kind) {
 
 function showProgress(job) {
   const labels = {queued:'В очереди',preparing:'Подготовка базы',analyzing:'Анализ нагрузки',publishing:'Публикация отчёта',completed:'Готово',partial:'Получен частичный результат',failed:'Запуск остановлен'};
-  const details = {queued:`Позиция в очереди: ${job.queue_position || 1}. База используется одним запуском за раз.`,preparing:'Создаём схему, загружаем данные и собираем статистику.',analyzing:'CLI оценивает наборы гипотетических индексов через EXPLAIN.',publishing:'Сохраняем HTML, JSON и SQL в отдельный каталог.',completed:job.kind==='schema'?'Диаграмма обновлена из каталога PostgreSQL.':'Открываем готовый отчёт.',partial:'Открываем отчёт с причинами остановки.',failed:'Введённые настройки сохранены. Исправьте ошибку и повторите запуск.'};
+  const details = {queued:`Позиция в очереди: ${job.queue_position || 1}. База используется одним запуском за раз.`,preparing:'Создаём схему, загружаем данные и собираем статистику.',analyzing:'CLI оценивает наборы гипотетических индексов через EXPLAIN.',publishing:'Сохраняем HTML, JSON и SQL в отдельный каталог.',completed:job.kind==='schema'?'Диаграмма обновлена из каталога PostgreSQL.':'Открываем готовый отчёт.',partial:'Открываем отчёт с причинами остановки.',failed:'Введённые настройки сохранены. Исправь ошибку и повтори запуск.'};
   $('run-title').textContent = labels[job.status];
   $('run-description').textContent = details[job.status] + (job.points ? ' ' + job.points.map(p => `Вариант ${p.ordinal}: ${p.budget_value} · ${p.status}`).join('; ') : '');
   $('run-progress').hidden = false;
@@ -646,7 +646,7 @@ async function poll(id) {
     try { job = await api(`/api/runs/${encodeURIComponent(id)}`); failures = 0; }
     catch(e) {
       failures++;
-      if (failures >= 5) { error('Не удалось получить состояние запуска. Обновите страницу: наблюдение восстановится, повторный анализ не отправляется.'); return; }
+      if (failures >= 5) { error('Не удалось получить состояние запуска. Обнови страницу, чтобы продолжить наблюдение. Повторный анализ не запустится.'); return; }
       await new Promise(resolve=>setTimeout(resolve,2000)); continue;
     }
     showProgress(job);
@@ -679,7 +679,7 @@ document.addEventListener('click', e => {
       queryIndex = result.index;
       error(''); renderEditor(); changed(); persist();
       $('example-status').textContent = result.alreadyAdded ? 'Этот SQL уже есть в нагрузке.'
-        : `Добавлен запрос «${templates.find(t => t.id === state.template_id).examples.find(item => item.id === d.addExample).name}».${result.renamed ? ` ID ${result.id}: ранее изменённый запрос сохранён.` : ''}${result.fallback ? ' Для ваших профилей использована частота обычного дня.' : ''} Откройте «Запросы», чтобы изменить SQL.`;
+        : `Добавлен запрос «${templates.find(t => t.id === state.template_id).examples.find(item => item.id === d.addExample).name}».${result.renamed ? ` ID ${result.id}: ранее изменённый запрос сохранён.` : ''}${result.fallback ? ' Для ваших профилей использована частота обычного дня.' : ''} Открой «Запросы», чтобы изменить SQL.`;
       document.querySelector(`[data-add-example="${d.addExample}"]`)?.closest('article')?.querySelector('summary')?.focus();
     } catch (e) { error(e.message); }
     return;

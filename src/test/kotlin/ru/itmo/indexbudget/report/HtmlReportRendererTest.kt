@@ -48,8 +48,8 @@ class HtmlReportRendererTest {
         val report = source.copy(candidates = source.candidates.copy(
             diagnostics = CandidateDiagnostics(shortlistedCandidates = 16)))
         val search = section(renderer.render(report), "search")
-        assertEquals("16", entryValue(search, "Исходный shortlist"))
-        assertEquals("16 / 16", capture(search, "<h3>Общий shortlist</h3><p>(.*?)</p>"))
+        assertEquals("16", entryValue(search, "Исходный список кандидатов"))
+        assertEquals("16 / 16", capture(search, "<h3>Итоговый пул кандидатов</h3><p>(.*?)</p>"))
     }
 
     @Test
@@ -69,16 +69,16 @@ class HtmlReportRendererTest {
                 ),
             ))
             val search = section(renderer.render(report), "search")
-            assertEquals("16", entryValue(search, "Исходный shortlist"))
+            assertEquals("16", entryValue(search, "Исходный список кандидатов"))
             assertEquals("2 / 48", entryValue(search, "Кандидаты в резерве"))
-            assertEquals("4 / 16", capture(search, "<h3>Общий shortlist</h3><p>(.*?)</p>"))
+            assertEquals("4 / 16", capture(search, "<h3>Итоговый пул кандидатов</h3><p>(.*?)</p>"))
             assertEquals(listOf("Рассмотрено кандидатов", "18", "18"), rowByKey(search, "Рассмотрено кандидатов"))
             assertEquals(listOf("Попытки оценки размера, включая ошибки", "18", "32"),
                 rowByKey(search, "Попытки оценки размера, включая ошибки"))
             assertEquals(listOf("Бюджетные отказы", "14", "Не задан"), rowByKey(search, "Бюджетные отказы"))
             assertEquals(listOf("Ошибки отдельных кандидатов", "0", "Не задан"), rowByKey(search, "Ошибки отдельных кандидатов"))
             assertEquals(listOf("Пополнено из резерва", "2", "Не задан"), rowByKey(search, "Пополнено из резерва"))
-            assertEquals(listOf("Итоговый shortlist", "4", "16"), rowByKey(search, "Итоговый shortlist"))
+            assertEquals(listOf("Кандидаты после подготовки", "4", "16"), rowByKey(search, "Кандидаты после подготовки"))
             assertTrue(search.contains("Остановка подготовки:"))
             assertTrue(search.contains(reason.name))
             assertFalse(search.contains("Диагностика подготовки кандидатов не сохранена."))
@@ -86,7 +86,7 @@ class HtmlReportRendererTest {
         val legacy = source.copy(candidates = source.candidates.copy(
             diagnostics = source.candidates.diagnostics.copy(shortlistedCandidates = 7)))
         val search = section(renderer.render(legacy), "search")
-        assertEquals("7 / 16", capture(search, "<h3>Общий shortlist</h3><p>(.*?)</p>"))
+        assertEquals("7 / 16", capture(search, "<h3>Итоговый пул кандидатов</h3><p>(.*?)</p>"))
         assertTrue(search.contains("Диагностика подготовки кандидатов не сохранена."))
     }
 
@@ -271,7 +271,7 @@ class HtmlReportRendererTest {
         assertEquals(listOf("SQL 1", "100", "20", "Снижение cost · процент неизвестен"),
             rowByKey(queryTable(html), "SQL 1"))
         assertTrue(queries.contains("class=\"regression\""))
-        assertTrue(queries.contains("Исходный SQL отсутствует в модели."))
+        assertTrue(queries.contains("Исходный SQL не сохранён."))
 
         val failed = ContractFixtures.report(status = RunStatus.FAILED)
         val baselineOnly = failed.copy(input = null, result = (failed.result as SearchResult.Failed).copy(

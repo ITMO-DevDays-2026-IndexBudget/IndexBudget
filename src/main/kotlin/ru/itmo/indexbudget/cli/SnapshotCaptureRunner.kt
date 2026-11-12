@@ -74,8 +74,8 @@ internal class SnapshotCaptureRunner(
                     Thread.currentThread().interrupt()
                     AnalysisError(ErrorCode.CANCELLED, "Observation interrupted.")
                 }
-                is IOException, is SecurityException -> AnalysisError(ErrorCode.EXPORT_FAILED, "Cannot publish statistics snapshots.")
-                else -> AnalysisError(ErrorCode.STATISTICS_READ_FAILED, "Cannot collect or publish statistics snapshots.")
+                is IOException, is SecurityException -> AnalysisError(ErrorCode.EXPORT_FAILED, "Could not save the statistics snapshots.")
+                else -> AnalysisError(ErrorCode.STATISTICS_READ_FAILED, "Could not collect or save the statistics snapshots.")
             }
             // Never remove the first published snapshot when a second collection/wait fails.
             output?.let { directory ->

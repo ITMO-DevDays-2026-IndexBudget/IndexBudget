@@ -23,7 +23,7 @@ class CandidateRankingReportTest {
 
                 assertEquals(ranking, report.candidateRanking)
                 assertEquals(ranking.wireName, json["candidate_ranking"].stringValue())
-                assertTrue(html.contains("Рейтинг shortlist"))
+                assertTrue(html.contains("Порядок кандидатов"))
                 assertTrue(html.contains(ranking.wireName))
                 assertEquals(ranking == CandidateRanking.BASELINE_COST, html.contains("экспериментальный"))
                 assertSame(source.result, report.result)

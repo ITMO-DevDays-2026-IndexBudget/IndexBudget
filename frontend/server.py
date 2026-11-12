@@ -109,7 +109,7 @@ def series_result(directory, run_id, request, item, code, reason):
     links = (["report.html"] if (saved / "report.html").is_file() else []) + (["series.json"] if summary else []) + available
     page = ('<!doctype html><html lang="ru"><meta charset="utf-8"><title>Результаты серии</title>'
             '<h1>Серия: ' + html.escape(status) + '</h1><p>' + html.escape(cause or "Серия завершена.") + '</p>'
-            '<p>Отчёт CLI ниже — сохранённый снимок. Его running не означает, что процесс продолжает работу.</p><ul>'
+            '<p>Ниже сохранён промежуточный отчёт CLI. Статус running в нём относится к моменту сохранения; процесс уже остановлен.</p><ul>'
             + ''.join('<li><a href="' + html.escape(link, quote=True) + '">' + html.escape(link) + '</a></li>' for link in links) + '</ul></html>')
     pending = saved / '.demo-series.pending'
     pending.write_text(page); pending.replace(saved / 'demo-series.html')
@@ -135,7 +135,7 @@ def valid_frequency(value):
 def validate_write_profile(workload, required=False, source=None):
     """Check shape and source, leaving SQL coverage and all calculations to the CLI."""
     rates, origin = workload.get("table_write_rates"), workload.get("table_write_rates_origin")
-    fix = "Загрузите полный рассчитанный workload.json или явно выберите ручной источник и заполните строки/час."
+    fix = "Загрузи полный workload.json из CLI или выбери ручной профиль и заполни строки/час."
     if source not in (None, "manual", "observed"):
         raise ValueError("Неизвестный источник записи.")
     observed = source == "observed" or origin is not None or (isinstance(rates, dict) and
@@ -151,12 +151,12 @@ def validate_write_profile(workload, required=False, source=None):
                 ("inserts_per_hour", "updates_per_hour", "deletes_per_hour")):
             raise ValueError(f"Неизвестная или неверная интенсивность строк. {fix}")
         if rate.get("source", "manual") != ("observed" if observed else "manual"):
-            raise ValueError("Нельзя смешивать ручные и наблюдаемые rates.")
+            raise ValueError("В одном профиле нельзя смешивать ручные значения и rates из наблюдения.")
     if source == "manual" and observed:
         raise ValueError("Наблюдаемый профиль не является ручным.")
     if observed:
         if not isinstance(origin, dict):
-            raise ValueError(f"Нет происхождения наблюдаемого окна. {fix}")
+            raise ValueError(f"Не хватает сведений об источнике и окне наблюдения. {fix}")
         window = origin.get("window")
         if (origin.get("kind") != "observed" or type(origin.get("complete")) is not bool
                 or not isinstance(origin.get("reasons"), list)
@@ -164,7 +164,7 @@ def validate_write_profile(workload, required=False, source=None):
                 or not isinstance(window, dict) or not isinstance(window.get("from"), str)
                 or not window["from"] or not isinstance(window.get("to"), str) or not window["to"]
                 or not finite(window.get("period_seconds")) or window["period_seconds"] <= 0):
-            raise ValueError(f"Неверное происхождение наблюдаемого окна. {fix}")
+            raise ValueError(f"Проверь сведения об источнике и окне наблюдения. {fix}")
         if required and not origin["complete"]:
             raise ValueError(f"Наблюдение неполное: {', '.join(origin['reasons'])}. {fix}")
 
@@ -173,14 +173,14 @@ def validate_request(data, templates):
     """Проверка формы; SQL и полная семантика workload проверяются самим CLI."""
     if (not isinstance(data, dict) or not isinstance(data.get("template_id"), str)
             or data["template_id"] not in templates):
-        raise ValueError("Выберите существующий шаблон.")
+        raise ValueError("Выбери существующий шаблон.")
     template = templates[data["template_id"]]
     if (type(data.get("template_version")) is not type(template["version"])
             or data["template_version"] != template["version"]):
-        raise ValueError("Версия шаблона изменилась. Загрузите шаблон заново.")
+        raise ValueError("Версия шаблона изменилась. Загрузи шаблон заново.")
     for key in ("schema_sql", "seed_sql"):
         if key in data:
-            raise ValueError(f"{key}: схема и данные задаются только серверным шаблоном. Обновите страницу.")
+            raise ValueError(f"{key}: схема и данные задаются только серверным шаблоном. Обнови страницу.")
     w = data.get("workload")
     if not isinstance(w, dict) or w.get("schema_version") != 2:
         raise ValueError("Ожидается workload JSON v2.")
@@ -244,16 +244,16 @@ def validate_request(data, templates):
         if type(series.get("schema_version")) is not int or series["schema_version"] != 1 or budget not in {"storage_budget_bytes", "write_budget_units_per_hour"}:
             raise ValueError("Серия требует schema_version=1 и один вид бюджета.")
         if not isinstance(values, list) or not 3 <= len(values) <= 5 or any(not finite(v) for v in values) or len(set(values)) != len(values):
-            raise ValueError("Задайте 3–5 различных неотрицательных бюджетов.")
+            raise ValueError("Задай 3–5 различных неотрицательных бюджетов.")
         if budget == "storage_budget_bytes" and any(type(v) is not int or v > 9223372036854775807 for v in values):
-            raise ValueError("Бюджеты места должны быть целыми байтами в диапазоне Long.")
+            raise ValueError("Задай бюджет места целым числом байтов от 0 до 9223372036854775807.")
         timeout = series.get("timeout_seconds", 600)
         if type(timeout) is not int or not 1 <= timeout <= 86400:
-            raise ValueError("Общий timeout серии должен быть от 1 до 86400 секунд.")
+            raise ValueError("Общий лимит времени серии: от 1 до 86400 секунд.")
         if budget == "write_budget_units_per_hour":
             rates = w.get("table_write_rates")
             if not isinstance(rates, dict) or not rates:
-                raise ValueError("Серия записи требует полного table_write_rates; окончательная проверка таблиц выполняется CLI.")
+                raise ValueError("Для серии по записи заполни table_write_rates для всех таблиц запросов. CLI проверит их после разбора SQL.")
             for rate in rates.values():
                 if not isinstance(rate, dict) or any(not finite(rate.get(k)) for k in ("inserts_per_hour", "updates_per_hour", "deletes_per_hour")):
                     raise ValueError("Неполный профиль записи.")
@@ -362,7 +362,7 @@ ALTER ROLE frontend_scenarios SET default_transaction_read_only = on;""")
 
     def analyze(self, workload, output, series=None):
         if not self.cli.is_file():
-            raise RuntimeError("CLI не собран. Выполните ./gradlew installDist в корне проекта.")
+            raise RuntimeError("CLI не собран. Выполни ./gradlew installDist в корне проекта.")
         env = os.environ.copy()
         port = int(env.get("FRONTEND_DB_PORT", "55433"))
         # Никогда не наследуем адрес общей БД из окружения пользователя.
@@ -432,7 +432,7 @@ class Jobs:
                 "template_id": request["template_id"], "launch_mode": "series" if "series" in request else "single", "report_url": None, "error": None}
         with self.lock:
             if not self.accepting:
-                raise ShuttingDownError("Сервер обновляется. Дождитесь перезапуска и повторите отправку.")
+                raise ShuttingDownError("Сервер обновляется. Дождись перезапуска и повтори отправку.")
             write_json(self.directory / "jobs" / id / "request.json", request)
             self.items[id] = item
             self.update(id)
@@ -560,7 +560,7 @@ def make_handler(jobs, templates):
                     f'<a href="/reports/{p.name}/{"series.json" if (p / "series.json").is_file() else "report.json"}">JSON</a>'
                     + (f' · <a href="/reports/{p.name}/indexes.sql">SQL</a>' if not (p / "series.json").is_file() else '')
                     + '</li>' for p in entries if p.is_dir())
-                page = '<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><link rel="stylesheet" href="/style.css"><title>Отчёты · IndexBudget</title><main class="archive"><a href="/">← К настройке</a><h1>Отчёты</h1><p>Локальные опубликованные запуски</p><ul>' + (links or "<li>Пока нет отчётов</li>") + "</ul></main></html>"
+                page = '<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><link rel="stylesheet" href="/style.css"><title>Отчёты · IndexBudget</title><main class="archive"><a href="/">← К настройке</a><h1>Отчёты</h1><p>Сохранённые результаты запусков</p><ul>' + (links or "<li>Пока нет отчётов</li>") + "</ul></main></html>"
                 self.send(200, page.encode(), "text/html; charset=utf-8")
             elif path.startswith("/reports/"):
                 parts = path.strip("/").split("/")
@@ -582,7 +582,7 @@ def make_handler(jobs, templates):
             try:
                 with jobs.lock:
                     if not jobs.accepting:
-                        raise ShuttingDownError("Сервер обновляется. Дождитесь перезапуска и повторите отправку.")
+                        raise ShuttingDownError("Сервер обновляется. Дождись перезапуска и повтори отправку.")
                 length = int(self.headers.get("Content-Length", "0"))
                 if not 0 < length <= 3 * 1024 * 1024:
                     raise ValueError("Размер запроса должен быть от 1 байта до 3 MiB.")
