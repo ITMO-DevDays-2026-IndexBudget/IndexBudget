@@ -30,12 +30,51 @@ class ObservedBudgetIntegrationTest {
     private val scenario = Path.of("demo/scenarios")
     private val metrics = MetricsCalculatorImpl()
 
+    private data class Fixture(val output: Path, val original: WorkloadInput)
+    private data class Observation(
+        val profile: WriteProfileCalculator.WriteProfile,
+        val affectedRows: Map<String, Int>,
+        val tableDeltas: Map<String, List<Long>>,
+    )
+    private data class DatabaseState(val fingerprints: Map<String, String>, val indexes: String)
+    private data class Execution(
+        val pipeline: AnalysisPipeline,
+        val reports: Map<Path, AnalysisReport>,
+        val connections: List<Connection>,
+    )
+    private enum class SeriesCase(
+        val workloadFile: String,
+        val seriesFile: String,
+        val directory: String,
+        val otherExpense: String,
+        val otherBudget: (Constraints) -> Double,
+    ) {
+        STORAGE("workload.json", "storage-series.json", "storage", "write_units_per_hour",
+            { checkNotNull(it.writeBudgetUnitsPerHour) }),
+        WRITE("write-workload.json", "write-series.json", "write", "budgeted_bytes",
+            { it.storageBudgetBytes.toDouble() }),
+    }
+
     @Test
     fun `observed mixed workload explains criteria and independent budget transitions`() {
+        val fixture = prepareFixture()
+        println("Observing physical writes: ${fixture.output}")
+        val observation = observeWrites(fixture)
+        prepareInputs(fixture.output, observation.profile)
+        val state = prepareDatabase(fixture.output)
+        val execution = createPipeline()
+        println("Running main analysis")
+        val main = runMain(fixture, execution)
+        val seriesFacts = SeriesCase.entries.associate { case ->
+            println("Running ${case.directory} series")
+            case.directory to runBudgetSeries(fixture.output, execution.pipeline, case)
+        }
+        verifyUnchanged(state, execution)
+        saveEvidence(fixture.output, observation, state, execution.reports, main, seriesFacts)
+    }
+
+    private fun prepareFixture(): Fixture {
         val output = Files.createTempDirectory(Path.of("build"), "observed-budget-runs-")
-        val source = UUID.randomUUID()
-        val collector = JdbcTableStatisticsCollector({ analysis() })
-        fun capture() = collector.collect(source, SnapshotLimits(), RunContext())
         val original = WorkloadReader().read(scenario.resolve("workload.json"), RunContext())
         admin().use { connection ->
             assertEquals("v1", scalar(connection, "SELECT version FROM demo_meta.seed_status WHERE ready"))
@@ -45,11 +84,45 @@ class ObservedBudgetIntegrationTest {
             Files.copy(scenario.resolve(it), output.resolve(if (it == "workload.json") "source-workload.json" else it))
         }
         Files.copy(Path.of("demo/postgres/init/001-seed.sql"), output.resolve("seed.sql"))
+        return Fixture(output, original)
+    }
+
+    private fun observeWrites(fixture: Fixture): Observation {
+        val (output, original) = fixture
+        val source = UUID.randomUUID()
+        val collector = JdbcTableStatisticsCollector({ analysis() })
+        fun capture() = collector.collect(source, SnapshotLimits(), RunContext())
         val before = capture()
         assertTrue(before.complete)
         Files.write(output.resolve("write-before.json"), TableSnapshotJson().render(before))
-        val affected = linkedMapOf<String, Int>()
         val observationStart = System.nanoTime()
+        val affected = executeObservationBurst(original, output)
+        // An explicit real observation window. Never forge timestamps to manufacture hourly rates.
+        val remainingMillis = 5000 - (System.nanoTime() - observationStart) / 1_000_000
+        if (remainingMillis > 0) Thread.sleep(remainingMillis)
+        var after = capture()
+        val publicationDeadline = System.nanoTime() + 5_000_000_000L
+        while ((tableDeltas(before, after, "records") != listOf(10L, 17L, 2L) ||
+                tableDeltas(before, after, "groups") != listOf(1L, 3L, 1L)) && System.nanoTime() < publicationDeadline) {
+            Thread.sleep(50)
+            after = capture()
+        }
+        Files.write(output.resolve("write-after.json"), TableSnapshotJson().render(after))
+        assertTrue(after.complete)
+        assertEquals(listOf(10L, 17L, 2L), tableDeltas(before, after, "records"))
+        assertEquals(listOf(1L, 3L, 1L), tableDeltas(before, after, "groups"))
+        val observed = WriteProfileCalculator().calculate(
+            TableWriteSnapshotJson.read(output.resolve("write-before.json")),
+            TableWriteSnapshotJson.read(output.resolve("write-after.json")))
+        assertTrue(observed.complete)
+        assertTrue(observed.tableFaults.isEmpty())
+        return Observation(observed, affected, mapOf(
+            "public.records" to tableDeltas(before, after, "records"),
+            "public.groups" to tableDeltas(before, after, "groups")))
+    }
+
+    private fun executeObservationBurst(original: WorkloadInput, output: Path): Map<String, Int> {
+        val affected = linkedMapOf<String, Int>()
         // Actual mixed activity, not EXPLAIN. Kept outside all analysis sessions.
         admin().use { connection -> connection.createStatement().use { statement ->
             for (query in original.queries) {
@@ -66,31 +139,17 @@ class ObservedBudgetIntegrationTest {
         assertEquals(mapOf("update_payload" to 17, "delete_recent" to 2,
             "additional_write_0" to 10, "additional_write_1" to 1,
             "additional_write_2" to 3, "additional_write_3" to 1), affected)
-        // An explicit real observation window. Never forge timestamps to manufacture hourly rates.
-        val remainingMillis = 5000 - (System.nanoTime() - observationStart) / 1_000_000
-        if (remainingMillis > 0) Thread.sleep(remainingMillis)
-        var after = capture()
-        val publicationDeadline = System.nanoTime() + 5_000_000_000L
-        fun deltas(snapshot: TableSnapshot, table: String): List<Long> {
-            val a = before.entries.single { it.schema == "public" && it.name == table }
-            val b = snapshot.entries.single { it.schema == "public" && it.name == table }
-            return listOf(checkNotNull(b.nTupIns) - checkNotNull(a.nTupIns),
-                checkNotNull(b.nTupUpd) - checkNotNull(a.nTupUpd), checkNotNull(b.nTupDel) - checkNotNull(a.nTupDel))
-        }
-        while ((deltas(after, "records") != listOf(10L, 17L, 2L) ||
-                deltas(after, "groups") != listOf(1L, 3L, 1L)) && System.nanoTime() < publicationDeadline) {
-            Thread.sleep(50)
-            after = capture()
-        }
-        Files.write(output.resolve("write-after.json"), TableSnapshotJson().render(after))
-        assertTrue(after.complete)
-        assertEquals(listOf(10L, 17L, 2L), deltas(after, "records"))
-        assertEquals(listOf(1L, 3L, 1L), deltas(after, "groups"))
-        val observed = WriteProfileCalculator().calculate(
-            TableWriteSnapshotJson.read(output.resolve("write-before.json")),
-            TableWriteSnapshotJson.read(output.resolve("write-after.json")))
-        assertTrue(observed.complete)
-        assertTrue(observed.tableFaults.isEmpty())
+        return affected
+    }
+
+    private fun tableDeltas(before: TableSnapshot, after: TableSnapshot, table: String): List<Long> {
+        val a = before.entries.single { it.schema == "public" && it.name == table }
+        val b = after.entries.single { it.schema == "public" && it.name == table }
+        return listOf(checkNotNull(b.nTupIns) - checkNotNull(a.nTupIns),
+            checkNotNull(b.nTupUpd) - checkNotNull(a.nTupUpd), checkNotNull(b.nTupDel) - checkNotNull(a.nTupDel))
+    }
+
+    private fun prepareInputs(output: Path, observed: WriteProfileCalculator.WriteProfile) {
         val rates = observed.rates.filterKeys { it in setOf("public.records", "public.groups") }
         assertEquals(2, rates.size)
         val maxRowRate = rates.values.maxOf { it.insertsPerHour + it.updatesPerHour + it.deletesPerHour }
@@ -116,7 +175,9 @@ class ObservedBudgetIntegrationTest {
         writeJson(output.resolve("write-series.json"), mapOf("schema_version" to 1,
             "budget" to "write_budget_units_per_hour", "values" to listOf(0.0,
                 ceil(maxRowRate * 1.1), ceil(maxRowRate * 3.1), unboundWrites)))
+    }
 
+    private fun prepareDatabase(output: Path): DatabaseState {
         // Owner prepares statistics once after observation. No writes/ANALYZE during analysis or series.
         admin().use { connection -> connection.createStatement().use {
             it.execute("ANALYZE public.records"); it.execute("ANALYZE public.groups")
@@ -132,20 +193,30 @@ class ObservedBudgetIntegrationTest {
                     "unit" to rows.getString(3), "source" to rows.getString(4))) } }
         } }
         writeJson(output.resolve("settings.json"), settings)
+        return DatabaseState(fingerprintBefore, indexesBefore)
+    }
+
+    private fun createPipeline(): Execution {
         val connections = mutableListOf<Connection>()
         val reports = linkedMapOf<Path, AnalysisReport>()
         val exporter = AtomicReportExporter(HtmlReportRenderer())
-        val pipeline = AnalysisPipeline(JSqlParserSqlAnalyzer(), object : AnalysisSessionFactory {
-            override fun open(context: RunContext): AnalysisSession = JdbcAnalysisSession(analysis().also {
-                connections += it
-            }).also { it.readDatabaseVersions(context) }
+        val pipeline = AnalysisPipeline(JSqlParserSqlAnalyzer(), ObservedBudgetSessionFactory {
+            JdbcAnalysisSession(analysis().also { connections += it })
         }, ProfileAwareCandidateGenerator(), metrics, ObjectiveComparatorImpl(), LimitedRepairOptimizer(),
             DefaultReportBuilder(), ReportExporter { report, destination, context ->
                 assertTrue(connections.all { it.isClosed })
                 exporter.export(report, destination, context)
                 reports[destination] = report
-                verifyReport(report, destination)
+                verifyResultVectors(report)
+                verifyBudgets(report)
+                ObservedBudgetArtifacts.verifyReport(report, destination)
             }, shutdownCancellation = ShutdownCancellation { AutoCloseable {} })
+        return Execution(pipeline, reports, connections)
+    }
+
+    private fun runMain(fixture: Fixture, execution: Execution): AnalysisReport {
+        val (output, original) = fixture
+        val (pipeline, reports) = execution
         val context = RunContext()
         val input = WorkloadReader().read(output.resolve("workload.json"), context)
         assertEquals(original.queries, input.queries)
@@ -156,39 +227,46 @@ class ObservedBudgetIntegrationTest {
         assertTrue(checkNotNull(main.result.selected).evaluation.candidateIds.size >= 2)
         assertEquals(ManualComparisonStatus.COMPLETED, main.manualComparison?.status)
         assertTrue(checkNotNull(main.manualComparison).admissible)
+        return main
+    }
 
-        val seriesFacts = linkedMapOf<String, Any>()
-        for (axis in listOf("storage", "write")) {
-            val run = RunContext()
-            val file = if (axis == "write") "write-workload.json" else "workload.json"
-            val seriesInput = WorkloadReader().read(output.resolve(file), run)
-            val request = BudgetSeriesReader().read(output.resolve("$axis-series.json"), run)
-            val result = BudgetSeriesPipeline(pipeline, ShutdownCancellation { AutoCloseable {} })
-                .run(seriesInput, request, output.resolve(axis), run)
-            assertNull(result.preparationError)
-            assertEquals(4, result.points.size)
-            assertTrue(result.points.all { it.conditionsMatch == true })
-            val selected = result.points.map { checkNotNull(it.result?.selected) }
-            assertTrue(selected.first().evaluation.candidateIds.isEmpty())
-            assertTrue(selected.last().evaluation.candidateIds.size >= 2)
-            assertTrue(selected.drop(1).map { it.evaluation.candidateIds }.distinct().size >= 2,
-                "$axis must change a recommendation between NONZERO budgets")
-            val summary = mapper.readTree(Files.readString(output.resolve("$axis/series.json")))
-            // Prove that the other budget cannot exclude ANY set of <=5 candidates in this pool.
-            val otherExpense = if (axis == "write") "budgeted_bytes" else "write_units_per_hour"
-            val bound = summary["preparation"]["candidates"].toList().map { it[otherExpense].asDouble() }
-                .sortedDescending().take(5).sum()
-            val fixedBudget = if (axis == "write") seriesInput.constraints.storageBudgetBytes.toDouble()
-                else checkNotNull(seriesInput.constraints.writeBudgetUnitsPerHour)
-            assertTrue(bound < fixedBudget, "$axis: the other budget must be demonstrably nonbinding")
-            seriesFacts[axis] = mapOf("fixed_other_budget" to fixedBudget,
-                "top_five_other_expenses_bound" to bound, "nonzero_budget_transition" to true,
-                "points" to summary["points"], "candidate_ids" to summary["preparation"]["candidate_ids"])
-        }
-        assertEquals(fingerprintBefore, admin().use(::fingerprint))
-        assertEquals(indexesBefore, admin().use(::physicalIndexes))
-        assertTrue(connections.all { it.isClosed })
-        analysis().use { assertEquals("0", scalar(it, "SELECT count(*) FROM public.hypopg()")) }
+    private fun runBudgetSeries(output: Path, pipeline: AnalysisPipeline, case: SeriesCase): Map<String, Any> {
+        val run = RunContext()
+        val seriesInput = WorkloadReader().read(output.resolve(case.workloadFile), run)
+        val request = BudgetSeriesReader().read(output.resolve(case.seriesFile), run)
+        val result = BudgetSeriesPipeline(pipeline, ShutdownCancellation { AutoCloseable {} })
+            .run(seriesInput, request, output.resolve(case.directory), run)
+        assertNull(result.preparationError)
+        assertEquals(4, result.points.size)
+        assertTrue(result.points.all { it.conditionsMatch == true })
+        val selected = result.points.map { checkNotNull(it.result?.selected) }
+        assertTrue(selected.first().evaluation.candidateIds.isEmpty())
+        assertTrue(selected.last().evaluation.candidateIds.size >= 2)
+        assertTrue(selected.drop(1).map { it.evaluation.candidateIds }.distinct().size >= 2,
+            "${case.directory} must change a recommendation between NONZERO budgets")
+        val summary = mapper.readTree(Files.readString(output.resolve(case.directory).resolve("series.json")))
+        ObservedBudgetArtifacts.verifySeries(result, summary)
+        // Prove that the other budget cannot exclude ANY set of <=5 candidates in this pool.
+        val bound = summary["preparation"]["candidates"].toList().map { it[case.otherExpense].asDouble() }
+            .sortedDescending().take(5).sum()
+        val fixedBudget = case.otherBudget(seriesInput.constraints)
+        assertTrue(bound < fixedBudget, "${case.directory}: the other budget must be demonstrably nonbinding")
+        return mapOf("fixed_other_budget" to fixedBudget,
+            "top_five_other_expenses_bound" to bound, "nonzero_budget_transition" to true,
+            "points" to summary["points"], "candidate_ids" to summary["preparation"]["candidate_ids"])
+    }
+
+    private fun verifyUnchanged(state: DatabaseState, execution: Execution) {
+        assertEquals(state.fingerprints, admin().use(::fingerprint))
+        assertEquals(state.indexes, admin().use(::physicalIndexes))
+        // Closing each actual analysis connection releases its session-local HypoPG indexes.
+        assertTrue(execution.connections.all { it.isClosed })
+    }
+
+    private fun saveEvidence(
+        output: Path, observation: Observation, state: DatabaseState,
+        reports: Map<Path, AnalysisReport>, main: AnalysisReport, seriesFacts: Map<String, Any>,
+    ) {
         writeJson(output.resolve("summary.json"), mapOf(
             "schema_version" to 1, "kind" to "observed_write_budget_experiment",
             "basis" to "real_postgresql_planner_cost_not_runtime_benchmark",
@@ -196,10 +274,10 @@ class ObservedBudgetIntegrationTest {
             "postgres_version" to main.environment.postgresVersion, "hypopg_version" to main.environment.hypopgVersion,
             "read_profiles_source" to "scenario_106_fixed_synthetic_frequencies",
             "write_profile_source" to "one_real_table_statistics_window",
-            "window_seconds" to observed.periodSeconds, "affected_rows" to affected,
-            "table_deltas" to mapOf("public.records" to deltas(after, "records"), "public.groups" to deltas(after, "groups")),
-            "historical_hot_updates_per_hour" to observed.hotUpdatesPerHour,
-            "analysis_data_fingerprints" to fingerprintBefore, "physical_indexes" to indexesBefore,
+            "window_seconds" to observation.profile.periodSeconds, "affected_rows" to observation.affectedRows,
+            "table_deltas" to observation.tableDeltas,
+            "historical_hot_updates_per_hour" to observation.profile.hotUpdatesPerHour,
+            "analysis_data_fingerprints" to state.fingerprints, "physical_indexes" to state.indexes,
             "data_unchanged_by_analysis" to true, "physical_indexes_unchanged" to true,
             "connections_closed" to true, "series" to seriesFacts,
             "runs" to reports.map { (path, report) -> runSummary(output.relativize(path), report) },
@@ -208,7 +286,7 @@ class ObservedBudgetIntegrationTest {
         println("Observed budget evidence: $output")
     }
 
-    private fun verifyReport(report: AnalysisReport, destination: Path) {
+    private fun verifyResultVectors(report: AnalysisReport) {
         val result = report.result
         assertTrue(result.status in setOf(RunStatus.COMPLETED, RunStatus.PARTIAL))
         if (result.status == RunStatus.PARTIAL) {
@@ -226,6 +304,12 @@ class ObservedBudgetIntegrationTest {
         for (configuration in listOf(checkNotNull(result.bestRobust), checkNotNull(result.bestMean))) {
             assertEquals(ids, configuration.evaluation.costByQueryId.keys)
             assertEquals(baseline.costByQueryId.getValue("all_records"), configuration.evaluation.costByQueryId.getValue("all_records"))
+        }
+    }
+
+    private fun verifyBudgets(report: AnalysisReport) {
+        val input = checkNotNull(report.input)
+        for (configuration in listOf(checkNotNull(report.result.bestRobust), checkNotNull(report.result.bestMean))) {
             val candidates = report.candidates.candidates.filter { it.id in configuration.evaluation.candidateIds }
             val budget = metrics.assessBudget(candidates, input)
             assertTrue(budget.admissible)
@@ -245,18 +329,6 @@ class ObservedBudgetIntegrationTest {
                 tableWriteRates = input.tableWriteRates?.mapValues { it.value.copy(source = WriteRateSource.MANUAL) })
             assertEquals(budget, metrics.assessBudget(candidates, manualRates))
         }
-        val json = mapper.readTree(Files.readString(destination.resolve("report.json")))
-        assertEquals(report.runId, json["run_id"].asString())
-        assertEquals(report.inputHash, json["input_hash"].asString())
-        assertEquals(result.selected?.evaluation?.candidateIds, json["selected"]["candidate_ids"].toList().map { it.asString() })
-        for (file in listOf("report.html", "indexes.sql")) {
-            val text = Files.readString(destination.resolve(file))
-            assertTrue(text.contains(report.runId))
-            assertTrue(text.contains(checkNotNull(report.inputHash)))
-        }
-        val sql = Files.readString(destination.resolve("indexes.sql"))
-        assertEquals(json["selected_indexes"].toList().map { it["ddl"].asString().trim().removeSuffix(";") }.sorted(),
-            sql.lineSequence().filter { it.startsWith("CREATE INDEX") }.map { it.trim().removeSuffix(";") }.sorted().toList())
     }
 
     /** Projection of saved report fields; no second implementation of M/R or price of robustness. */
