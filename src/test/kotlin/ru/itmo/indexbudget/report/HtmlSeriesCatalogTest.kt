@@ -33,6 +33,7 @@ class HtmlSeriesCatalogTest {
         for (ordinal in reports.keys) for (query in 0..1) {
             assertEquals(1, count(queries, "id=\"variant-$ordinal-query-$query\""))
         }
+        assertTrue(indexes.contains(" · btree ("))
         assertTrue(indexes.contains("data-index-members=\"2,3\""))
         assertTrue(indexes.contains("data-index-members=\"3\""))
         assertTrue(queries.contains("99,09854423292273"), "Keep saved, unrounded percentages")
@@ -139,7 +140,7 @@ class HtmlSeriesCatalogTest {
         val html = HtmlSeriesCatalog(mapOf(1 to long)).indexes()
         for (candidate in long.candidates.candidates) {
             val table = candidate.definition.table
-            assertTrue(html.contains("${table.schema}.${table.name}(value)"))
+            assertTrue(html.contains("${table.schema}.${table.name} · btree (value)"))
         }
         val wide = HtmlSeriesCatalog(mapOf(1 to HtmlReportFixtures.wide())).indexes()
         assertTrue(wide.contains("wide_not_evaluated"))

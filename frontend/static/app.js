@@ -6,6 +6,7 @@ const clone = value => JSON.parse(JSON.stringify(value));
 const format = value => new Intl.NumberFormat('ru-RU', {maximumFractionDigits: 2}).format(value);
 const draftKey = 'indexbudget.frontend.v1';
 const maxCallsPerHour = 1000000;
+const defaultIndexMethods = ['btree', 'brin', 'hash'];
 let templates = [], state, tab = 'queries', queryIndex = 0, busy = false, health = {};
 let guardsText = '', manualText = '', activeJob = null, saveTimer;
 
@@ -236,7 +237,14 @@ function changed() {
 
 function templateState(template) {
   return {template_id: template.id, template_version: template.version,
-    workload: clone(template.workload), catalog: clone(template.catalog), catalogSource: 'template'};
+    workload: demoWorkload(template.workload), catalog: clone(template.catalog), catalogSource: 'template'};
+}
+
+function demoWorkload(workload) {
+  const result = clone(workload);
+  // Старые черновики не задавали методы. Явный выбор пользователя сохраняем.
+  if (!Object.hasOwn(result, 'index_methods')) result.index_methods = [...defaultIndexMethods];
+  return result;
 }
 
 function restoreDraft(draft, availableTemplates) {
@@ -253,7 +261,7 @@ function restoreDraft(draft, availableTemplates) {
         && typeof p.calls_per_hour === 'object' && !Array.isArray(p.calls_per_hour))
       || (w.table_write_rates && (typeof w.table_write_rates !== 'object'
         || !Object.values(w.table_write_rates).every(r => r && typeof r === 'object')))) return null;
-  return {state: {...templateState(template), workload: clone(w), writeSource: draft.writeSource === 'observed' || w.table_write_rates_origin ? 'observed' : 'manual'},
+  return {state: {...templateState(template), workload: demoWorkload(w), writeSource: draft.writeSource === 'observed' || w.table_write_rates_origin ? 'observed' : 'manual'},
     guardsText: typeof draft.guardsText === 'string' ? draft.guardsText : '',
     manualText: typeof draft.manualText === 'string' ? draft.manualText : ''};
 }
@@ -534,7 +542,7 @@ function renderDiagram() {
 function renderSummary() {
   const w = state.workload, t = templates.find(t=>t.id===state.template_id);
   $('summary-title').textContent = t.name;
-  const items = [['Общих SQL',w.queries.length],['Профилей нагрузки',w.profiles.length],['Бюджет места',format(w.constraints.storage_budget_bytes/1048576)+' MiB'],['Цель',w.objective==='mean'?'Средний результат':'Худший сценарий'],['Источник записи',writeSource()==='observed' ? (w.table_write_rates_origin?.complete ? 'Наблюдаемый · полный' : 'Наблюдаемый · требует проверки') : (w.table_write_rates ? 'Ручной' : 'Не задан')],['Лимит записи',w.constraints.write_budget_units_per_hour == null ? 'Выключен' : String(w.constraints.write_budget_units_per_hour)+' ед./ч']];
+  const items = [['Общих SQL',w.queries.length],['Профилей нагрузки',w.profiles.length],['Методы индексов',Array.isArray(w.index_methods) ? w.index_methods.map(m => ({btree:'B-tree',brin:'BRIN',hash:'Hash'}[m] || m)).join(', ') : 'Некорректный список'],['Бюджет места',format(w.constraints.storage_budget_bytes/1048576)+' MiB'],['Цель',w.objective==='mean'?'Средний результат':'Худший сценарий'],['Источник записи',writeSource()==='observed' ? (w.table_write_rates_origin?.complete ? 'Наблюдаемый · полный' : 'Наблюдаемый · требует проверки') : (w.table_write_rates ? 'Ручной' : 'Не задан')],['Лимит записи',w.constraints.write_budget_units_per_hour == null ? 'Выключен' : String(w.constraints.write_budget_units_per_hour)+' ед./ч']];
   $('summary').innerHTML = items.map(([k,v])=>`<div><dt>${escape(k)}</dt><dd>${escape(v)}</dd></div>`).join('');
 }
 

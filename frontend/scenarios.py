@@ -67,6 +67,7 @@ def scenario_template(repository, records_template):
             example["cost_guard"] = guards[query["id"]]
         examples.append(example)
     initial = copy.deepcopy(workload)
+    initial["index_methods"] = ["btree", "brin", "hash"]
     initial["queries"] = [copy.deepcopy(queries[id]) for id in INITIAL_QUERY_IDS]
     for profile in initial["profiles"]:
         profile["calls_per_hour"] = {id: profile["calls_per_hour"][id] for id in INITIAL_QUERY_IDS}

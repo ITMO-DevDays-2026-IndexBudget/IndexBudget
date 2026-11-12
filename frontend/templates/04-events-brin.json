@@ -1,0 +1,78 @@
+{
+  "id": "04-events-brin",
+  "version": 1,
+  "name": "Журнал событий",
+  "tag": "BRIN · 64 KiB",
+  "description": "Миллион упорядоченных событий. При бюджете 64 KiB помещается BRIN; увеличьте бюджет до 64 MiB и сравните с B-tree.",
+  "accent": "mint",
+  "schema_sql": "CREATE TABLE public.events (\n  sequence bigint NOT NULL,\n  payload text NOT NULL\n);",
+  "seed_sql": "INSERT INTO public.events\nSELECT i, repeat('x', 160)\nFROM generate_series(1, 1000000) AS g(i)\nORDER BY i;",
+  "workload": {
+    "schema_version": 2,
+    "objective": "robust",
+    "analysis_mode": "normal",
+    "candidate_ranking": "frequency",
+    "index_methods": [
+      "btree",
+      "brin",
+      "hash"
+    ],
+    "queries": [
+      {
+        "id": "events_window",
+        "sql": "SELECT * FROM public.events WHERE sequence BETWEEN 500000 AND 510000"
+      },
+      {
+        "id": "events_all",
+        "sql": "SELECT * FROM public.events WHERE sequence > 0"
+      }
+    ],
+    "profiles": [
+      {
+        "id": "monitoring",
+        "weight": 1,
+        "calls_per_hour": {
+          "events_window": 100,
+          "events_all": 1
+        }
+      }
+    ],
+    "constraints": {
+      "storage_budget_bytes": 65536,
+      "write_budget_units_per_hour": 100000,
+      "max_indexes": 1
+    },
+    "table_write_rates": {
+      "public.events": {
+        "inserts_per_hour": 100,
+        "updates_per_hour": 10,
+        "deletes_per_hour": 5,
+        "source": "manual"
+      }
+    }
+  },
+  "catalog": {
+    "tables": [
+      {
+        "name": "public.events",
+        "columns": [
+          {
+            "name": "sequence",
+            "type": "bigint",
+            "primary": false,
+            "nullable": false
+          },
+          {
+            "name": "payload",
+            "type": "text",
+            "primary": false,
+            "nullable": false
+          }
+        ],
+        "rows": 1000000,
+        "indexes": []
+      }
+    ],
+    "relations": []
+  }
+}
