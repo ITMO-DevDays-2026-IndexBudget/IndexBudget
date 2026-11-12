@@ -1,0 +1,12 @@
+{
+  "postgres": "PostgreSQL 16.15 (Debian 16.15-1.pgdg12+2) on aarch64-unknown-linux-gnu, compiled by gcc (Debian 12.2.0-14+deb12u1) 12.2.0, 64-bit\n",
+  "hypopg": "1.4.2\n",
+  "settings": "{ \"autovacuum\" : \"off\", \"full_page_writes\" : \"on\", \"max_parallel_workers_per_gather\" : \"0\", \"shared_buffers\" : \"16384\", \"synchronous_commit\" : \"on\", \"wal_compression\" : \"off\", \"work_mem\" : \"4096\" }\n",
+  "code_revision": "2710d6309567074ad1c7cb0fb47b4d70d773b7b7",
+  "seed_sha256": "2697dafaa6b53aa8f1e563fb57e63782994eb0dbebd28a58c1e8356a12a7f9db",
+  "cpus": 2,
+  "memory": "2g",
+  "clients": 1,
+  "parallelism": 1,
+  "transaction": "one committed statement per connection"
+}

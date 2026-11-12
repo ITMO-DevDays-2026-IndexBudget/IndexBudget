@@ -409,3 +409,10 @@ indexbudget analyze --workload imported/workload.json --output-dir analysis
 в PostgreSQL 16. Сохраняются INSERT/UPDATE/DELETE и отдельный HOT counter без изменения
 целевой БД. Формат, лимиты, задержка публикации, ограничения reset detection и проверка:
 [docs/table-statistics-v1.md](docs/table-statistics-v1.md).
+
+## Физический mixed benchmark (#110)
+
+Одноразовый runner baseline/selected на сценарии #106 с наблюдаемым профилем #107,
+физическим клонированием seed перед каждым повтором и raw logs:
+[demo/benchmark/README.md](demo/benchmark/README.md). Полный прогон и его результат
+должны быть сохранены отдельно; наличие runner не означает выполненную приёмку.

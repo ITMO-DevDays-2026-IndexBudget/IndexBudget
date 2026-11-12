@@ -97,3 +97,12 @@ tasks.register<JavaExec>("searchComparisonRealExperiments") {
     mainClass.set("ru.itmo.indexbudget.experiments.RealSearchComparisonExperimentsKt")
     javaLauncher.set(javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(25)) })
 }
+
+tasks.register<JavaExec>("benchmarkObservedWorkload") {
+    group = "verification"
+    description = "Build the #110 workload using observed table counters and the shared #107 calculator"
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass.set("ru.itmo.indexbudget.experiments.BenchmarkObservedWorkloadKt")
+    javaLauncher.set(javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(25)) })
+}

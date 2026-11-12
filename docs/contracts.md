@@ -774,3 +774,12 @@ Jobs подготавливает dataset один раз, публикует е
 ## Источник записи в представлении (#108)
 
 `WriteProfileReport` сериализует один `WriteRatesOrigin` для report и series и выводит сохранённые rates/окно без расчётов. `series.json.settings` добавляет `table_write_rates_origin` и `queries[].statement_kind/cost_interpretation` из сохранённой AST-подготовки. Форматы v1/v2 серии остаются совместимыми; отсутствие старых полей не является нулём или SELECT. HTML-секции и общий SQL-каталог выводят тип и границы DML cost. При группировке provenance серии учитывается и `tableWriteRatesOrigin`. [Demo API, ввод и проверка](write-profile-ui.md).
+
+## D3 / #110: экспериментальная проверка рекомендации
+
+Отдельный runner demo/benchmark создаёт только собственную одноразовую БД. Bridge
+benchmarkObservedWorkload переиспользует TableWriteSnapshotJson/WriteProfileCalculator
+#107 и передаёт observed rates/origin обычному analyze сценария #106. Он не меняет
+формулы domain и не расширяет SQL анализатора INSERT. Обычный analyze не выполняет
+DML/EXPLAIN ANALYZE/физический CREATE INDEX. Формат benchmark v1, методика восстановления,
+метрики и ограничения описаны в [demo/benchmark/README.md](../demo/benchmark/README.md).
