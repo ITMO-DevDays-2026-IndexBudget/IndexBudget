@@ -10,6 +10,7 @@ import java.math.BigDecimal
 import java.math.MathContext
 import java.time.Duration
 import java.time.Instant
+import java.util.UUID
 
 /** Why an observed write profile is incomplete. Rates for faulty tables are never fabricated. */
 enum class WriteProfileReason {
@@ -44,6 +45,8 @@ class WriteProfileCalculator(private val mathContext: MathContext = MathContext.
         val complete: Boolean,
         val reasons: List<WriteProfileReason>,
         val tableFaults: Map<String, WriteProfileReason>,
+        /** The collector source UUID shared by both snapshots; checked against the read windows. */
+        val sourceId: UUID,
         val databaseOid: Long,
         val postgresVersion: String,
     )
@@ -51,11 +54,12 @@ class WriteProfileCalculator(private val mathContext: MathContext = MathContext.
     fun calculate(before: TableWriteSnapshot, after: TableWriteSnapshot, context: RunContext = RunContext()): WriteProfile {
         context.checkDeadline()
         requireInput(before.snapshotId != after.snapshotId, "A window requires two different snapshots.")
-        requireInput(before.source.databaseOid == after.source.databaseOid &&
+        requireInput(before.source.sourceId == after.source.sourceId &&
+            before.source.databaseOid == after.source.databaseOid &&
             before.source.readerUserid == after.source.readerUserid,
-            "Observation snapshots must come from the same database and reader.")
-        requireInput(before.source.trackCounts != false && after.source.trackCounts != false,
-            "track_counts must be enabled on both snapshots.")
+            "Observation snapshots must come from the same source, database and reader.")
+        requireInput(before.source.trackCounts == true && after.source.trackCounts == true,
+            "track_counts must be enabled and confirmed on both snapshots.")
         val firstStart = instant(before.startedAt)
         val firstEnd = instant(before.finishedAt)
         val lastStart = instant(after.startedAt)
@@ -93,9 +97,13 @@ class WriteProfileCalculator(private val mathContext: MathContext = MathContext.
                 faults[key] = WriteProfileReason.STATS_RESET
                 continue
             }
-            if (left.inserts > right.inserts || left.updates > right.updates || left.deletes > right.deletes) {
-                // PG16 cannot distinguish a targeted pg_stat_reset_single_table_counters from other
-                // decreases without an epoch change: keep the fault instead of inventing a rate.
+            // Any decreasing counter — including HOT updates, even after the row counters have
+            // recovered above their old values — proves the window spans a reset for this table.
+            // PG16 cannot distinguish a targeted pg_stat_reset_single_table_counters from other
+            // decreases without an epoch change: keep the fault instead of inventing a rate.
+            if (left.inserts > right.inserts || left.updates > right.updates || left.deletes > right.deletes ||
+                (left.hotUpdates != null && right.hotUpdates != null && right.hotUpdates < left.hotUpdates)
+            ) {
                 faults[key] = WriteProfileReason.COUNTER_DECREASE
                 continue
             }
@@ -105,7 +113,7 @@ class WriteProfileCalculator(private val mathContext: MathContext = MathContext.
                 deletesPerHour = perHour(right.deletes - left.deletes, duration, key, "deletes"),
                 source = WriteRateSource.OBSERVED,
             )
-            if (left.hotUpdates != null && right.hotUpdates != null && right.hotUpdates >= left.hotUpdates) {
+            if (left.hotUpdates != null && right.hotUpdates != null) {
                 hot[key] = perHour(right.hotUpdates - left.hotUpdates, duration, key, "hot_updates")
             }
         }
@@ -119,6 +127,7 @@ class WriteProfileCalculator(private val mathContext: MathContext = MathContext.
             complete = reasons.isEmpty(),
             reasons = reasons.toList(),
             tableFaults = faults,
+            sourceId = before.source.sourceId,
             databaseOid = before.source.databaseOid,
             postgresVersion = before.source.postgresVersion,
         )

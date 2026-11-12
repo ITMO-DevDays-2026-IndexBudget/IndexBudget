@@ -41,3 +41,7 @@ export INDEXBUDGET_HYPOPG_TEST_PASSWORD=''
     --tests 'ru.itmo.indexbudget.application.CandidateRankingHypopgIntegrationTest' \
     --tests 'ru.itmo.indexbudget.application.SearchComparisonHypopgIntegrationTest' \
     --tests 'ru.itmo.indexbudget.comparison.ManualComparisonIntegrationTest'
+# Also save the real-run comparison artifact of #104 into a throwaway directory; the committed
+# copy under docs/experiments is regenerated the same way on a disposable database.
+rm -rf build/search-comparison-real
+./gradlew --no-daemon searchComparisonRealExperiments --args="--output-dir build/search-comparison-real"

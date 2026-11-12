@@ -53,20 +53,7 @@ class ImportWorkloadCommand(
                     configPath.parent.resolve(ImportJson.text(node, "before")), maxBytes = 64 * 1024 * 1024, context)
                 val after = TableWriteSnapshotJson.read(
                     configPath.parent.resolve(ImportJson.text(node, "after")), maxBytes = 64 * 1024 * 1024, context)
-                WriteProfileCalculator().calculate(before, after, context).also { profile ->
-                    val constraints = config.get("constraints")
-                    val writeBudget = constraints?.get("write_budget_units_per_hour")?.takeUnless { it.isNull }
-                    // An incomplete observation never silently disables an enabled write budget
-                    // and is never replaced by manual values.
-                    if (writeBudget != null && !profile.complete) {
-                        ImportJson.fail("The observed write window is incomplete: ${profile.reasons.joinToString(",")}. " +
-                            "Widen the window or drop write_budget_units_per_hour explicitly.",
-                            ErrorCode.INVALID_WRITE_PROFILE)
-                    }
-                    if (profile.complete && profile.rates.isEmpty()) {
-                        ImportJson.fail("A complete write profile cannot be empty.", ErrorCode.INVALID_WRITE_PROFILE)
-                    }
-                }
+                WriteProfileCalculator().calculate(before, after, context)
             }
             val windows = ImportJson.array(config, "windows")
             if (windows.size !in 1..3) ImportJson.fail("Provide one to three windows.")
@@ -88,30 +75,12 @@ class ImportWorkloadCommand(
                     ImportJson.array(node, "search_path").map { it.takeIf { value -> value.isString }?.asString()
                         ?: ImportJson.fail("search_path requires literal schema names.") })
             }
-            if (writeWindow != null && writeWindow.databaseOid != frequencies.source.databaseOid) {
-                ImportJson.fail("The write window must come from the observed database.")
+            if (writeWindow != null && (writeWindow.databaseOid != frequencies.source.databaseOid ||
+                    writeWindow.sourceId != frequencies.source.sourceId)) {
+                ImportJson.fail("The write window must come from the observed source and database.")
             }
             val options = config.properties().filter { it.key in setOf("constraints", "objective", "table_write_rates", "analysis_mode", "candidate_ranking") }
                 .associate { it.key to it.value }.toMutableMap()
-            if (writeWindow != null) {
-                // Observed rates are rows per hour, not SQL calls; they never mix with statements counts.
-                options["table_write_rates"] = ImportJson.mapper.valueToTree(
-                    writeWindow.rates.toSortedMap().mapValues { (_, rates) ->
-                        linkedMapOf("inserts_per_hour" to rates.insertsPerHour,
-                            "updates_per_hour" to rates.updatesPerHour,
-                            "deletes_per_hour" to rates.deletesPerHour,
-                            "source" to "observed")
-                    })
-                options["table_write_rates_origin"] = ImportJson.mapper.valueToTree(linkedMapOf(
-                    "kind" to "observed",
-                    "window" to linkedMapOf("from" to writeWindow.from, "to" to writeWindow.to,
-                        "period_seconds" to writeWindow.periodSeconds),
-                    "complete" to writeWindow.complete,
-                    "reasons" to writeWindow.reasons.map { it.name },
-                    "source" to linkedMapOf("database_oid" to writeWindow.databaseOid,
-                        "postgres_version" to writeWindow.postgresVersion),
-                ))
-            }
             val imported = open(context).use { connection ->
                 connection.isReadOnly = true
                 connection.autoCommit = false
@@ -133,37 +102,16 @@ class ImportWorkloadCommand(
                         }
                         JdbcCatalogReader(connection).readCatalog(tables, run)
                     }
-                }).build(frequencies, examples, options, context)
+                }).build(frequencies, examples, options, context, writeProfile = writeWindow)
                 // Closing rolls back transaction-local context; no statements from the observed workload execute.
             }
             publishing = true
             Files.createDirectories(output.parent)
             val temp = Files.createTempDirectory(output.parent, ".import-")
             staging = temp
-            val manifest = LinkedHashMap<String, Any?>(imported.manifest)
-            if (writeWindow != null) {
-                manifest["write_profile"] = linkedMapOf(
-                    "source" to "pg_stat_user_tables",
-                    "database_oid" to writeWindow.databaseOid,
-                    "postgres_version" to writeWindow.postgresVersion,
-                    "from" to writeWindow.from, "to" to writeWindow.to,
-                    "period_seconds" to writeWindow.periodSeconds,
-                    "complete" to writeWindow.complete,
-                    "reasons" to writeWindow.reasons.map { it.name },
-                    "rates_by_table" to writeWindow.rates.toSortedMap().mapValues { (table, rates) ->
-                        linkedMapOf("inserts_per_hour" to rates.insertsPerHour,
-                            "updates_per_hour" to rates.updatesPerHour,
-                            "deletes_per_hour" to rates.deletesPerHour,
-                            "hot_updates_per_hour" to writeWindow.hotUpdatesPerHour[table])
-                    },
-                    "table_faults" to writeWindow.tableFaults.toSortedMap().mapValues { it.value.name },
-                    "limitations" to listOf("changed_rows_not_sql_calls",
-                        "hot_updates_are_historical_diagnostics_never_index_price",
-                        "pg16_targeted_reset_may_be_undetectable",
-                        "observed_rows_never_mixed_with_pg_stat_statements"),
-                )
-            }
-            Files.write(temp.resolve("import-manifest.json"), ImportJson.mapper.writeValueAsBytes(manifest))
+            // The importer alone assembles the final manifest (including any write profile) and
+            // hashes exactly these published bytes for provenance.
+            Files.write(temp.resolve("import-manifest.json"), ImportJson.mapper.writeValueAsBytes(imported.manifest))
             val input = if (imported.error == null) {
                 Files.write(temp.resolve("workload.json"), ImportJson.mapper.writeValueAsBytes(imported.workload))
                 WorkloadReader().read(temp.resolve("workload.json"), context).also {
@@ -177,8 +125,9 @@ class ImportWorkloadCommand(
             imported.error?.let { err.println("${it.code.name}: ${it.message}"); return it.code.defaultExitCode }
             checkNotNull(input)
             out.println("workload.json + import-manifest.json: ${input.queries.size} queries, ${input.profiles.size} profiles" +
-                (writeWindow?.let { window ->
-                    ", write profile ${if (window.complete) "complete" else "incomplete"} over ${window.rates.size} tables from one observed window"
+                (imported.writeProfile?.let { profile ->
+                    ", write profile ${if (profile.complete) "complete" else "incomplete"} over " +
+                        "${profile.ratesByTable.size} workload tables from one observed window"
                 } ?: ""))
             return 0
         } catch (failure: Exception) {

@@ -59,9 +59,10 @@ class ExhaustiveSearchOptimizerTest {
         assertTrue(result.budgetExcludedSets.isEmpty())
         assertEquals(setOf(emptyList(), listOf("records_group_id"), listOf("records_value")),
             result.evaluations.keys)
-        // Every subset is evaluated exactly once; the reference has no cache and no repair.
-        // The scripted fixture reserves evaluation attempts only, without EXPLAIN slots.
-        assertEquals(RunStatistics(evaluationAttempts = 3, completedEvaluations = 3), context.statistics())
+        // Every subset is evaluated exactly once on the dedicated verification context (the
+        // baseline belongs to the caller's context); the reference has no cache and no repair.
+        assertEquals(RunStatistics(evaluationAttempts = 2, completedEvaluations = 2), result.statistics)
+        assertEquals(RunStatistics(evaluationAttempts = 1, completedEvaluations = 1), context.statistics())
     }
 
     @Test
@@ -125,28 +126,96 @@ class ExhaustiveSearchOptimizerTest {
     }
 
     @Test
-    fun `the own verification deadline stops enumeration without claiming an optimum`() {
+    fun `the own verification deadline stops enumeration between sets without claiming an optimum`() {
         val fixture = fixture()
         val workload = resolved(fixture.input)
         val context = searchContext()
         val baseline = fixture.evaluator.evaluate(emptyList(), workload, context)
-        var ticks = 0L
-        val advancing = NanoClock { ticks += 1_000_000_000L; ticks } // one second per call
-        val optimizer = ExhaustiveSearchOptimizer(verificationTimeout = Duration.ofSeconds(2), clock = advancing)
+        var now = 0L
+        val clock = NanoClock { now }
+        val optimizer = ExhaustiveSearchOptimizer(verificationTimeout = Duration.ofSeconds(10), clock = clock)
+        // The first evaluation completes, then time jumps far beyond the deadline.
+        val delayed = delayingEvaluator(fixture) { now = Duration.ofHours(1).toNanos() }
 
-        val result = optimizer.search(
-            workload, fixture.candidates, baseline, fixture.evaluator, metrics, comparator, context,
-        )
+        val result = optimizer.search(workload, fixture.candidates, baseline, delayed, metrics, comparator, context)
 
         assertFalse(result.complete)
         assertFalse(result.verifiedOptimum)
         assertEquals(ExhaustiveSearchOptimizer.VERIFICATION_DEADLINE, result.stopReason)
         assertEquals(7, result.searchSpaceSize)
-        assertTrue(result.evaluatedSets in 1..6)
-        assertTrue(result.evaluatedSets < result.searchSpaceSize)
+        assertEquals(1, result.evaluatedSets)
         // Saved incumbents come from the enumerated prefix only and stay usable.
         assertTrue(result.evaluations.containsKey(emptyList()))
-        assertEquals(result.evaluatedSets, fixture.evaluator.calls.count { it.isNotEmpty() })
+        assertEquals(listOf("i"), result.bestMean.evaluation.candidateIds)
+        assertEquals(1, result.statistics.completedEvaluations)
+    }
+
+    @Test
+    fun `a deadline crossed during the last evaluation does not complete the reference`() {
+        val fixture = fixture()
+        val workload = resolved(fixture.input)
+        val context = searchContext()
+        val baseline = fixture.evaluator.evaluate(emptyList(), workload, context)
+        var now = 0L
+        val clock = NanoClock { now }
+        val optimizer = ExhaustiveSearchOptimizer(verificationTimeout = Duration.ofSeconds(10), clock = clock)
+        // The clock jumps past the deadline inside the very last subset's evaluation: the loop
+        // finishes, but the post-loop check must still mark the reference incomplete.
+        val delayed = delayingEvaluator(fixture, jumpOn = setOf(listOf("i", "j", "k"))) {
+            now = Duration.ofHours(1).toNanos()
+        }
+
+        val result = optimizer.search(workload, fixture.candidates, baseline, delayed, metrics, comparator, context)
+
+        assertFalse(result.complete)
+        assertEquals(ExhaustiveSearchOptimizer.VERIFICATION_DEADLINE, result.stopReason)
+        assertEquals(7, result.evaluatedSets)
+        assertEquals(7, result.statistics.completedEvaluations)
+    }
+
+    @Test
+    fun `cancellation between evaluations keeps saved incumbents and an honest incomplete flag`() {
+        val fixture = fixture()
+        val workload = resolved(fixture.input)
+        val context = searchContext()
+        val baseline = fixture.evaluator.evaluate(emptyList(), workload, context)
+        var now = 0L
+        val clock = NanoClock { now }
+        val optimizer = ExhaustiveSearchOptimizer(verificationTimeout = Duration.ofMinutes(10), clock = clock)
+        val cancelling = delayingEvaluator(fixture, jumpOn = setOf(listOf("j"))) { context.cancel() }
+
+        val result = optimizer.search(workload, fixture.candidates, baseline, cancelling, metrics, comparator, context)
+
+        assertFalse(result.complete)
+        assertEquals("cancelled", result.stopReason)
+        assertEquals(2, result.evaluatedSets)
+        // The winner of the enumerated prefix stays available; nothing is called a verified optimum.
+        assertEquals(listOf("i"), result.bestMean.evaluation.candidateIds)
+    }
+
+    @Test
+    fun `an all-zero baseline returns the verified empty set without enumerating the pool`() {
+        val zero = mapOf("q1" to 0.0, "q2" to 0.0)
+        val vectors = completeVectors().mapValues { (_, _) -> zero }
+        val fixture = fixture(vectors = vectors)
+        val workload = resolved(fixture.input)
+        val context = searchContext()
+        val baseline = fixture.evaluator.evaluate(emptyList(), workload, context)
+
+        val result = ExhaustiveSearchOptimizer().search(
+            workload, fixture.candidates, baseline, fixture.evaluator, metrics, comparator, context,
+        )
+
+        assertTrue(result.complete)
+        assertTrue(result.verifiedOptimum)
+        assertNull(result.stopReason)
+        assertEquals(7, result.searchSpaceSize)
+        assertEquals(0, result.evaluatedSets)
+        assertEquals(0, result.statistics.evaluationAttempts)
+        assertEquals(emptyList<String>(), result.bestMean.evaluation.candidateIds)
+        assertEquals(emptyList<String>(), result.bestRobust.evaluation.candidateIds)
+        // The nonempty pool is never sent to the evaluator.
+        assertTrue(fixture.evaluator.calls.none { it.isNotEmpty() })
     }
 
     @Test
@@ -233,6 +302,28 @@ class ExhaustiveSearchOptimizerTest {
         listOf("j", "k") to mapOf("q1" to 50.0, "q2" to 40.0),
         listOf("i", "j", "k") to mapOf("q1" to 60.0, "q2" to 60.0),
     )
+
+    /** Runs the scripted evaluator, then fires [hook] after completing the first nonempty set
+     * (or one of [jumpOn]) — used to cross the verification deadline or cancel mid-run. */
+    private fun delayingEvaluator(
+        fixture: Fixture,
+        jumpOn: Set<List<String>>? = null,
+        hook: () -> Unit,
+    ): ConfigurationEvaluator {
+        val delegate = fixture.evaluator
+        return object : ConfigurationEvaluator by delegate {
+            override fun evaluate(
+                candidates: List<IndexCandidate>,
+                workload: ResolvedWorkload,
+                context: RunContext,
+            ): EvaluationResult {
+                val evaluation = delegate.evaluate(candidates, workload, context)
+                val ids = candidates.map { it.id }.sorted()
+                if (candidates.isNotEmpty() && (jumpOn == null || ids in jumpOn)) hook()
+                return evaluation
+            }
+        }
+    }
 
     private fun resolved(input: WorkloadInput): ResolvedWorkload = ResolvedWorkload(input, input.queries.map {
         ResolvedQuery(it.id, it.sql, emptySet(), emptySet(), emptyList(), emptyList())

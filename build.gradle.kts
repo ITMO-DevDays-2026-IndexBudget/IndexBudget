@@ -88,3 +88,12 @@ tasks.register<JavaExec>("searchComparisonExperiments") {
     mainClass.set("ru.itmo.indexbudget.experiments.SearchComparisonExperimentsKt")
     javaLauncher.set(javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(25)) })
 }
+
+tasks.register<JavaExec>("searchComparisonRealExperiments") {
+    group = "verification"
+    description = "Save the real PostgreSQL + HypoPG comparison artifact (INDEXBUDGET_HYPOPG_TEST_URL selects a disposable DB)"
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass.set("ru.itmo.indexbudget.experiments.RealSearchComparisonExperimentsKt")
+    javaLauncher.set(javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(25)) })
+}

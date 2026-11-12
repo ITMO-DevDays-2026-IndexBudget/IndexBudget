@@ -58,32 +58,45 @@ class ObservedImportIntegrationTest {
             statement.execute("CREATE EXTENSION IF NOT EXISTS pg_stat_statements")
             statement.execute("CREATE SCHEMA $schema")
             statement.execute("CREATE TABLE $schema.records(id integer PRIMARY KEY, value integer)")
+            // A second active table of the same database that the workload SQL never touches.
+            statement.execute("CREATE TABLE $schema.orders(id integer PRIMARY KEY, amount integer)")
             statement.execute("INSERT INTO $schema.records SELECT i, i FROM generate_series(1, 100) i")
             statement.execute("ANALYZE $schema.records")
+            statement.execute("ANALYZE $schema.orders")
         } }
 
-        data class Counters(val inserts: Long, val updates: Long, val deletes: Long, val hot: Long, val oid: Long,
-            val databaseOid: Long, val at: Instant)
-        fun counters(): Counters = connection().use { c -> c.createStatement().use { statement ->
+        data class Counters(val inserts: Long, val updates: Long, val deletes: Long, val hot: Long, val oid: Long)
+        fun counters(table: String): Counters = connection().use { c -> c.createStatement().use { statement ->
             statement.executeQuery(
-                "SELECT t.n_tup_ins, t.n_tup_upd, t.n_tup_del, t.n_tup_hot_upd, t.relid, d.oid, now() " +
-                    "FROM pg_catalog.pg_stat_user_tables t, pg_catalog.pg_database d " +
-                    "WHERE t.schemaname OPERATOR(pg_catalog.=) '$schema' AND t.relname OPERATOR(pg_catalog.=) 'records' " +
-                    "AND d.datname OPERATOR(pg_catalog.=) pg_catalog.current_database()"
+                "SELECT t.n_tup_ins, t.n_tup_upd, t.n_tup_del, t.n_tup_hot_upd, t.relid " +
+                    "FROM pg_catalog.pg_stat_user_tables t " +
+                    "WHERE t.schemaname OPERATOR(pg_catalog.=) '$schema' AND t.relname OPERATOR(pg_catalog.=) '$table'"
             ).use { rows ->
                 check(rows.next())
-                Counters(rows.getLong(1), rows.getLong(2), rows.getLong(3), rows.getLong(4), rows.getLong(5),
-                    rows.getLong(6), rows.getTimestamp(7).toInstant())
+                Counters(rows.getLong(1), rows.getLong(2), rows.getLong(3), rows.getLong(4), rows.getLong(5))
             }
         } }
+        fun databaseOid(): Long = connection().use { c -> c.createStatement().use { statement ->
+            statement.executeQuery(
+                "SELECT oid FROM pg_catalog.pg_database " +
+                    "WHERE datname OPERATOR(pg_catalog.=) pg_catalog.current_database()"
+            ).use { rows -> check(rows.next()); rows.getLong(1) }
+        } }
 
-        val before = counters()
+        val recordsBefore = counters("records")
+        val ordersBefore = counters("orders")
+        val beforeAt = Instant.now()
         connection().use { c -> c.createStatement().use { statement ->
             repeat(10) { statement.execute("INSERT INTO $schema.records VALUES (1000 + $it, $it)") }
             repeat(5) { statement.execute("UPDATE $schema.records SET value = -value WHERE id OPERATOR(pg_catalog.=) ${it + 1}") }
             repeat(2) { statement.execute("DELETE FROM $schema.records WHERE id OPERATOR(pg_catalog.=) ${50 + it}") }
+            // Activity on a table outside the workload: it must stay out of the exported rates.
+            repeat(3) { statement.execute("INSERT INTO $schema.orders VALUES ($it, $it)") }
         } }
-        val after = counters()
+        val recordsAfter = counters("records")
+        val ordersAfter = counters("orders")
+        val afterAt = Instant.now()
+        val databaseOid = databaseOid()
         // Statements window for the read side: one stable query executed between two real collections.
         val collector = JdbcStatisticsCollector({ connection() })
         // Stable initial counter: never invent a missing starting observation.
@@ -102,15 +115,20 @@ class ObservedImportIntegrationTest {
         val exampleKey = StatisticsKey(source, statementRow.dbid, statementRow.userid,
             requireNotNull(statementRow.queryid), statementRow.toplevel)
 
-        fun tableSnapshot(at: Instant, count: Counters) = TableWriteSnapshot(
+        fun tableSnapshot(at: Instant, records: Counters, orders: Counters) = TableWriteSnapshot(
             snapshotId = UUID.nameUUIDFromBytes((source.toString() + at).toByteArray()),
-            source = TableWriteSource(source, count.databaseOid, statementRow.userid, trackCounts = true,
+            source = TableWriteSource(source, databaseOid, statementRow.userid, trackCounts = true,
                 postgresVersion = "16.8", statsReset = null),
             startedAt = at.toString(), finishedAt = at.toString(),
-            entries = listOf(TableWriteEntry(count.oid, schema, "records",
-                count.inserts, count.updates, count.deletes, count.hot)))
-        Files.write(directory.resolve("write-before.json"), TableWriteSnapshotJson.render(tableSnapshot(before.at, before)))
-        Files.write(directory.resolve("write-after.json"), TableWriteSnapshotJson.render(tableSnapshot(after.at, after)))
+            entries = listOf(
+                TableWriteEntry(records.oid, schema, "records",
+                    records.inserts, records.updates, records.deletes, records.hot),
+                TableWriteEntry(orders.oid, schema, "orders",
+                    orders.inserts, orders.updates, orders.deletes, orders.hot)))
+        Files.write(directory.resolve("write-before.json"),
+            TableWriteSnapshotJson.render(tableSnapshot(beforeAt, recordsBefore, ordersBefore)))
+        Files.write(directory.resolve("write-after.json"),
+            TableWriteSnapshotJson.render(tableSnapshot(afterAt, recordsAfter, ordersAfter)))
         Files.write(directory.resolve("write-examples.json"), ImportJson.mapper.writeValueAsBytes(mapOf(
             "schema_version" to 1, "kind" to "pg_stat_statements_examples",
             "examples" to listOf(mapOf("key" to ImportJson.key(exampleKey),
@@ -138,27 +156,40 @@ class ObservedImportIntegrationTest {
             return status to err.toString()
         }
 
-        // One explicit observed window produces the shared write profile with its origin.
+        // One explicit observed window produces the shared write profile with its origin. Rates
+        // cover exactly the resolved workload tables: orders changes stay in snapshot diagnostics
+        // instead of leaking into the workload and failing validation.
         val windowConfig = config("write-config.json", "table_write_window" to
             mapOf("before" to "write-before.json", "after" to "write-after.json"))
         val (status, err) = run(windowConfig, "write-imported")
         assertEquals(0, status, err)
         val input = WorkloadReader().read(directory.resolve("write-imported/workload.json"))
-        val rates = requireNotNull(input.tableWriteRates).getValue("$schema.records")
-        assertEquals(WriteRateSource.OBSERVED, rates.source)
-        val elapsedSeconds = Duration.between(before.at, after.at).toNanos() / 1.0e9
-        assertEquals(10.0 * 3600.0 / elapsedSeconds, rates.insertsPerHour, 0.5)
-        assertEquals(5.0 * 3600.0 / elapsedSeconds, rates.updatesPerHour, 0.5)
-        assertEquals(2.0 * 3600.0 / elapsedSeconds, rates.deletesPerHour, 0.5)
+        val rates = requireNotNull(input.tableWriteRates)
+        assertEquals(setOf("$schema.records"), rates.keys)
+        assertEquals(WriteRateSource.OBSERVED, rates.getValue("$schema.records").source)
+        val elapsedSeconds = Duration.between(beforeAt, afterAt).toNanos() / 1.0e9
+        assertEquals(10.0 * 3600.0 / elapsedSeconds, rates.getValue("$schema.records").insertsPerHour, 0.5)
+        assertEquals(5.0 * 3600.0 / elapsedSeconds, rates.getValue("$schema.records").updatesPerHour, 0.5)
+        assertEquals(2.0 * 3600.0 / elapsedSeconds, rates.getValue("$schema.records").deletesPerHour, 0.5)
         val origin = requireNotNull(input.tableWriteRatesOrigin)
         assertEquals(true, origin.complete)
-        val manifest = ImportJson.mapper.readTree(
-            Files.readAllBytes(directory.resolve("write-imported/import-manifest.json")))
+        assertEquals(source.toString(), origin.sourceId)
+        val manifestPath = directory.resolve("write-imported/import-manifest.json")
+        val manifest = ImportJson.mapper.readTree(Files.readAllBytes(manifestPath))
         assertEquals("pg_stat_user_tables", manifest["write_profile"]["source"].asString())
+        assertEquals(setOf("$schema.records"),
+            manifest["write_profile"]["rates_by_table"].properties().map { it.key }.toSet())
+        assertEquals(listOf("$schema.records"), manifest["write_profile"]["workload_tables"].toList().map { it.asString() })
+        assertTrue(manifest["write_profile"]["table_faults"].isEmpty)
         assertTrue(manifest["write_profile"]["limitations"].toList().map { it.asString() }
             .contains("observed_rows_never_mixed_with_pg_stat_statements"))
+        // One owner assembles the manifest and hashes the exact published bytes: the write profile
+        // section is part of the provenance reference.
+        assertTrue(requireNotNull(input.provenance).selectionRule
+            .endsWith(ObservedWorkloadImporter.hash(Files.readAllBytes(manifestPath))))
 
-        // A counter decrease with an enabled budget fails honestly; it never falls back to manual values.
+        // A counter decrease on the workload table with an enabled budget fails honestly; it never
+        // falls back to manual values.
         val decreased = Files.readString(directory.resolve("write-after.json"))
             .replaceFirst(Regex("\"n_tup_ins\":(\\d+)"), "\"n_tup_ins\":1")
         Files.write(directory.resolve("write-decreased.json"), decreased.toByteArray())
@@ -169,6 +200,18 @@ class ObservedImportIntegrationTest {
         assertEquals(2, incompleteStatus)
         assertTrue(incompleteErr.contains("INVALID_WRITE_PROFILE"), incompleteErr)
         assertFalse(Files.exists(directory.resolve("write-incomplete-imported/workload.json")))
+
+        // A window collected by a different source UUID never labels this workload's rates.
+        val foreign = UUID.randomUUID()
+        fun resourced(name: String) = Files.readString(directory.resolve(name))
+            .replace("\"source_id\":\"$source\"", "\"source_id\":\"$foreign\"")
+        Files.write(directory.resolve("write-foreign-before.json"), resourced("write-before.json").toByteArray())
+        Files.write(directory.resolve("write-foreign-after.json"), resourced("write-after.json").toByteArray())
+        val foreignConfig = config("write-foreign-config.json", "table_write_window" to
+            mapOf("before" to "write-foreign-before.json", "after" to "write-foreign-after.json"))
+        val (foreignStatus, foreignErr) = run(foreignConfig, "write-foreign-imported")
+        assertEquals(2, foreignStatus)
+        assertTrue(foreignErr.contains("The write window must come from the observed source"), foreignErr)
 
         // Manual and observed write sources are mutually exclusive; the choice stays explicit.
         val bothConfig = config("write-both.json",

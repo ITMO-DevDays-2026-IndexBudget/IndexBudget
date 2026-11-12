@@ -373,8 +373,12 @@ class WorkloadReaderTest {
         assertEquals(3600.0, origin.periodSeconds)
         assertEquals(true, origin.complete)
         assertEquals(emptyList<String>(), origin.reasons)
+        assertEquals("d0d60c19-eb9d-42ee-9e01-935560eb7e20", origin.sourceId)
         assertEquals(16384L, origin.databaseOid)
         assertEquals("16.8", origin.postgresVersion)
+        // The collector source UUID is optional metadata: older workloads without it stay readable.
+        assertEquals(null, read(json(writeRates = observed, writeOrigin = originJson(sourceId = null)))
+            .tableWriteRatesOrigin?.sourceId)
         // The origin joins the canonical form: the same rates observed and by hand differ by hash,
         // while plain manual input keeps its previous fingerprint.
         assertNotEquals(fingerprint(json(writeRates = ratesJson(inserts = "10"))),
@@ -385,10 +389,14 @@ class WorkloadReaderTest {
         failure(json(writeRates = observed), ErrorCode.INVALID_WRITE_PROFILE)
         failure(json(writeRates = ratesJson(), writeOrigin = originJson()), ErrorCode.INVALID_WRITE_PROFILE)
         failure(json(writeOrigin = originJson()), ErrorCode.INVALID_WRITE_PROFILE)
-        failure(json(
-            writeRates = """{"public.records":$observed,"public.orders":${ratesJson(source = "\"manual\"")}}""",
+        // Two structurally correct entries with different sources must fail on the source mix
+        // itself, not on an accidental extra nesting level.
+        val mixed = failure(json(
+            writeRates = """{"public.records":${ratesEntry(inserts = "10", source = "\"observed\"")},""" +
+                """"public.orders":${ratesEntry(source = "\"manual\"")}}""",
             writeOrigin = originJson(),
         ), ErrorCode.INVALID_WRITE_PROFILE)
+        assertEquals("table_write_rates_origin", mixed.details.getValue("field"))
         failure(json(writeOrigin = """{"kind":"manual"}"""), ErrorCode.INVALID_WRITE_PROFILE)
     }
 
@@ -614,9 +622,10 @@ class WorkloadReaderTest {
         complete: String = "true",
         reasons: String = "[]",
         periodSeconds: String = "3600",
+        sourceId: String? = "\"d0d60c19-eb9d-42ee-9e01-935560eb7e20\"",
     ): String = """{"kind":"observed","window":{"from":"2026-11-12T10:00:00Z","to":"2026-11-12T11:00:00Z",
         "period_seconds":$periodSeconds},"complete":$complete,"reasons":$reasons,
-        "source":{"database_oid":16384,"postgres_version":"16.8"}}"""
+        "source":{${sourceId?.let { "\"source_id\":$it," } ?: ""}"database_oid":16384,"postgres_version":"16.8"}}"""
 
     // null опускает поле, строка "null" передаёт явный JSON null; остальные значения — сырые JSON-токены.
     private fun constraintsJson(
@@ -636,12 +645,20 @@ class WorkloadReaderTest {
         updates: String? = "0",
         deletes: String? = "0",
         source: String? = "\"manual\"",
+    ): String = """{"public.records":${ratesEntry(inserts, updates, deletes, source)}}"""
+
+    /** One structurally correct table entry: a value inside table_write_rates, never a nested map. */
+    private fun ratesEntry(
+        inserts: String? = "0",
+        updates: String? = "0",
+        deletes: String? = "0",
+        source: String? = "\"manual\"",
     ): String = listOfNotNull(
         inserts?.let { "\"inserts_per_hour\":$it" },
         updates?.let { "\"updates_per_hour\":$it" },
         deletes?.let { "\"deletes_per_hour\":$it" },
         source?.let { "\"source\":$it" },
-    ).joinToString(prefix = "{\"public.records\":{", postfix = "}}")
+    ).joinToString(prefix = "{", postfix = "}")
 
     private fun quote(value: String): String = mapper.writeValueAsString(value)
 

@@ -62,7 +62,8 @@ class JsonReportWriter {
                     "period_seconds" to origin.periodSeconds),
                 "complete" to origin.complete,
                 "reasons" to origin.reasons,
-                "source" to linkedMapOf("database_oid" to origin.databaseOid,
+                "source" to linkedMapOf("source_id" to origin.sourceId,
+                    "database_oid" to origin.databaseOid,
                     "postgres_version" to origin.postgresVersion),
             ) },
             "queries" to input?.queries?.map { query -> linkedMapOf(

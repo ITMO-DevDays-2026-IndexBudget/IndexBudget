@@ -68,8 +68,9 @@ object TableWriteSnapshotJson {
             ImportJson.fail("A PostgreSQL 16 source with a known database and reader is required.")
         }
         val trackCounts = root.get("track_counts")?.takeUnless { it.isNull }?.let { ImportJson.bool(root, "track_counts") }
-        if (trackCounts == false) {
-            ImportJson.fail("track_counts must be enabled to observe table write counters.")
+        if (trackCounts != true) {
+            // Missing or null is unknown, not enabled: counters must not be trusted as observed data.
+            ImportJson.fail("track_counts must be present and enabled (true) to observe table write counters.")
         }
         val statsReset = root.get("stats_reset")?.takeUnless { it.isNull }
             ?.let { ImportJson.text(root, "stats_reset") }

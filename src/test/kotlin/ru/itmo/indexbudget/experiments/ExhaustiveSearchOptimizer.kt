@@ -1,8 +1,10 @@
 package ru.itmo.indexbudget.experiments
 
+import ru.itmo.indexbudget.domain.AnalysisException
 import ru.itmo.indexbudget.domain.EvaluationAssessment
 import ru.itmo.indexbudget.domain.EvaluationResult
 import ru.itmo.indexbudget.domain.EvaluatedConfiguration
+import ru.itmo.indexbudget.domain.ErrorCode
 import ru.itmo.indexbudget.domain.IndexCandidate
 import ru.itmo.indexbudget.domain.MetricsCalculator
 import ru.itmo.indexbudget.domain.NanoClock
@@ -10,6 +12,8 @@ import ru.itmo.indexbudget.domain.Objective
 import ru.itmo.indexbudget.domain.ObjectiveComparator
 import ru.itmo.indexbudget.domain.ResolvedWorkload
 import ru.itmo.indexbudget.domain.RunContext
+import ru.itmo.indexbudget.domain.RunLimits
+import ru.itmo.indexbudget.domain.RunStatistics
 import ru.itmo.indexbudget.optimizer.ConfigurationEvaluator
 import java.time.Duration
 
@@ -24,10 +28,15 @@ import java.time.Duration
  * update either incumbent. Formulas and comparison come from the shared production calculator
  * and comparator, so greedy and greedy+repair results are directly comparable set-by-set.
  *
- * The tool carries its own explicit verification deadline in addition to the run budget: an
- * interrupted enumeration reports [ExhaustiveSearchResult.complete] = false and its incumbents
- * are never presented as a verified optimum. An incomplete reference is an observation, not a
- * proof of optimality.
+ * The reference runs on its own verification context with explicit independent limits
+ * (spec §9.3): the EXPLAIN attempt budget covers exactly the declared space, the command/search
+ * timeouts equal the verification deadline, and SQL timeouts inside the evaluator inherit it.
+ * Cancellation is shared with the caller's context; counters belong to the verification run and
+ * are returned in [ExhaustiveSearchResult.statistics]. An all-zero baseline keeps the empty
+ * result without enumerating, exactly like production search. An interrupted enumeration — by
+ * the verification deadline, cancellation, the EXPLAIN budget or a lost connection — returns the
+ * saved incumbents with [ExhaustiveSearchResult.complete] = false and is never presented as a
+ * verified optimum.
  */
 data class ExhaustiveSearchResult(
     val objective: Objective,
@@ -46,6 +55,8 @@ data class ExhaustiveSearchResult(
     val complete: Boolean,
     /** Null when complete; otherwise "verification_deadline" or the terminal error code name. */
     val stopReason: String?,
+    /** Counters of the dedicated verification context: attempts actually spent by this reference. */
+    val statistics: RunStatistics,
 ) {
     val verifiedOptimum: Boolean get() = complete
 
@@ -67,7 +78,8 @@ class ExhaustiveSearchOptimizer(
     /**
      * Baseline admission follows the production search: the empty set must be budget-admissible
      * and the baseline must pass [MetricsCalculator.assessEvaluation]; otherwise the reference
-     * cannot exist and the call fails fast.
+     * cannot exist and the call fails fast. An accepted baseline with `searchRequired=false`
+     * (every profile baseline is zero) returns the verified empty set without enumeration.
      */
     fun search(
         workload: ResolvedWorkload,
@@ -99,46 +111,21 @@ class ExhaustiveSearchOptimizer(
         val ordered = pool.sortedBy { it.id }
         val depth = minOf(maxIndexes, ordered.size)
         val space = (1..depth).sumOf { size -> binomial(ordered.size, size) }
-        val startedAt = clock.nanoTime()
-
-        outer@ for (size in 1..depth) {
-            for (combination in combinations(ordered, size)) {
-                context.checkDeadline()
-                if (clock.nanoTime() - startedAt > verificationTimeout.toNanos()) {
-                    stopReason = VERIFICATION_DEADLINE
-                    break@outer
-                }
-                val ids = combination.map { it.id }
-                val budget = metrics.assessBudget(combination, input)
-                if (!budget.admissible) {
-                    budgetExcluded += ids
-                    continue
-                }
-                val evaluation = try {
-                    evaluator.evaluate(combination, workload, context)
-                } catch (failure: ru.itmo.indexbudget.domain.AnalysisException) {
-                    if (failure.error.code in TERMINAL_CODES) {
-                        stopReason = failure.error.code.name.lowercase()
-                        break@outer
-                    }
-                    throw failure
-                }
-                evaluated++
-                evaluations[ids] = evaluation
-                val assessment = metrics.assessEvaluation(input, baseline, evaluation, budget.usage)
-                if (assessment is EvaluationAssessment.Rejected) {
-                    rejected[ids] = assessment
-                    continue
-                }
-                val configuration = EvaluatedConfiguration(evaluation, assessment.metrics)
-                if (comparator.compare(configuration, bestRobust, Objective.ROBUST) < 0) bestRobust = configuration
-                if (comparator.compare(configuration, bestMean, Objective.MEAN) < 0) bestMean = configuration
-            }
-        }
-        // Rejected vectors are a subset of the evaluated ones; budget-excluded sets were never sent.
-        val enumerated = evaluated.toLong() + budgetExcluded.size
-        val complete = stopReason == null && enumerated == space
-        return ExhaustiveSearchResult(
+        val queryCount = input.queries.size
+        // Independent verification budget (spec §9.3): exactly one EXPLAIN per subset per query
+        // plus the already evaluated baseline; timeouts equal the verification deadline.
+        val verificationContext = RunContext(
+            limits = RunLimits(
+                commandTimeout = verificationTimeout,
+                searchTimeout = verificationTimeout,
+                maxExplainAttempts = (((space + 1) * queryCount).coerceAtLeast(1L)).toInt(),
+                maxRepairAttempts = 1,
+            ),
+            clock = clock,
+            analysisMode = context.analysisMode,
+            parent = context,
+        )
+        fun result(complete: Boolean, stop: String?) = ExhaustiveSearchResult(
             objective = input.objective,
             bestRobust = bestRobust,
             bestMean = bestMean,
@@ -148,7 +135,60 @@ class ExhaustiveSearchOptimizer(
             searchSpaceSize = space,
             evaluatedSets = evaluated,
             complete = complete,
-            stopReason = if (complete) null else (stopReason ?: "enumeration_mismatch:$enumerated/$space"),
+            stopReason = stop,
+            statistics = verificationContext.statistics(),
+        )
+        if (!baselineAssessment.searchRequired) {
+            // Domain rule: nonempty sets are inadmissible with an all-zero baseline; the verified
+            // reference is the empty set itself, as in production search.
+            return result(complete = true, stop = null)
+        }
+
+        val startedAt = clock.nanoTime()
+        try {
+            outer@ for (size in 1..depth) {
+                for (combination in combinations(ordered, size)) {
+                    if (clock.nanoTime() - startedAt >= verificationTimeout.toNanos()) {
+                        stopReason = VERIFICATION_DEADLINE
+                        break@outer
+                    }
+                    verificationContext.checkDeadline()
+                    val ids = combination.map { it.id }
+                    val budget = metrics.assessBudget(combination, input)
+                    if (!budget.admissible) {
+                        budgetExcluded += ids
+                        continue
+                    }
+                    val evaluation = evaluator.evaluate(combination, workload, verificationContext)
+                    evaluated++
+                    evaluations[ids] = evaluation
+                    val assessment = metrics.assessEvaluation(input, baseline, evaluation, budget.usage)
+                    if (assessment is EvaluationAssessment.Rejected) {
+                        rejected[ids] = assessment
+                        continue
+                    }
+                    val configuration = EvaluatedConfiguration(evaluation, assessment.metrics)
+                    if (comparator.compare(configuration, bestRobust, Objective.ROBUST) < 0) bestRobust = configuration
+                    if (comparator.compare(configuration, bestMean, Objective.MEAN) < 0) bestMean = configuration
+                }
+            }
+        } catch (failure: AnalysisException) {
+            // A terminal stop between or during evaluations keeps the saved incumbents and the
+            // honest incomplete flag; numeric, input and local hypothetical errors stay fatal.
+            if (failure.error.code !in TERMINAL_CODES) throw failure
+            stopReason = failure.error.code.name.lowercase()
+        }
+        // The deadline is re-checked after the last evaluation: an evaluation that returned past
+        // the verification deadline must not complete the reference.
+        if (stopReason == null && clock.nanoTime() - startedAt >= verificationTimeout.toNanos()) {
+            stopReason = VERIFICATION_DEADLINE
+        }
+        // Rejected vectors are a subset of the evaluated ones; budget-excluded sets were never sent.
+        val enumerated = evaluated.toLong() + budgetExcluded.size
+        val complete = stopReason == null && enumerated == space
+        return result(
+            complete = complete,
+            stop = if (complete) null else (stopReason ?: "enumeration_mismatch:$enumerated/$space"),
         )
     }
 
@@ -175,11 +215,11 @@ class ExhaustiveSearchOptimizer(
         const val MAX_POOL = 8
         const val MAX_INDEXES = 5
         const val VERIFICATION_DEADLINE = "verification_deadline"
-        private val TERMINAL_CODES = setOf(
-            ru.itmo.indexbudget.domain.ErrorCode.DEADLINE_EXCEEDED,
-            ru.itmo.indexbudget.domain.ErrorCode.CANCELLED,
-            ru.itmo.indexbudget.domain.ErrorCode.EXPLAIN_LIMIT,
-            ru.itmo.indexbudget.domain.ErrorCode.DB_CONNECTION_ERROR,
+        internal val TERMINAL_CODES = setOf(
+            ErrorCode.DEADLINE_EXCEEDED,
+            ErrorCode.CANCELLED,
+            ErrorCode.EXPLAIN_LIMIT,
+            ErrorCode.DB_CONNECTION_ERROR,
         )
     }
 }

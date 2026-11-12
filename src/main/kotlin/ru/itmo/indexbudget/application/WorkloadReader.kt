@@ -379,7 +379,7 @@ class WorkloadReader {
         if (rates == null) {
             invalid(location, "table_write_rates_origin requires table_write_rates.")
         }
-        if (rates!!.values.any { it.source != WriteRateSource.OBSERVED }) {
+        if (rates.values.any { it.source != WriteRateSource.OBSERVED }) {
             invalid(location, "An observed origin cannot label manual write rates.")
         }
         val window = objectNode(value.get("window"), location.child("window"),
@@ -398,14 +398,21 @@ class WorkloadReader {
                 }
                 reasonsNode.toList().map { string(it, location.child("reasons")) }
             } ?: emptyList(),
+            sourceId = value.get("source")?.let { source ->
+                objectNode(source, location.child("source"),
+                    setOf("source_id", "database_oid", "postgres_version")).get("source_id")
+                    ?.takeUnless { it.isNull }?.let {
+                        string(it, location.child("source").child("source_id"))
+                    }
+            },
             databaseOid = value.get("source")?.let { source ->
                 integer(objectNode(source, location.child("source"),
-                    setOf("database_oid", "postgres_version")).get("database_oid"),
+                    setOf("source_id", "database_oid", "postgres_version")).get("database_oid"),
                     location.child("source").child("database_oid"))
             },
             postgresVersion = value.get("source")?.let { source ->
                 string(objectNode(source, location.child("source"),
-                    setOf("database_oid", "postgres_version")).get("postgres_version"),
+                    setOf("source_id", "database_oid", "postgres_version")).get("postgres_version"),
                     location.child("source").child("postgres_version"))
             },
         )

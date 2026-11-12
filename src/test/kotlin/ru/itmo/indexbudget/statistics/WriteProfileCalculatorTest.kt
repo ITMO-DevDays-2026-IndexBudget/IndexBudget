@@ -39,6 +39,7 @@ class WriteProfileCalculatorTest {
         }
         assertEquals(3600.0, hour.periodSeconds, 1e-9)
         assertEquals(1800.0, half.periodSeconds, 1e-9)
+        assertEquals(UUID.fromString("00000000-0000-0000-0000-000000000001"), hour.sourceId)
         assertEquals(5.0, hour.rates.getValue("public.records").updatesPerHour, 1e-9)
         // HOT updates stay a historical diagnostic and never enter the rates.
         assertEquals(20.0, hour.hotUpdatesPerHour.getValue("public.records"), 1e-9)
@@ -80,6 +81,24 @@ class WriteProfileCalculatorTest {
     }
 
     @Test
+    fun `a decreased HOT counter proves a reset even after row counters recovered`() {
+        // A targeted reset between the snapshots: hot updates dropped from 90 to 0 while one
+        // non-HOT update already pushed n_tup_upd above its old value. The row deltas look
+        // positive (+1), but the window spans the reset, so no rate may be invented.
+        val profile = calculator.calculate(
+            snapshot(Instant.parse("2026-11-12T10:00:00Z"), updates = 100, hot = 90),
+            snapshot(Instant.parse("2026-11-12T11:00:00Z"), updates = 101, hot = 0),
+        )
+
+        assertFalse(profile.complete)
+        assertEquals(WriteProfileReason.COUNTER_DECREASE, profile.tableFaults.getValue("public.records"))
+        assertNull(profile.rates["public.records"])
+        assertNull(profile.hotUpdatesPerHour["public.records"])
+        // HOT is a window-consistency witness here, never an index price component.
+        assertTrue(profile.reasons.contains(WriteProfileReason.COUNTER_DECREASE))
+    }
+
+    @Test
     fun `a missing table on either side is unknown, not zero`() {
         val before = snapshot(Instant.parse("2026-11-12T10:00:00Z"))
             .let { it.copy(entries = it.entries + entry(16386, "public", "orders")) }
@@ -113,13 +132,16 @@ class WriteProfileCalculatorTest {
     fun `incompatible pairs and tracking failures are rejected as input errors`() {
         val base = snapshot(Instant.parse("2026-11-12T10:00:00Z"))
         val later = snapshot(Instant.parse("2026-11-12T11:00:00Z"))
+        val differentSource = later.copy(source = later.source.copy(sourceId = UUID.randomUUID()))
         val differentDatabase = later.copy(source = later.source.copy(databaseOid = 99999))
         val differentReader = later.copy(source = later.source.copy(readerUserid = 99))
         val trackingOff = later.copy(source = later.source.copy(trackCounts = false))
+        val trackingUnknown = later.copy(source = later.source.copy(trackCounts = null))
         val overlapping = snapshot(Instant.parse("2026-11-12T09:30:00Z"))
         val sameInstant = snapshot(Instant.parse("2026-11-12T10:00:00Z"))
 
-        for (after in listOf(base, differentDatabase, differentReader, trackingOff, overlapping, sameInstant)) {
+        for (after in listOf(base, differentSource, differentDatabase, differentReader, trackingOff,
+                trackingUnknown, overlapping, sameInstant)) {
             val error = assertThrows(AnalysisException::class.java) {
                 calculator.calculate(base, after)
             }
@@ -152,9 +174,13 @@ class WriteProfileCalculatorTest {
         }
 
         val trackingOff = write("off.json") { it.replace("\"track_counts\":true", "\"track_counts\":false") }
+        // Unknown tracking is not enabled tracking: a missing field or an explicit null must not
+        // turn unconfirmed counters into a trusted observed profile.
+        val trackingMissing = write("missing.json") { it.replace("\"track_counts\":true,", "") }
+        val trackingNull = write("null.json") { it.replace("\"track_counts\":true", "\"track_counts\":null") }
         val wrongKind = write("kind.json") { it.replace("pg_stat_user_tables_snapshot", "pg_stat_statements_snapshot") }
         val wrongCount = write("count.json") { it.replace("\"row_count\":1", "\"row_count\":2") }
-        for (path in listOf(trackingOff, wrongKind, wrongCount)) {
+        for (path in listOf(trackingOff, trackingMissing, trackingNull, wrongKind, wrongCount)) {
             val error = assertThrows(AnalysisException::class.java) { TableWriteSnapshotJson.read(path) }
             assertEquals(ErrorCode.INVALID_INPUT, error.error.code)
         }

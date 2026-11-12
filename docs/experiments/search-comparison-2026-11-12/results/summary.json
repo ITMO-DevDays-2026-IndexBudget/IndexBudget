@@ -7,6 +7,7 @@
     "max_selected_indexes" : 5,
     "own_deadline" : "PT10M",
     "deadline_source" : "Frozen test clock removes timing; the deadline path is covered by unit tests",
+    "verification_limits" : "Independent verification context: EXPLAIN budget covers exactly the declared space, command/search timeouts equal the verification deadline (spec §9.3)",
     "enumeration_order" : "subsets by size, then lexicographic sorted IDs; budget check before any evaluation"
   },
   "limitations" : [ "Synthetic resolved workloads and complete cost vectors; no PostgreSQL connection or EXPLAIN here.", "Greedy, greedy+repair, candidate generation, budgets, metrics and the comparator are production code.", "A combination has its own vector; single-index gains are never added.", "A frozen clock removes machine timing variation; durations are not performance measurements.", "Optimality claims are bounded to the fixed verified pool of each scenario.", "The ranking axis changes shortlist composition only and is recorded in its own section." ],
@@ -43,18 +44,25 @@
         "id" : "idx_a",
         "table" : "records",
         "columns" : [ "col_a" ],
-        "estimated_bytes" : 100
+        "estimated_bytes" : 100,
+        "budgeted_bytes" : 120,
+        "write_units_per_hour" : null
       }, {
         "id" : "idx_b",
         "table" : "records",
         "columns" : [ "col_b" ],
-        "estimated_bytes" : 100
+        "estimated_bytes" : 100,
+        "budgeted_bytes" : 120,
+        "write_units_per_hour" : null
       }, {
         "id" : "idx_c",
         "table" : "records",
         "columns" : [ "col_c" ],
-        "estimated_bytes" : 100
+        "estimated_bytes" : 100,
+        "budgeted_bytes" : 120,
+        "write_units_per_hour" : null
       } ],
+      "pool_size_attempts" : 3,
       "cost_vectors_by_sorted_ids" : {
         "" : {
           "q_one" : 100.0,
@@ -105,11 +113,14 @@
             "status" : "completed",
             "stop_reasons" : [ "MAX_INDEXES" ],
             "statistics" : {
+              "actual_explain_attempts" : 0,
               "evaluation_attempts" : 7,
               "completed_evaluations" : 7,
               "cache_hits" : 0,
               "repair_attempts" : 0
             },
+            "duration_millis" : 0,
+            "duration_source" : "Frozen test clock; not a performance measurement. Real-run costs live in results/real/real-summary.json",
             "evaluator_calls" : 7,
             "exhaustive" : null
           },
@@ -126,11 +137,14 @@
             "status" : "completed",
             "stop_reasons" : [ "MAX_INDEXES", "SEARCH_COMPLETE" ],
             "statistics" : {
+              "actual_explain_attempts" : 0,
               "evaluation_attempts" : 7,
               "completed_evaluations" : 7,
               "cache_hits" : 0,
               "repair_attempts" : 0
             },
+            "duration_millis" : 0,
+            "duration_source" : "Frozen test clock; not a performance measurement. Real-run costs live in results/real/real-summary.json",
             "evaluator_calls" : 7,
             "exhaustive" : null
           },
@@ -147,11 +161,14 @@
             "status" : "reference",
             "stop_reasons" : [ ],
             "statistics" : {
+              "actual_explain_attempts" : 0,
               "evaluation_attempts" : 8,
               "completed_evaluations" : 8,
               "cache_hits" : 0,
               "repair_attempts" : 0
             },
+            "duration_millis" : 0,
+            "duration_source" : "Frozen test clock; not a performance measurement. Real-run costs live in results/real/real-summary.json",
             "evaluator_calls" : 8,
             "exhaustive" : {
               "complete" : true,
@@ -178,11 +195,14 @@
             "status" : "completed",
             "stop_reasons" : [ "MAX_INDEXES" ],
             "statistics" : {
+              "actual_explain_attempts" : 0,
               "evaluation_attempts" : 7,
               "completed_evaluations" : 7,
               "cache_hits" : 0,
               "repair_attempts" : 0
             },
+            "duration_millis" : 0,
+            "duration_source" : "Frozen test clock; not a performance measurement. Real-run costs live in results/real/real-summary.json",
             "evaluator_calls" : 7,
             "exhaustive" : null
           },
@@ -199,11 +219,14 @@
             "status" : "completed",
             "stop_reasons" : [ "MAX_INDEXES", "SEARCH_COMPLETE" ],
             "statistics" : {
+              "actual_explain_attempts" : 0,
               "evaluation_attempts" : 7,
               "completed_evaluations" : 7,
               "cache_hits" : 0,
               "repair_attempts" : 0
             },
+            "duration_millis" : 0,
+            "duration_source" : "Frozen test clock; not a performance measurement. Real-run costs live in results/real/real-summary.json",
             "evaluator_calls" : 7,
             "exhaustive" : null
           },
@@ -220,11 +243,14 @@
             "status" : "reference",
             "stop_reasons" : [ ],
             "statistics" : {
+              "actual_explain_attempts" : 0,
               "evaluation_attempts" : 8,
               "completed_evaluations" : 8,
               "cache_hits" : 0,
               "repair_attempts" : 0
             },
+            "duration_millis" : 0,
+            "duration_source" : "Frozen test clock; not a performance measurement. Real-run costs live in results/real/real-summary.json",
             "evaluator_calls" : 8,
             "exhaustive" : {
               "complete" : true,
@@ -297,13 +323,18 @@
         "id" : "idx_a",
         "table" : "records",
         "columns" : [ "col_a" ],
-        "estimated_bytes" : 100
+        "estimated_bytes" : 100,
+        "budgeted_bytes" : 120,
+        "write_units_per_hour" : null
       }, {
         "id" : "idx_b",
         "table" : "records",
         "columns" : [ "col_b" ],
-        "estimated_bytes" : 100
+        "estimated_bytes" : 100,
+        "budgeted_bytes" : 120,
+        "write_units_per_hour" : null
       } ],
+      "pool_size_attempts" : 2,
       "cost_vectors_by_sorted_ids" : {
         "" : {
           "q_one" : 100.0,
@@ -338,11 +369,14 @@
             "status" : "completed",
             "stop_reasons" : [ "NO_IMPROVEMENT" ],
             "statistics" : {
+              "actual_explain_attempts" : 0,
               "evaluation_attempts" : 3,
               "completed_evaluations" : 3,
               "cache_hits" : 0,
               "repair_attempts" : 0
             },
+            "duration_millis" : 0,
+            "duration_source" : "Frozen test clock; not a performance measurement. Real-run costs live in results/real/real-summary.json",
             "evaluator_calls" : 3,
             "exhaustive" : null
           },
@@ -359,11 +393,14 @@
             "status" : "completed",
             "stop_reasons" : [ "NO_IMPROVEMENT", "SEARCH_COMPLETE" ],
             "statistics" : {
+              "actual_explain_attempts" : 0,
               "evaluation_attempts" : 4,
               "completed_evaluations" : 4,
               "cache_hits" : 0,
               "repair_attempts" : 1
             },
+            "duration_millis" : 0,
+            "duration_source" : "Frozen test clock; not a performance measurement. Real-run costs live in results/real/real-summary.json",
             "evaluator_calls" : 4,
             "exhaustive" : null
           },
@@ -380,11 +417,14 @@
             "status" : "reference",
             "stop_reasons" : [ ],
             "statistics" : {
+              "actual_explain_attempts" : 0,
               "evaluation_attempts" : 4,
               "completed_evaluations" : 4,
               "cache_hits" : 0,
               "repair_attempts" : 0
             },
+            "duration_millis" : 0,
+            "duration_source" : "Frozen test clock; not a performance measurement. Real-run costs live in results/real/real-summary.json",
             "evaluator_calls" : 4,
             "exhaustive" : {
               "complete" : true,
@@ -411,11 +451,14 @@
             "status" : "completed",
             "stop_reasons" : [ "NO_IMPROVEMENT" ],
             "statistics" : {
+              "actual_explain_attempts" : 0,
               "evaluation_attempts" : 3,
               "completed_evaluations" : 3,
               "cache_hits" : 0,
               "repair_attempts" : 0
             },
+            "duration_millis" : 0,
+            "duration_source" : "Frozen test clock; not a performance measurement. Real-run costs live in results/real/real-summary.json",
             "evaluator_calls" : 3,
             "exhaustive" : null
           },
@@ -432,11 +475,14 @@
             "status" : "completed",
             "stop_reasons" : [ "NO_IMPROVEMENT", "SEARCH_COMPLETE" ],
             "statistics" : {
+              "actual_explain_attempts" : 0,
               "evaluation_attempts" : 4,
               "completed_evaluations" : 4,
               "cache_hits" : 0,
               "repair_attempts" : 1
             },
+            "duration_millis" : 0,
+            "duration_source" : "Frozen test clock; not a performance measurement. Real-run costs live in results/real/real-summary.json",
             "evaluator_calls" : 4,
             "exhaustive" : null
           },
@@ -453,11 +499,14 @@
             "status" : "reference",
             "stop_reasons" : [ ],
             "statistics" : {
+              "actual_explain_attempts" : 0,
               "evaluation_attempts" : 4,
               "completed_evaluations" : 4,
               "cache_hits" : 0,
               "repair_attempts" : 0
             },
+            "duration_millis" : 0,
+            "duration_source" : "Frozen test clock; not a performance measurement. Real-run costs live in results/real/real-summary.json",
             "evaluator_calls" : 4,
             "exhaustive" : {
               "complete" : true,
@@ -530,18 +579,25 @@
         "id" : "idx_i",
         "table" : "records",
         "columns" : [ "col_i" ],
-        "estimated_bytes" : 100
+        "estimated_bytes" : 40,
+        "budgeted_bytes" : 48,
+        "write_units_per_hour" : null
       }, {
         "id" : "idx_j",
         "table" : "records",
         "columns" : [ "col_j" ],
-        "estimated_bytes" : 100
+        "estimated_bytes" : 25,
+        "budgeted_bytes" : 30,
+        "write_units_per_hour" : null
       }, {
         "id" : "idx_k",
         "table" : "records",
         "columns" : [ "col_k" ],
-        "estimated_bytes" : 100
+        "estimated_bytes" : 25,
+        "budgeted_bytes" : 30,
+        "write_units_per_hour" : null
       } ],
+      "pool_size_attempts" : 3,
       "cost_vectors_by_sorted_ids" : {
         "" : {
           "q_one" : 100.0,
@@ -592,11 +648,14 @@
             "status" : "completed",
             "stop_reasons" : [ "NO_IMPROVEMENT" ],
             "statistics" : {
+              "actual_explain_attempts" : 0,
               "evaluation_attempts" : 4,
               "completed_evaluations" : 4,
               "cache_hits" : 0,
               "repair_attempts" : 0
             },
+            "duration_millis" : 0,
+            "duration_source" : "Frozen test clock; not a performance measurement. Real-run costs live in results/real/real-summary.json",
             "evaluator_calls" : 4,
             "exhaustive" : null
           },
@@ -613,11 +672,14 @@
             "status" : "completed",
             "stop_reasons" : [ "NO_IMPROVEMENT", "SEARCH_COMPLETE" ],
             "statistics" : {
+              "actual_explain_attempts" : 0,
               "evaluation_attempts" : 5,
               "completed_evaluations" : 5,
               "cache_hits" : 2,
               "repair_attempts" : 1
             },
+            "duration_millis" : 0,
+            "duration_source" : "Frozen test clock; not a performance measurement. Real-run costs live in results/real/real-summary.json",
             "evaluator_calls" : 5,
             "exhaustive" : null
           },
@@ -634,11 +696,14 @@
             "status" : "reference",
             "stop_reasons" : [ ],
             "statistics" : {
+              "actual_explain_attempts" : 0,
               "evaluation_attempts" : 5,
               "completed_evaluations" : 5,
               "cache_hits" : 0,
               "repair_attempts" : 0
             },
+            "duration_millis" : 0,
+            "duration_source" : "Frozen test clock; not a performance measurement. Real-run costs live in results/real/real-summary.json",
             "evaluator_calls" : 5,
             "exhaustive" : {
               "complete" : true,
@@ -665,11 +730,14 @@
             "status" : "completed",
             "stop_reasons" : [ "NO_IMPROVEMENT" ],
             "statistics" : {
+              "actual_explain_attempts" : 0,
               "evaluation_attempts" : 4,
               "completed_evaluations" : 4,
               "cache_hits" : 0,
               "repair_attempts" : 0
             },
+            "duration_millis" : 0,
+            "duration_source" : "Frozen test clock; not a performance measurement. Real-run costs live in results/real/real-summary.json",
             "evaluator_calls" : 4,
             "exhaustive" : null
           },
@@ -686,11 +754,14 @@
             "status" : "completed",
             "stop_reasons" : [ "NO_IMPROVEMENT", "SEARCH_COMPLETE" ],
             "statistics" : {
+              "actual_explain_attempts" : 0,
               "evaluation_attempts" : 5,
               "completed_evaluations" : 5,
               "cache_hits" : 2,
               "repair_attempts" : 1
             },
+            "duration_millis" : 0,
+            "duration_source" : "Frozen test clock; not a performance measurement. Real-run costs live in results/real/real-summary.json",
             "evaluator_calls" : 5,
             "exhaustive" : null
           },
@@ -707,11 +778,14 @@
             "status" : "reference",
             "stop_reasons" : [ ],
             "statistics" : {
+              "actual_explain_attempts" : 0,
               "evaluation_attempts" : 5,
               "completed_evaluations" : 5,
               "cache_hits" : 0,
               "repair_attempts" : 0
             },
+            "duration_millis" : 0,
+            "duration_source" : "Frozen test clock; not a performance measurement. Real-run costs live in results/real/real-summary.json",
             "evaluator_calls" : 5,
             "exhaustive" : {
               "complete" : true,
@@ -784,13 +858,18 @@
         "id" : "idx_a",
         "table" : "records",
         "columns" : [ "col_a" ],
-        "estimated_bytes" : 100
+        "estimated_bytes" : 100,
+        "budgeted_bytes" : 120,
+        "write_units_per_hour" : null
       }, {
         "id" : "idx_b",
         "table" : "records",
         "columns" : [ "col_b" ],
-        "estimated_bytes" : 100
+        "estimated_bytes" : 100,
+        "budgeted_bytes" : 120,
+        "write_units_per_hour" : null
       } ],
+      "pool_size_attempts" : 2,
       "cost_vectors_by_sorted_ids" : {
         "" : {
           "q_one" : 100.0,
@@ -825,11 +904,14 @@
             "status" : "completed",
             "stop_reasons" : [ "NO_IMPROVEMENT" ],
             "statistics" : {
+              "actual_explain_attempts" : 0,
               "evaluation_attempts" : 3,
               "completed_evaluations" : 3,
               "cache_hits" : 0,
               "repair_attempts" : 0
             },
+            "duration_millis" : 0,
+            "duration_source" : "Frozen test clock; not a performance measurement. Real-run costs live in results/real/real-summary.json",
             "evaluator_calls" : 3,
             "exhaustive" : null
           },
@@ -846,11 +928,14 @@
             "status" : "completed",
             "stop_reasons" : [ "NO_IMPROVEMENT", "SEARCH_COMPLETE" ],
             "statistics" : {
+              "actual_explain_attempts" : 0,
               "evaluation_attempts" : 4,
               "completed_evaluations" : 4,
               "cache_hits" : 0,
               "repair_attempts" : 1
             },
+            "duration_millis" : 0,
+            "duration_source" : "Frozen test clock; not a performance measurement. Real-run costs live in results/real/real-summary.json",
             "evaluator_calls" : 4,
             "exhaustive" : null
           },
@@ -867,11 +952,14 @@
             "status" : "reference",
             "stop_reasons" : [ ],
             "statistics" : {
+              "actual_explain_attempts" : 0,
               "evaluation_attempts" : 4,
               "completed_evaluations" : 4,
               "cache_hits" : 0,
               "repair_attempts" : 0
             },
+            "duration_millis" : 0,
+            "duration_source" : "Frozen test clock; not a performance measurement. Real-run costs live in results/real/real-summary.json",
             "evaluator_calls" : 4,
             "exhaustive" : {
               "complete" : true,
@@ -898,11 +986,14 @@
             "status" : "completed",
             "stop_reasons" : [ "NO_IMPROVEMENT" ],
             "statistics" : {
+              "actual_explain_attempts" : 0,
               "evaluation_attempts" : 3,
               "completed_evaluations" : 3,
               "cache_hits" : 0,
               "repair_attempts" : 0
             },
+            "duration_millis" : 0,
+            "duration_source" : "Frozen test clock; not a performance measurement. Real-run costs live in results/real/real-summary.json",
             "evaluator_calls" : 3,
             "exhaustive" : null
           },
@@ -919,11 +1010,14 @@
             "status" : "completed",
             "stop_reasons" : [ "NO_IMPROVEMENT", "SEARCH_COMPLETE" ],
             "statistics" : {
+              "actual_explain_attempts" : 0,
               "evaluation_attempts" : 4,
               "completed_evaluations" : 4,
               "cache_hits" : 0,
               "repair_attempts" : 1
             },
+            "duration_millis" : 0,
+            "duration_source" : "Frozen test clock; not a performance measurement. Real-run costs live in results/real/real-summary.json",
             "evaluator_calls" : 4,
             "exhaustive" : null
           },
@@ -940,11 +1034,14 @@
             "status" : "reference",
             "stop_reasons" : [ ],
             "statistics" : {
+              "actual_explain_attempts" : 0,
               "evaluation_attempts" : 4,
               "completed_evaluations" : 4,
               "cache_hits" : 0,
               "repair_attempts" : 0
             },
+            "duration_millis" : 0,
+            "duration_source" : "Frozen test clock; not a performance measurement. Real-run costs live in results/real/real-summary.json",
             "evaluator_calls" : 4,
             "exhaustive" : {
               "complete" : true,
@@ -1035,43 +1132,60 @@
         "id" : "00262e48c742f8c742c4f357f33bf435af6476cd55e27c52fd95791d4e4ad40b",
         "table" : "rare",
         "columns" : [ "c13", "c11" ],
-        "estimated_bytes" : null
+        "estimated_bytes" : 100,
+        "budgeted_bytes" : 120,
+        "write_units_per_hour" : 6.0
       }, {
         "id" : "002f4bf74999b34a856649383e8d84b841fdefc33d5421c2b012b2f608fecc37",
         "table" : "rare",
         "columns" : [ "c16", "c9" ],
-        "estimated_bytes" : null
+        "estimated_bytes" : 100,
+        "budgeted_bytes" : 120,
+        "write_units_per_hour" : 6.0
       }, {
         "id" : "01f55b19022c2b7cd4789b250f4040ae898023a694e5a2b96cfcf181ce78473d",
         "table" : "cheap",
         "columns" : [ "c16", "c2" ],
-        "estimated_bytes" : null
+        "estimated_bytes" : 100,
+        "budgeted_bytes" : 120,
+        "write_units_per_hour" : 6.0
       }, {
         "id" : "0205c749ac638d572a8f750afa8859623f684cbac32a08e17cf9df44c0b0e2af",
         "table" : "cheap",
         "columns" : [ "c10", "c1" ],
-        "estimated_bytes" : null
+        "estimated_bytes" : 100,
+        "budgeted_bytes" : 120,
+        "write_units_per_hour" : 6.0
       }, {
         "id" : "15dbb32d6ea7a7ff5ee0a7ab613b59e9219ecc9b0035ea88855e8a508d5999f0",
         "table" : "rare",
         "columns" : [ "c12" ],
-        "estimated_bytes" : null
+        "estimated_bytes" : 100,
+        "budgeted_bytes" : 120,
+        "write_units_per_hour" : 3.0
       }, {
         "id" : "17fd18f90452478e1b3420f388e80b5884e360384fcee0f9fc5ec47ba93739bb",
         "table" : "rare",
         "columns" : [ "c13" ],
-        "estimated_bytes" : null
+        "estimated_bytes" : 100,
+        "budgeted_bytes" : 120,
+        "write_units_per_hour" : 3.0
       }, {
         "id" : "3e7bf565d71270a212e8a0f92b4de4b7ed657e6b15967f36fd695833b1dcb7e6",
         "table" : "cheap",
         "columns" : [ "c11" ],
-        "estimated_bytes" : null
+        "estimated_bytes" : 100,
+        "budgeted_bytes" : 120,
+        "write_units_per_hour" : 3.0
       }, {
         "id" : "3f43c268fa3df8fa7fc3a6754f580f47c3c5f758e9b4f033d7b8b8c004c1dafc",
         "table" : "cheap",
         "columns" : [ "c15" ],
-        "estimated_bytes" : null
+        "estimated_bytes" : 100,
+        "budgeted_bytes" : 120,
+        "write_units_per_hour" : 3.0
       } ],
+      "pool_size_attempts" : 8,
       "cost_vectors_by_sorted_ids" : {
         "empty" : {
           "cheap" : 1.0,
@@ -1106,11 +1220,14 @@
             "status" : "completed",
             "stop_reasons" : [ "NO_IMPROVEMENT" ],
             "statistics" : {
+              "actual_explain_attempts" : 0,
               "evaluation_attempts" : 22,
               "completed_evaluations" : 22,
               "cache_hits" : 0,
               "repair_attempts" : 0
             },
+            "duration_millis" : 0,
+            "duration_source" : "Frozen test clock; not a performance measurement. Real-run costs live in results/real/real-summary.json",
             "evaluator_calls" : 22,
             "exhaustive" : null
           },
@@ -1127,11 +1244,14 @@
             "status" : "partial",
             "stop_reasons" : [ "NO_IMPROVEMENT", "REPAIR_LIMIT" ],
             "statistics" : {
+              "actual_explain_attempts" : 0,
               "evaluation_attempts" : 50,
               "completed_evaluations" : 50,
               "cache_hits" : 6,
               "repair_attempts" : 28
             },
+            "duration_millis" : 0,
+            "duration_source" : "Frozen test clock; not a performance measurement. Real-run costs live in results/real/real-summary.json",
             "evaluator_calls" : 50,
             "exhaustive" : null
           },
@@ -1148,11 +1268,14 @@
             "status" : "reference",
             "stop_reasons" : [ ],
             "statistics" : {
+              "actual_explain_attempts" : 0,
               "evaluation_attempts" : 219,
               "completed_evaluations" : 219,
               "cache_hits" : 0,
               "repair_attempts" : 0
             },
+            "duration_millis" : 0,
+            "duration_source" : "Frozen test clock; not a performance measurement. Real-run costs live in results/real/real-summary.json",
             "evaluator_calls" : 219,
             "exhaustive" : {
               "complete" : true,
@@ -1179,11 +1302,14 @@
             "status" : "completed",
             "stop_reasons" : [ "NO_IMPROVEMENT" ],
             "statistics" : {
+              "actual_explain_attempts" : 0,
               "evaluation_attempts" : 16,
               "completed_evaluations" : 16,
               "cache_hits" : 0,
               "repair_attempts" : 0
             },
+            "duration_millis" : 0,
+            "duration_source" : "Frozen test clock; not a performance measurement. Real-run costs live in results/real/real-summary.json",
             "evaluator_calls" : 16,
             "exhaustive" : null
           },
@@ -1200,11 +1326,14 @@
             "status" : "partial",
             "stop_reasons" : [ "NO_IMPROVEMENT", "REPAIR_LIMIT" ],
             "statistics" : {
+              "actual_explain_attempts" : 0,
               "evaluation_attempts" : 44,
               "completed_evaluations" : 44,
               "cache_hits" : 7,
               "repair_attempts" : 28
             },
+            "duration_millis" : 0,
+            "duration_source" : "Frozen test clock; not a performance measurement. Real-run costs live in results/real/real-summary.json",
             "evaluator_calls" : 44,
             "exhaustive" : null
           },
@@ -1221,11 +1350,14 @@
             "status" : "reference",
             "stop_reasons" : [ ],
             "statistics" : {
+              "actual_explain_attempts" : 0,
               "evaluation_attempts" : 219,
               "completed_evaluations" : 219,
               "cache_hits" : 0,
               "repair_attempts" : 0
             },
+            "duration_millis" : 0,
+            "duration_source" : "Frozen test clock; not a performance measurement. Real-run costs live in results/real/real-summary.json",
             "evaluator_calls" : 219,
             "exhaustive" : {
               "complete" : true,

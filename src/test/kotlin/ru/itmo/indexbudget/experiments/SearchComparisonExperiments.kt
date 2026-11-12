@@ -64,15 +64,21 @@ class SearchComparisonExperiments {
         val scenarios = linkedMapOf<String, Any?>()
         for (scenario in Scenario.entries) {
             val fixture = fixture(scenario)
+            // The prepared pool is sized once per scenario and shared by every strategy and the
+            // artifact, so the saved sizes always match the budgets the searches actually used.
+            val (prepared, sizeAttempts) = preparePool(fixture)
             val runs = Objective.entries.associateWith { objective ->
-                Strategy.entries.associateWith { strategy -> runStrategy(scenario, fixture, objective, strategy) }
+                Strategy.entries.associateWith { strategy ->
+                    runStrategy(scenario, fixture, prepared, objective, strategy)
+                }
             }
             val exhaustive = runs.getValue(Objective.ROBUST).getValue(Strategy.EXHAUSTIVE).reference
             check(requireNotNull(exhaustive).complete) { "${scenario.name}: the reference must complete its space" }
             val summary = linkedMapOf<String, Any?>(
                 "description" to scenario.description,
                 "input" to inputSummary(fixture.input),
-                "fixed_pool" to fixture.pool.map(::candidateSummary),
+                "fixed_pool" to prepared.map(::candidateSummary),
+                "pool_size_attempts" to sizeAttempts,
                 "cost_vectors_by_sorted_ids" to fixture.vectorTable(),
                 "search_space_subsets" to exhaustive.searchSpaceSize,
                 "runs" to runs.entries.associate { (objective, byStrategy) ->
@@ -80,7 +86,7 @@ class SearchComparisonExperiments {
                         strategy.wireName to runSummary(run)
                     }
                 },
-                "comparison" to comparison(runs, fixture),
+                "comparison" to comparison(runs, fixture, prepared),
             )
             if (scenario == Scenario.WIDE_RARE) {
                 summary["ranking_composition"] = rankingComposition(fixture)
@@ -96,6 +102,8 @@ class SearchComparisonExperiments {
                 "max_selected_indexes" to ExhaustiveSearchOptimizer.MAX_INDEXES,
                 "own_deadline" to VERIFICATION_TIMEOUT.toString(),
                 "deadline_source" to "Frozen test clock removes timing; the deadline path is covered by unit tests",
+                "verification_limits" to "Independent verification context: EXPLAIN budget covers exactly " +
+                    "the declared space, command/search timeouts equal the verification deadline (spec §9.3)",
                 "enumeration_order" to "subsets by size, then lexicographic sorted IDs; budget check before any evaluation",
             ),
             "limitations" to listOf(
@@ -136,9 +144,29 @@ class SearchComparisonExperiments {
         val reference: ExhaustiveSearchResult?,
     )
 
+    /** Sizes the fixed pool once per scenario through the fixture session; deterministic. */
+    private fun preparePool(fixture: Fixture): Pair<List<IndexCandidate>, Int> {
+        val context = RunContext(clock = NanoClock { 0L })
+        context.startSearch()
+        context.enterPhase(AnalysisPhase.CANDIDATES)
+        val session = fixture.newSession()
+        // Search strategies only ever see admissible singletons; whole-pool admissibility is
+        // not required (the budget scenario exists precisely because some pairs cannot fit).
+        val prepared = fixture.pool.map { candidate ->
+            val sized = candidate.copy(estimatedBytes = session.estimateSize(candidate, context))
+            val budget = metrics.assessBudget(listOf(sized), fixture.input)
+            check(budget.admissible) { "Fixture singletons must remain individually admissible" }
+            sized.copy(budgetedBytes = budget.usage.budgetedBytes,
+                writeUnitsPerHour = budget.usage.writeUnitsPerHour)
+        }
+        context.completePhase()
+        return prepared to session.sizeAttempts
+    }
+
     private fun runStrategy(
         scenario: Scenario,
         fixture: Fixture,
+        prepared: List<IndexCandidate>,
         objective: Objective,
         strategy: Strategy,
     ): RunObservation {
@@ -149,18 +177,6 @@ class SearchComparisonExperiments {
         context.enterPhase(AnalysisPhase.BASELINE)
         val session = fixture.newSession()
         val baseline = session.evaluate(emptyList(), workload, context)
-        context.completePhase()
-        context.enterPhase(AnalysisPhase.CANDIDATES)
-        val pool = fixture.pool
-        val sized = pool.map { it.copy(estimatedBytes = session.estimateSize(it, context)) }
-        // Search strategies only ever see admissible singletons; whole-pool admissibility is
-        // not required (the budget scenario exists precisely because some pairs cannot fit).
-        val prepared = sized.map { candidate ->
-            val budget = metrics.assessBudget(listOf(candidate), input)
-            check(budget.admissible) { "Fixture singletons must remain individually admissible" }
-            candidate.copy(budgetedBytes = budget.usage.budgetedBytes,
-                writeUnitsPerHour = budget.usage.writeUnitsPerHour)
-        }
         context.completePhase()
 
         val observation = when (strategy) {
@@ -181,7 +197,8 @@ class SearchComparisonExperiments {
                 summarizeSearch(strategy, objective, null, context, session, reference)
             }
         }
-        check(session.calls.size == context.statistics().evaluationAttempts) {
+        check(session.calls.size == context.statistics().evaluationAttempts +
+            (observation.reference?.statistics?.evaluationAttempts ?: 0)) {
             "Every evaluation attempt must reach the fixture session exactly once"
         }
         check(session.calls.distinct().size == session.calls.size) {
@@ -205,6 +222,15 @@ class SearchComparisonExperiments {
             reference != null -> reference.selected(objective)
             else -> error("unreachable")
         }
+        val runStatistics = context.statistics()
+        val referenceStatistics = reference?.statistics
+        val statistics = if (referenceStatistics == null) runStatistics else RunStatistics(
+            explainAttempts = runStatistics.explainAttempts + referenceStatistics.explainAttempts,
+            evaluationAttempts = runStatistics.evaluationAttempts + referenceStatistics.evaluationAttempts,
+            completedEvaluations = runStatistics.completedEvaluations + referenceStatistics.completedEvaluations,
+            cacheHits = runStatistics.cacheHits + referenceStatistics.cacheHits,
+            repairAttempts = runStatistics.repairAttempts + referenceStatistics.repairAttempts,
+        )
         return RunObservation(
             strategy = strategy,
             objective = objective,
@@ -214,7 +240,7 @@ class SearchComparisonExperiments {
             bestRobustIds = requireNotNull(robust).evaluation.candidateIds,
             bestMeanIds = requireNotNull(mean).evaluation.candidateIds,
             metricsOfSelected = selected.metrics,
-            statistics = context.statistics(),
+            statistics = statistics,
             evaluatorCalls = session.calls.size,
             reference = reference,
         )
@@ -236,11 +262,15 @@ class SearchComparisonExperiments {
             "status" to run.status,
             "stop_reasons" to run.stopReasons,
             "statistics" to mapOf(
+                "actual_explain_attempts" to run.statistics.explainAttempts,
                 "evaluation_attempts" to run.statistics.evaluationAttempts,
                 "completed_evaluations" to run.statistics.completedEvaluations,
                 "cache_hits" to run.statistics.cacheHits,
                 "repair_attempts" to run.statistics.repairAttempts,
             ),
+            "duration_millis" to 0,
+            "duration_source" to "Frozen test clock; not a performance measurement. " +
+                "Real-run costs live in results/real/real-summary.json",
             "evaluator_calls" to run.evaluatorCalls,
             "exhaustive" to run.reference?.let { reference ->
                 linkedMapOf(
@@ -259,6 +289,7 @@ class SearchComparisonExperiments {
     private fun comparison(
         runs: Map<Objective, Map<Strategy, RunObservation>>,
         fixture: Fixture,
+        prepared: List<IndexCandidate>,
     ): Map<String, Any?> = Objective.entries.associateWith { objective ->
         val byStrategy = runs.getValue(objective)
         val exhaustive = byStrategy.getValue(Strategy.EXHAUSTIVE)
@@ -282,7 +313,7 @@ class SearchComparisonExperiments {
     }.let { byObjective ->
         linkedMapOf(
             "same_sql_pool_objective_budgets_limits_between_strategies" to true,
-            "pool_ids" to fixture.pool.map { it.id },
+            "pool_ids" to prepared.map { it.id },
             "by_objective" to byObjective.mapKeys { it.key.name.lowercase() },
         )
     }
@@ -321,6 +352,8 @@ class SearchComparisonExperiments {
         "table" to candidate.definition.table.name,
         "columns" to candidate.definition.keys.map { it.column.name },
         "estimated_bytes" to candidate.estimatedBytes,
+        "budgeted_bytes" to candidate.budgetedBytes,
+        "write_units_per_hour" to candidate.writeUnitsPerHour,
     )
 
     private fun inputSummary(input: WorkloadInput): Map<String, Any?> = linkedMapOf(

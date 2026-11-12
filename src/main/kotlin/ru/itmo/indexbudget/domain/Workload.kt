@@ -13,6 +13,8 @@ data class WriteRatesOrigin(
     val periodSeconds: Double,
     val complete: Boolean,
     val reasons: List<String>,
+    /** Collector source UUID of the window; compared against the read windows at import time. */
+    val sourceId: String? = null,
     val databaseOid: Long? = null,
     val postgresVersion: String? = null,
 )
