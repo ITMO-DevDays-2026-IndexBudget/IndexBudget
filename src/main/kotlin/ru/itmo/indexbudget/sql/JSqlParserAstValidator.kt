@@ -62,34 +62,14 @@ internal class JSqlParserAstValidator(
             val kind: StatementKind
             when (statement) {
                 is Update -> {
-                    if (!statement.withItemsList.isNullOrEmpty() || statement.fromItem != null || !statement.joins.isNullOrEmpty() ||
-                        !statement.startJoins.isNullOrEmpty() || statement.returningClause != null || statement.outputClause != null ||
-                        statement.select != null || statement.isUseSelect || statement.isFromBeforeSet ||
-                        !statement.orderByElements.isNullOrEmpty() || statement.limit != null || statement.option != null ||
-                        statement.forPortionClause != null || statement.preferringClause != null || statement.oracleHint != null ||
-                        statement.modifierPriority != null || statement.isModifierIgnore)
-                        fail(ErrorCode.UNSUPPORTED_SQL, "Only one-table literal SET UPDATE with WHERE is supported.")
-                    val sets = statement.updateSets.orEmpty()
-                    if (sets.isEmpty() || sets.size > 256) fail(ErrorCode.INPUT_LIMIT_EXCEEDED, "UPDATE requires 1–256 SET assignments.")
-                    assignments = sets.map {
-                        context.checkDeadline()
-                        // Preserve tuple shape even for a single target: SET (column) = (value).
-                        if (it.columns is ParenthesedExpressionList<*> || it.columns.size != 1 || it.values.size != 1)
-                            fail(ErrorCode.UNSUPPORTED_SQL, "Tuple SET assignments are unsupported.")
-                        it.columns.single() to it.values.single()
-                    }
+                    validateUpdate(statement)
+                    assignments = readUpdateAssignments(statement)
                     target = statement.table
                     where = statement.where
                     kind = StatementKind.UPDATE
                 }
                 is Delete -> {
-                    if (!statement.withItemsList.isNullOrEmpty() || !statement.tables.isNullOrEmpty() ||
-                        !statement.usingFromItemList.isNullOrEmpty() || !statement.joins.isNullOrEmpty() || !statement.isHasFrom ||
-                        statement.returningClause != null || statement.outputClause != null || !statement.orderByElements.isNullOrEmpty() ||
-                        statement.limit != null || statement.option != null || statement.forPortionClause != null ||
-                        statement.preferringClause != null || statement.oracleHint != null || statement.modifierPriority != null ||
-                        statement.isModifierIgnore || statement.isModifierQuick)
-                        fail(ErrorCode.UNSUPPORTED_SQL, "Only DELETE FROM one table with WHERE is supported.")
+                    validateDelete(statement)
                     target = statement.table
                     where = statement.where
                     assignments = emptyList()
@@ -111,6 +91,85 @@ internal class JSqlParserAstValidator(
             }
             return ValidatedSql(statement, scope, tables, kind, assignments)
         } finally { allowTemplateParameters = false }
+    }
+
+    private fun validateUpdate(update: Update) {
+        validateUpdateSources(update)
+        validateUpdateClauses(update)
+        validateUpdateDialect(update)
+    }
+
+    private fun validateUpdateSources(update: Update) {
+        if (!update.withItemsList.isNullOrEmpty() || update.fromItem != null ||
+            !update.joins.isNullOrEmpty() || !update.startJoins.isNullOrEmpty()
+        ) {
+            fail(ErrorCode.UNSUPPORTED_SQL, UPDATE_SHAPE_ERROR)
+        }
+    }
+
+    private fun validateUpdateClauses(update: Update) {
+        if (update.returningClause != null || update.outputClause != null ||
+            update.select != null || update.isUseSelect || update.isFromBeforeSet ||
+            !update.orderByElements.isNullOrEmpty() || update.limit != null
+        ) {
+            fail(ErrorCode.UNSUPPORTED_SQL, UPDATE_SHAPE_ERROR)
+        }
+    }
+
+    private fun validateUpdateDialect(update: Update) {
+        if (update.option != null || update.forPortionClause != null || update.preferringClause != null ||
+            update.oracleHint != null || update.modifierPriority != null || update.isModifierIgnore
+        ) {
+            fail(ErrorCode.UNSUPPORTED_SQL, UPDATE_SHAPE_ERROR)
+        }
+    }
+
+    private fun readUpdateAssignments(update: Update): List<Pair<Column, Expression>> {
+        val sets = update.updateSets.orEmpty()
+        if (sets.isEmpty() || sets.size > MAX_SET_ASSIGNMENTS) {
+            fail(ErrorCode.INPUT_LIMIT_EXCEEDED, "UPDATE requires 1–256 SET assignments.")
+        }
+        return sets.map { assignment ->
+            context.checkDeadline()
+            // Preserve tuple shape even for a single target: SET (column) = (value).
+            if (assignment.columns is ParenthesedExpressionList<*> ||
+                assignment.columns.size != 1 || assignment.values.size != 1
+            ) {
+                fail(ErrorCode.UNSUPPORTED_SQL, "Tuple SET assignments are unsupported.")
+            }
+            assignment.columns.single() to assignment.values.single()
+        }
+    }
+
+    private fun validateDelete(delete: Delete) {
+        validateDeleteSources(delete)
+        validateDeleteClauses(delete)
+        validateDeleteDialect(delete)
+    }
+
+    private fun validateDeleteSources(delete: Delete) {
+        if (!delete.withItemsList.isNullOrEmpty() || !delete.tables.isNullOrEmpty() ||
+            !delete.usingFromItemList.isNullOrEmpty() || !delete.joins.isNullOrEmpty() || !delete.isHasFrom
+        ) {
+            fail(ErrorCode.UNSUPPORTED_SQL, DELETE_SHAPE_ERROR)
+        }
+    }
+
+    private fun validateDeleteClauses(delete: Delete) {
+        if (delete.returningClause != null || delete.outputClause != null ||
+            !delete.orderByElements.isNullOrEmpty() || delete.limit != null
+        ) {
+            fail(ErrorCode.UNSUPPORTED_SQL, DELETE_SHAPE_ERROR)
+        }
+    }
+
+    private fun validateDeleteDialect(delete: Delete) {
+        if (delete.option != null || delete.forPortionClause != null || delete.preferringClause != null ||
+            delete.oracleHint != null || delete.modifierPriority != null ||
+            delete.isModifierIgnore || delete.isModifierQuick
+        ) {
+            fail(ErrorCode.UNSUPPORTED_SQL, DELETE_SHAPE_ERROR)
+        }
     }
 
     /** Import-only validation before literal binding; ordinary SQL validation remains strict. */
@@ -509,6 +568,9 @@ internal class JSqlParserAstValidator(
         throw AnalysisException(AnalysisError(code, message, queryId = queryId))
 
     private companion object {
+        const val MAX_SET_ASSIGNMENTS = 256
+        const val UPDATE_SHAPE_ERROR = "Only one-table literal SET UPDATE with WHERE is supported."
+        const val DELETE_SHAPE_ERROR = "Only DELETE FROM one table with WHERE is supported."
         const val MAX_COMPARISONS = ConditionLimits.MAX_COMPLEXITY
         const val MAX_TABLES = 3
         const val MAX_ORDER_BY_COLUMNS = 2
