@@ -618,7 +618,7 @@ function setBusy(value) {
 }
 
 // A UI easter egg only. The CLI remains responsible for SQL validation.
-function startsWithDropTable(sql) {
+function startsWithDrop(sql) {
   if (typeof sql !== 'string') return false;
   let index = 0;
   const word = () => {
@@ -642,14 +642,14 @@ function startsWithDropTable(sql) {
     index += match[0].length;
     return match[0].toUpperCase();
   };
-  return word() === 'DROP' && word() === 'TABLE';
+  return word() === 'DROP';
 }
 
 async function launch(kind) {
   if (busy) return;
   let request;
   try { request = requestSnapshot(); } catch(e) { error(e.message); return; }
-  if (request.workload.queries.some(query => startsWithDropTable(query.sql))) {
+  if (request.workload.queries.some(query => startsWithDrop(query.sql))) {
     persist();
     window.location.assign('/drop-table.jpg');
     return;
