@@ -15,6 +15,30 @@ import java.util.UUID
 class SnapshotCaptureRunnerTest {
     @TempDir lateinit var directory: Path
 
+    @Test
+    fun `single capture publishes once without requiring an interval or waiting`() {
+        val output = directory.resolve("single")
+        var calls = 0
+        val runner = SnapshotCaptureRunner(ShutdownCancellation { AutoCloseable {} }) {
+            error("Single capture must not wait")
+        }
+        val code = runner.execute(
+            requestFactory = { CaptureRequest(UUID.randomUUID(), output, null, SnapshotLimits()) },
+            collect = { _, _ -> ++calls },
+            render = { "$it".toByteArray() },
+            isComplete = { true },
+            completionStatus = { "completed" },
+            manifest = { saved, status, error, interval -> "$status:$error:$interval:${saved.size}".toByteArray() },
+            out = PrintWriter(StringWriter()),
+            err = PrintWriter(StringWriter()),
+        )
+        assertEquals(0, code)
+        assertEquals(1, calls)
+        assertEquals("1", Files.readString(output.resolve("snapshot-1.json")))
+        assertFalse(Files.exists(output.resolve("snapshot-2.json")))
+        assertEquals("completed:null:null:1", Files.readString(output.resolve("capture.json")))
+    }
+
     @Test fun `cancellation while waiting preserves the first file and unregisters the hook`() {
         var cancel: () -> Unit = {}
         var unregistered = false

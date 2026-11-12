@@ -87,7 +87,7 @@ class StatisticsIntegrationTest {
         val missing = JdbcStatisticsCollector({ DriverManager.getConnection(url.replace("/stats_test", "/postgres"), "postgres", "").also { opened = it } })
         val error = assertThrows(AnalysisException::class.java) { missing.collect(source, SnapshotLimits(), RunContext()) }
         assertEquals(ErrorCode.STATISTICS_UNAVAILABLE, error.error.code)
-        assertTrue(opened!!.isClosed)
+        assertTrue(checkNotNull(opened) { "Expected opened to be available" }.isClosed)
     }
 
     @Test fun `real cursor stops at explicit row limit without complete status`() {

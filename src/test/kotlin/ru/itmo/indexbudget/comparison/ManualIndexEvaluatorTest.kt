@@ -30,9 +30,9 @@ class ManualIndexEvaluatorTest {
         val result = service.evaluate(prepared, workload, baseline, session, metrics, RunContext()) {}
         assertEquals(1, session.calls)
         assertEquals(2, session.evaluated.size)
-        assertEquals(prepared.candidates.map { it.id }, result.evaluation!!.candidateIds)
+        assertEquals(prepared.candidates.map { it.id }, checkNotNull(result.evaluation) { "Expected evaluation to be available" }.candidateIds)
         assertTrue(result.admissible)
-        assertEquals(2, result.metrics!!.budgetUsage.indexCount)
+        assertEquals(2, checkNotNull(result.metrics) { "Expected metrics to be available" }.budgetUsage.indexCount)
         val report = DefaultReportBuilder().build(workload.input, CandidateBatch(ContractFixtures.candidates()), search,
             RunContext()).copy(manualComparison = result)
         assertSame(search, report.result)
@@ -100,7 +100,7 @@ class ManualIndexEvaluatorTest {
         val prepared = service.prepare(listOf(definition), catalog, workload, RunContext())
         val result = service.evaluate(prepared, workload, baseline, FakeSession(fail = true), metrics, RunContext()) {}
         assertEquals(ManualComparisonStatus.FAILED, result.status)
-        assertEquals(ErrorCode.EXPLAIN_FAILED, result.error!!.code)
+        assertEquals(ErrorCode.EXPLAIN_FAILED, checkNotNull(result.error) { "Expected error to be available" }.code)
         assertNull(result.evaluation)
         assertNull(result.metrics)
         assertFalse(result.admissible)
@@ -113,7 +113,7 @@ class ManualIndexEvaluatorTest {
         val path = directory.resolve("input.json")
         Files.writeString(path, text)
         val input = WorkloadReader().read(path)
-        assertEquals(NullsOrder.FIRST, input.manualIndexes!!.single().keys.single().nulls)
+        assertEquals(NullsOrder.FIRST, checkNotNull(input.manualIndexes) { "Expected manualIndexes to be available" }.single().keys.single().nulls)
         Files.writeString(path, text.replace("\"column\":\"value\"", "\"column\":\"value\",\"operator_class\":\"injected\""))
         assertThrows(AnalysisException::class.java) { WorkloadReader().read(path) }
     }
@@ -124,7 +124,7 @@ class ManualIndexEvaluatorTest {
         for (name in listOf(" ", "\t", " Mixed Имя ", "😀")) {
             val quoted = JsonMapper().writeValueAsString(name)
             Files.writeString(path, source + ",\"manual_indexes\":[{\"schema\":$quoted,\"table\":$quoted,\"keys\":[{\"column\":$quoted}]}]}")
-            val definition = WorkloadReader().read(path).manualIndexes!!.single()
+            val definition = checkNotNull(WorkloadReader().read(path).manualIndexes) { "Expected manualIndexes to be available" }.single()
             assertEquals(TableRef(name, name), definition.table)
             assertEquals(name, definition.keys.single().column.name)
         }

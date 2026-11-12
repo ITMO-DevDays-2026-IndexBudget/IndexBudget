@@ -43,7 +43,7 @@ class IndexMethodsReportTest {
                 input.copy(constraints = input.constraints.copy(storageBudgetBytes = 0)) else input
             val report = DefaultReportBuilder().build(effectiveInput, source.candidates, result, RunContext())
             assertNotNull(report.result.selected)
-            assertTrue(report.result.selected!!.evaluation.candidateIds.isEmpty())
+            assertTrue(checkNotNull(report.result.selected) { "Expected selected to be available" }.evaluation.candidateIds.isEmpty())
             assertEquals(result.diagnostics.stopReasons, report.result.diagnostics.stopReasons)
             val json = JsonMapper().readTree(JsonReportWriter().render(report))
             assertEquals(4, json["schema_version"].intValue())

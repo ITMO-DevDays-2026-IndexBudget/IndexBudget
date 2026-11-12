@@ -76,22 +76,22 @@ class ManualComparisonIntegrationTest {
                 Files.writeString(controlSource, controlJson.toString())
                 val controlInput = WorkloadReader().read(controlSource, controlContext)
                 val control = pipeline.run(controlInput, directory.resolve("control"), controlContext)
-                val controlReport = rendered!!
+                val controlReport = checkNotNull(rendered) { "Expected rendered to be available" }
                 val result = pipeline.run(input, output, context)
                 assertEquals(RunStatus.COMPLETED, result.status)
                 val report = checkNotNull(rendered)
-                val manual = report.manualComparison!!
+                val manual = checkNotNull(report.manualComparison) { "Expected manualComparison to be available" }
                 assertTrue(manual.admissible)
                 assertNotNull(result.selected)
-                assertTrue(manual.evaluation!!.costByQueryId.getValue("q1") < result.baseline!!.costByQueryId.getValue("q1"))
+                assertTrue(checkNotNull(manual.evaluation) { "Expected evaluation to be available" }.costByQueryId.getValue("q1") < checkNotNull(result.baseline) { "Expected baseline to be available" }.costByQueryId.getValue("q1"))
                 assertEquals(control.bestRobust, result.bestRobust)
                 assertEquals(control.bestMean, result.bestMean)
                 assertEquals(control.selected, result.selected)
                 assertEquals(controlReport.priceOfRobustness, report.priceOfRobustness)
-                assertEquals(control.baseline!!.costByQueryId, result.baseline!!.costByQueryId)
-                assertNotEquals(manual.candidates.map { it.id }, result.selected!!.evaluation.candidateIds)
+                assertEquals(checkNotNull(control.baseline) { "Expected baseline to be available" }.costByQueryId, checkNotNull(result.baseline) { "Expected baseline to be available" }.costByQueryId)
+                assertNotEquals(manual.candidates.map { it.id }, checkNotNull(result.selected) { "Expected selected to be available" }.evaluation.candidateIds)
                 assertTrue(manual.candidates.none { candidate -> report.candidates.candidates.any { it.id == candidate.id } })
-                assertTrue(manual.evaluation.costByQueryId.getValue("q1") < result.selected!!.evaluation.costByQueryId.getValue("q1"))
+                assertTrue(manual.evaluation.costByQueryId.getValue("q1") < checkNotNull(result.selected) { "Expected selected to be available" }.evaluation.costByQueryId.getValue("q1"))
                 val json = JsonMapper().readTree(Files.readString(output.resolve("report.json")))
                 assertEquals("separate_manual_evaluation", json["manual_comparison"]["comparison_scope"].stringValue())
                 assertEquals("evaluated_sets", json["comparison_scope"].stringValue())
@@ -99,10 +99,10 @@ class ManualComparisonIntegrationTest {
                 val sql = Files.readString(output.resolve("indexes.sql"))
                 assertEquals(Files.readAllLines(directory.resolve("control/indexes.sql")).filter { it.startsWith("CREATE INDEX") },
                     sql.lines().filter { it.startsWith("CREATE INDEX") })
-                report.candidates.candidates.filter { it.id in result.selected!!.evaluation.candidateIds }.forEach {
-                    assertTrue(sql.contains(it.ddl!!))
+                report.candidates.candidates.filter { it.id in checkNotNull(result.selected) { "Expected selected to be available" }.evaluation.candidateIds }.forEach {
+                    assertTrue(sql.contains(checkNotNull(it.ddl) { "Expected ddl to be available" }))
                 }
-                manual.candidates.forEach { assertFalse(sql.contains(it.ddl!!)) }
+                manual.candidates.forEach { assertFalse(sql.contains(checkNotNull(it.ddl) { "Expected ddl to be available" })) }
                 // Validate input diagnostics against real catalog metadata before any baseline.
                 admin.createStatement().use {
                     it.execute("ALTER TABLE $schema.records ADD COLUMN payload_json json, ADD COLUMN \" \" integer")
@@ -126,8 +126,10 @@ class ManualComparisonIntegrationTest {
                 val whitespaceInput = WorkloadReader().read(whitespaceSource, whitespaceContext)
                 val whitespace = pipeline.run(whitespaceInput, directory.resolve("whitespace"), whitespaceContext)
                 assertEquals(RunStatus.COMPLETED, whitespace.status)
-                assertEquals(" ", rendered!!.manualComparison!!.candidates.single().definition.keys.single().column.name)
-                assertTrue(rendered!!.manualComparison!!.admissible)
+                val whitespaceReport = checkNotNull(rendered) { "Expected whitespace report" }
+                val whitespaceManual = checkNotNull(whitespaceReport.manualComparison) { "Expected whitespace comparison" }
+                assertEquals(" ", whitespaceManual.candidates.single().definition.keys.single().column.name)
+                assertTrue(whitespaceManual.admissible)
                 admin.createStatement().use { s -> s.executeQuery("SELECT count(*) FROM pg_indexes WHERE schemaname='$schema'").use {
                     it.next(); assertEquals(1, it.getInt(1), "Only the original physical primary key may exist")
                 } }

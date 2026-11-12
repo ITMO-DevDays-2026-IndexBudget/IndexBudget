@@ -26,13 +26,13 @@ class MetricsCalculatorImplTest {
         assertEquals(310_000.0, normal.baselineCost, 1e-9)
         assertEquals(130_000.0, normal.cost, 1e-9)
         assertEquals(180_000.0, normal.gain, 1e-9)
-        assertEquals(130_000.0 / 310_000.0, normal.ratio!!, 1e-12)
-        assertEquals(100.0 * 180_000.0 / 310_000.0, normal.gainPercent!!, 1e-9)
+        assertEquals(130_000.0 / 310_000.0, checkNotNull(normal.ratio) { "Expected ratio to be available" }, 1e-12)
+        assertEquals(100.0 * 180_000.0 / 310_000.0, checkNotNull(normal.gainPercent) { "Expected gainPercent to be available" }, 1e-9)
 
         val campaign = metrics.profiles.first { it.profileId == "campaign" }
         assertEquals(310_000.0, campaign.baselineCost, 1e-9)
         assertEquals(304_000.0, campaign.cost, 1e-9)
-        assertEquals(304_000.0 / 310_000.0, campaign.ratio!!, 1e-12)
+        assertEquals(304_000.0 / 310_000.0, checkNotNull(campaign.ratio) { "Expected ratio to be available" }, 1e-12)
     }
 
     @Test
@@ -45,8 +45,8 @@ class MetricsCalculatorImplTest {
 
         assertEquals(310_000.0, metrics.baselineMeanCost, 1e-9)
         assertEquals(147_400.0, metrics.meanCost, 1e-9)
-        assertEquals(147_400.0 / 310_000.0, metrics.meanRatio!!, 1e-12)
-        assertEquals(304_000.0 / 310_000.0, metrics.worstRatio!!, 1e-12)
+        assertEquals(147_400.0 / 310_000.0, checkNotNull(metrics.meanRatio) { "Expected meanRatio to be available" }, 1e-12)
+        assertEquals(304_000.0 / 310_000.0, checkNotNull(metrics.worstRatio) { "Expected worstRatio to be available" }, 1e-12)
     }
 
     @Test
@@ -57,12 +57,12 @@ class MetricsCalculatorImplTest {
         )
         val metrics = impl.calculate(workload, evaluation(100.0, 50.0), evaluation(40.0, 100.0), usage)
 
-        val averageOfRatios = metrics.profiles.sumOf { it.normalizedWeight * it.ratio!! }
-        assertNotEquals(averageOfRatios, metrics.meanRatio!!, 1e-9)
+        val averageOfRatios = metrics.profiles.sumOf { it.normalizedWeight * checkNotNull(it.ratio) { "Expected ratio to be available" } }
+        assertNotEquals(averageOfRatios, checkNotNull(metrics.meanRatio) { "Expected meanRatio to be available" }, 1e-9)
         assertEquals(8250.0, metrics.baselineMeanCost, 1e-9)
         assertEquals(7700.0, metrics.meanCost, 1e-9)
         assertEquals(14.0 / 15.0, metrics.meanRatio, 1e-12)
-        assertEquals(26.0 / 15.0, metrics.worstRatio!!, 1e-12)
+        assertEquals(26.0 / 15.0, checkNotNull(metrics.worstRatio) { "Expected worstRatio to be available" }, 1e-12)
     }
 
     @Test
@@ -70,8 +70,8 @@ class MetricsCalculatorImplTest {
         val workload = workload(profile("only", 1.0, 3000.0, 100.0))
         val metrics = impl.calculate(workload, evaluation(100.0, 100.0), evaluation(40.0, 100.0), usage)
 
-        assertEquals(130_000.0 / 310_000.0, metrics.meanRatio!!, 1e-12)
-        assertEquals(130_000.0 / 310_000.0, metrics.worstRatio!!, 1e-12)
+        assertEquals(130_000.0 / 310_000.0, checkNotNull(metrics.meanRatio) { "Expected meanRatio to be available" }, 1e-12)
+        assertEquals(130_000.0 / 310_000.0, checkNotNull(metrics.worstRatio) { "Expected worstRatio to be available" }, 1e-12)
     }
 
     @Test
@@ -88,8 +88,8 @@ class MetricsCalculatorImplTest {
         assertNull(zero.ratio)
         assertNull(zero.gainPercent)
         // worst case comes only from the positive-baseline profile
-        assertEquals(0.5, metrics.worstRatio!!, 1e-12)
-        assertEquals(0.5, metrics.meanRatio!!, 1e-12)
+        assertEquals(0.5, checkNotNull(metrics.worstRatio) { "Expected worstRatio to be available" }, 1e-12)
+        assertEquals(0.5, checkNotNull(metrics.meanRatio) { "Expected meanRatio to be available" }, 1e-12)
     }
 
     @Test
@@ -219,7 +219,7 @@ class MetricsCalculatorImplTest {
         assertEquals(0.001, metrics.profiles.first { it.profileId == "rare" }.normalizedWeight)
         assertEquals(100.0, metrics.baselineMeanCost, 1e-12)
         assertEquals(50.15, metrics.meanCost, 1e-12)
-        assertEquals(0.5015, metrics.meanRatio!!, 1e-12)
+        assertEquals(0.5015, checkNotNull(metrics.meanRatio) { "Expected meanRatio to be available" }, 1e-12)
         assertEquals(2.0, metrics.worstRatio)
         assertEquals(listOf(999.0, 1.0), workload.profiles.map { it.weight })
     }

@@ -49,8 +49,26 @@ class MetricsCalculatorImpl : MetricsCalculator {
         baseline.requireQueryCoverage(expectedQueryIds)
         evaluation.requireQueryCoverage(expectedQueryIds)
 
+        val profiles = profileMetrics(workload, baseline, evaluation, queryIds)
+        val (meanCost, baselineMeanCost) = weightedCosts(profiles)
+        return SetMetrics(
+            profiles = profiles,
+            baselineMeanCost = baselineMeanCost,
+            meanCost = meanCost,
+            meanRatio = meanRatio(meanCost, baselineMeanCost, profiles.any { it.baselineCost > 0.0 }),
+            worstRatio = profiles.mapNotNull { it.ratio }.maxOrNull(),
+            budgetUsage = usage,
+        )
+    }
+
+    private fun profileMetrics(
+        workload: WorkloadInput,
+        baseline: EvaluationResult,
+        evaluation: EvaluationResult,
+        queryIds: List<String>,
+    ): List<ProfileMetrics> {
         val normalizedWeights = ProfileWeights.normalize(workload.profiles)
-        val profiles = workload.profiles.sortedBy { it.id }.map { profile ->
+        return workload.profiles.sortedBy { it.id }.map { profile ->
             val baselineCost = profileCost(profile, baseline.costByQueryId, queryIds)
             val cost = profileCost(profile, evaluation.costByQueryId, queryIds)
             val effect = CostEffect.calculate(baselineCost, cost)
@@ -67,7 +85,11 @@ class MetricsCalculatorImpl : MetricsCalculator {
                 gainPercent = effect.gainPercent,
             )
         }
+    }
 
+    private data class WeightedCosts(val mean: Double, val baseline: Double)
+
+    private fun weightedCosts(profiles: List<ProfileMetrics>): WeightedCosts {
         var meanCost = 0.0
         var baselineMeanCost = 0.0
         for (metric in profiles) {
@@ -76,8 +98,11 @@ class MetricsCalculatorImpl : MetricsCalculator {
         }
         if (!meanCost.isFinite() || !baselineMeanCost.isFinite()) throw numericError("Mean cost is not finite")
 
-        val hasPositiveBaseline = profiles.any { it.baselineCost > 0.0 }
-        val meanRatio = when {
+        return WeightedCosts(meanCost, baselineMeanCost)
+    }
+
+    private fun meanRatio(meanCost: Double, baselineMeanCost: Double, hasPositiveBaseline: Boolean): Double? =
+        when {
             baselineMeanCost > 0.0 -> {
                 val ratio = meanCost / baselineMeanCost
                 if (!ratio.isFinite()) throw numericError("Mean ratio is not finite")
@@ -87,19 +112,6 @@ class MetricsCalculatorImpl : MetricsCalculator {
             hasPositiveBaseline -> throw numericError("B_mean is zero while a positive baseline exists")
             else -> null
         }
-        val worstRatio = profiles
-            .mapNotNull { it.ratio }
-            .maxOrNull()
-
-        return SetMetrics(
-            profiles = profiles,
-            baselineMeanCost = baselineMeanCost,
-            meanCost = meanCost,
-            meanRatio = meanRatio,
-            worstRatio = worstRatio,
-            budgetUsage = usage,
-        )
-    }
 
     private fun profileCost(profile: Profile, costs: Map<String, Double>, queryIds: List<String>): Double {
         var total = 0.0

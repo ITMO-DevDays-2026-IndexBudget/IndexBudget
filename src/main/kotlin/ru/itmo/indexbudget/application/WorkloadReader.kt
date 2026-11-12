@@ -147,26 +147,30 @@ class WorkloadReader {
             if (IndexMethod.entries.none { it.wireName == method }) invalid(at.child("method"), "Expected btree, brin or hash.")
             val table = TableRef(identifier(value.get("schema"), at.child("schema")), identifier(value.get("table"), at.child("table")))
             val keys = array(value.get("keys"), at.child("keys"), 2).mapIndexed { position, key ->
-                val keyAt = at.child("keys").child(position.toString())
-                objectNode(key, keyAt, if (method != "btree") setOf("column") else setOf("column", "direction", "nulls"))
-                val column = identifier(key.get("column"), keyAt.child("column"))
-                val direction = when (key.get("direction")?.let { string(it, keyAt.child("direction")) } ?: "asc") {
-                    "asc" -> SortDirection.ASC
-                    "desc" -> SortDirection.DESC
-                    else -> invalid(keyAt.child("direction"), "Expected asc or desc.")
-                }
-                val nulls = when (key.get("nulls")?.let { string(it, keyAt.child("nulls")) }) {
-                    null -> if (direction == SortDirection.DESC) NullsOrder.FIRST else NullsOrder.LAST
-                    "first" -> NullsOrder.FIRST
-                    "last" -> NullsOrder.LAST
-                    else -> invalid(keyAt.child("nulls"), "Expected first or last.")
-                }
-                IndexKey(ColumnRef(table, column), direction, nulls)
+                manualKey(key, at.child("keys").child(position.toString()), table, method)
             }
             if (keys.map { it.column }.distinct().size != keys.size) invalid(at, "Repeated index key.")
             if (method != "btree" && keys.size != 1) invalid(at.child("keys"), "BRIN/hash require exactly one column.")
             IndexDefinition(table, keys, method = method)
         }
+    }
+
+    private fun manualKey(key: JsonNode, at: Location, table: TableRef, method: String): IndexKey {
+        val fields = if (method == "btree") setOf("column", "direction", "nulls") else setOf("column")
+        objectNode(key, at, fields)
+        val column = identifier(key.get("column"), at.child("column"))
+        val direction = when (key.get("direction")?.let { string(it, at.child("direction")) } ?: "asc") {
+            "asc" -> SortDirection.ASC
+            "desc" -> SortDirection.DESC
+            else -> invalid(at.child("direction"), "Expected asc or desc.")
+        }
+        val nulls = when (key.get("nulls")?.let { string(it, at.child("nulls")) }) {
+            null -> if (direction == SortDirection.DESC) NullsOrder.FIRST else NullsOrder.LAST
+            "first" -> NullsOrder.FIRST
+            "last" -> NullsOrder.LAST
+            else -> invalid(at.child("nulls"), "Expected first or last.")
+        }
+        return IndexKey(ColumnRef(table, column), direction, nulls)
     }
 
     /** Sort JSON objects only: array order, string values and absent fields retain their meaning. */

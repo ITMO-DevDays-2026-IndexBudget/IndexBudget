@@ -88,7 +88,7 @@ class DmlSqlTest {
 
     @Test
     fun `assignment casts are not treated as implicit comparison casts`() {
-        val snapshot = catalog.copy(semantics = catalog.semantics!!.let {
+        val snapshot = catalog.copy(semantics = checkNotNull(catalog.semantics) { "Expected semantics to be available" }.let {
             it.copy(implicitCasts = it.implicitCasts + CatalogImplicitCast(20, 23, assignmentOnly = true))
         })
         val input = input(listOf("UPDATE records SET value = 2147483648 WHERE id = 1"))

@@ -29,21 +29,26 @@ class ManualComparisonPipelineTest {
         val result = run.execute(directory.resolve("manual"))
         assertAutomaticResults(expected, result)
         assertNotEquals(result.bestRobust, result.bestMean)
-        val report = run.report!!
-        assertEquals(control.report!!.priceOfRobustness, report.priceOfRobustness)
-        assertEquals(control.report!!.summary, report.summary)
-        assertEquals(control.report!!.profileComparisons, report.profileComparisons)
-        assertEquals(control.report!!.queryEffects, report.queryEffects)
-        val manual = report.manualComparison!!
+        val report = checkNotNull(run.report) { "Expected report to be available" }
+        val controlReport = checkNotNull(control.report) { "Expected control report to be available" }
+        assertEquals(controlReport.priceOfRobustness, report.priceOfRobustness)
+        assertEquals(controlReport.summary, report.summary)
+        assertEquals(controlReport.profileComparisons, report.profileComparisons)
+        assertEquals(controlReport.queryEffects, report.queryEffects)
+        val manual = checkNotNull(report.manualComparison) { "Expected manualComparison to be available" }
         assertTrue(manual.admissible)
-        assertTrue(manual.metrics!!.meanCost < result.bestMean!!.metrics.meanCost)
-        assertTrue(manual.metrics.worstRatio!! < result.bestRobust!!.metrics.worstRatio!!)
+        val manualMetrics = checkNotNull(manual.metrics) { "Expected manual metrics to be available" }
+        val bestMean = checkNotNull(result.bestMean) { "Expected mean incumbent to be available" }
+        val bestRobust = checkNotNull(result.bestRobust) { "Expected robust incumbent to be available" }
+        assertTrue(manualMetrics.meanCost < bestMean.metrics.meanCost)
+        assertTrue(checkNotNull(manualMetrics.worstRatio) { "Expected manual ratio to be available" } <
+            checkNotNull(bestRobust.metrics.worstRatio) { "Expected robust ratio to be available" })
         assertTrue(manual.candidates.none { candidate -> report.candidates.candidates.any { it.id == candidate.id } })
         val sql = Files.readString(directory.resolve("manual/indexes.sql"))
-        report.candidates.candidates.filter { it.id in result.selected!!.evaluation.candidateIds }.forEach {
-            assertTrue(sql.contains(it.ddl!!))
+        report.candidates.candidates.filter { it.id in checkNotNull(result.selected) { "Expected selected to be available" }.evaluation.candidateIds }.forEach {
+            assertTrue(sql.contains(checkNotNull(it.ddl) { "Expected ddl to be available" }))
         }
-        manual.candidates.forEach { assertFalse(sql.contains(it.ddl!!)) }
+        manual.candidates.forEach { assertFalse(sql.contains(checkNotNull(it.ddl) { "Expected ddl to be available" })) }
         val json = JsonMapper().readTree(Files.readString(directory.resolve("manual/report.json")))
         assertEquals("completed", json["manual_comparison"]["status"].stringValue())
         assertEquals(JsonMapper().readTree(Files.readString(directory.resolve("control/report.json")))["price_of_robustness"],
@@ -111,7 +116,7 @@ class ManualComparisonPipelineTest {
         assertEquals(RunStatus.PARTIAL, result.status)
         assertSavedAutomatic(run, result)
         assertNoManualCosts(run, ErrorCode.DEADLINE_EXCEEDED)
-        val candidates = run.report!!.manualComparison!!.candidates
+        val candidates = checkNotNull(checkNotNull(run.report) { "Expected report to be available" }.manualComparison) { "Expected manualComparison to be available" }.candidates
         assertNotNull(candidates[0].estimatedBytes)
         assertNotNull(candidates[0].budgetedBytes)
         assertNull(candidates[1].estimatedBytes)
@@ -138,8 +143,8 @@ class ManualComparisonPipelineTest {
     }
 
     private fun assertSavedAutomatic(run: Harness, result: SearchResult) {
-        assertEquals(ContractFixtures.robustEvaluation(), result.bestRobust!!.evaluation)
-        assertEquals(ContractFixtures.meanEvaluation(), result.bestMean!!.evaluation)
+        assertEquals(ContractFixtures.robustEvaluation(), checkNotNull(result.bestRobust) { "Expected bestRobust to be available" }.evaluation)
+        assertEquals(ContractFixtures.meanEvaluation(), checkNotNull(result.bestMean) { "Expected bestMean to be available" }.evaluation)
         assertEquals(result.bestRobust, result.selected)
         assertEquals(1, run.closes)
         assertTrue(run.exportedAfterClose)
@@ -153,9 +158,9 @@ class ManualComparisonPipelineTest {
     }
 
     private fun assertNoManualCosts(run: Harness, code: ErrorCode) {
-        val manual = run.report!!.manualComparison!!
+        val manual = checkNotNull(checkNotNull(run.report) { "Expected report to be available" }.manualComparison) { "Expected manualComparison to be available" }
         assertEquals(ManualComparisonStatus.FAILED, manual.status)
-        assertEquals(code, manual.error!!.code)
+        assertEquals(code, checkNotNull(manual.error) { "Expected error to be available" }.code)
         assertNull(manual.evaluation)
         assertNull(manual.metrics)
         assertTrue(manual.queryComparisons.isEmpty())
