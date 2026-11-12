@@ -1,4 +1,4 @@
-# Общая demo-БД: карта для команды
+# Общая demo-БД: карта для команды и агентов
 
 Всё находится в IndexBudget. Ansible и отдельный infra-репозиторий не используются.
 Этот каталог управляет только общей PostgreSQL/HypoPG. CLI развёртывается прежними
@@ -13,7 +13,7 @@
 
 | Путь | Назначение |
 | --- | --- |
-| `IndexBudget-spec-v0.2.md`, `docs/contracts.md` | Требования продукта и контракты модулей |
+| `IndexBudget-spec-v0.2.md`, `ai/` | Требования продукта, контракты и владельцы модулей |
 | `demo/postgres/Dockerfile` | Образ PostgreSQL 16 + HypoPG |
 | `demo/postgres/init/` | Seed только для первого запуска пустой БД |
 | `demo/workload-*.json` | Входы PoC и wide-table для других участников |
@@ -186,7 +186,7 @@ timeout --kill-after=30s 20m bash ~/indexbudget-db/update.sh
 Для паузы обновлений через crontab -e закомментируйте только строку с маркером
 `# indexbudget-database-update`. Это не останавливает БД и не затрагивает CLI.
 
-## Проверки изменений
+## Проверки для агентов
 
 `bash -n` для каждого shell-файла и `docker compose config --quiet` проверяют
 только конфигурацию. Реальный integration test — `tests/persistence.sh`,

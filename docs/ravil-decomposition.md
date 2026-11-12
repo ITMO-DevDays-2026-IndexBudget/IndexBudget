@@ -19,9 +19,9 @@
 | **T2** | Метрики профилей и агрегаты `M`/`R`, #40 | `feat/profile-metrics` с актуальным `main` | `MetricsCalculatorImpl.calculate(...)` → `SetMetrics` | PR #37 принят |
 | **T3** | Бюджеты: storage (1.2/ceil) + write units, #41 | `feat/budget-assessment-41` | `assessBudget(...)` → `BudgetAssessment`, точные границы и явные ошибки | Реализовано, числовые тесты и проверка стыка с pipeline без БД |
 | **T4** | Компаратор: `compare` + `improvesPrimaryMetrics` | `feat/objective-comparator` | детерминированный ключ; гейт greedy | PR #47 принят |
-| **T6** | Zero-baseline регрессия и baseline-only, #43 | — | `assessEvaluation(...)` → `Accepted(metrics, searchRequired)` / `Rejected(metrics, violations)` | Реализовано в этой ветке; рабочий Optimizer остаётся в #17 |
+| **T6** | Zero-baseline регрессия и baseline-only, #43 | `codex/issue-43-zero-baseline` | `assessEvaluation(...)` → `Accepted(metrics, searchRequired)` / `Rejected(metrics, violations)` | Реализовано в этой ветке; рабочий Optimizer остаётся в #17 |
 | **T7** | `priceOfRobustness` из одного пула | `feat/price-of-robustness` | `C_mean(best_robust) − C_mean(best_mean)` | ⏳ |
-| **T8** | Кросс-проверка на реальных оценках (Егор/Марат) | — | [Независимая сверка фиксированного пула на HypoPG](../demo/metrics/README.md), воспроизводимый runner и CI | Первый срез проверен на PostgreSQL/HypoPG, числовой снимок сохранён; production evaluator/поиск/экспорт ещё требуют интеграции, #45 остаётся открытой |
+| **T8** | Кросс-проверка на реальных оценках (Егор/Марат) | `codex/issue-45-real-cost-verification` | [Независимая сверка фиксированного пула на HypoPG](../demo/metrics/README.md), воспроизводимый runner и CI | Первый срез проверен на PostgreSQL/HypoPG, числовой снимок сохранён; production evaluator/поиск/экспорт ещё требуют интеграции, #45 остаётся открытой |
 
 Общий `ProfileWeights` уже доступен в `main`. [PR #35](https://github.com/ITMO-DevDays-2026-IndexBudget/IndexBudget/pull/35) закрыт без merge; отдельный `WeightNormalizer` удалён из PR #37. Зависимость T2 от нормирования обеспечивается PR #32.
 
