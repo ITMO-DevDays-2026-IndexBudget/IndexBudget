@@ -39,3 +39,6 @@
 .tour-actions button:disabled{cursor:default;opacity:.35}
 .tour-keyboard{display:block;margin-top:13px;font-size:9px;color:#a2ad98}
 @media(max-width:540px){.tour-card{padding:17px;width:calc(100vw - 24px)}.tour-card h2{font-size:17px}.tour-card>p{font-size:11px;line-height:1.65}.tour-actions{margin-top:17px}.tour-keyboard{display:none}.tour-launch{margin-bottom:17px}}
+
+/* Схема доступна только для чтения; длинный DDL прокручивается внутри блока. */
+.schema-content pre.code{padding:15px;border:1px solid var(--line);border-radius:7px;max-height:360px;margin:12px 0 0}

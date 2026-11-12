@@ -38,6 +38,11 @@ import ru.itmo.indexbudget.domain.AnalysisException
 import ru.itmo.indexbudget.domain.ErrorCode
 import ru.itmo.indexbudget.domain.RunContext
 import ru.itmo.indexbudget.domain.ConditionLimits
+import ru.itmo.indexbudget.domain.StatementKind
+import net.sf.jsqlparser.statement.Statement
+import net.sf.jsqlparser.statement.update.Update
+import net.sf.jsqlparser.statement.delete.Delete
+import net.sf.jsqlparser.statement.select.SelectItem
 
 internal class JSqlParserAstValidator(
     private val queryId: String,
@@ -46,6 +51,126 @@ internal class JSqlParserAstValidator(
 ) {
     private var allowTemplateParameters = false
     private var conditionNodes = 0
+
+    fun validateStatement(statement: Statement, template: Boolean = false): ValidatedSql {
+        allowTemplateParameters = template
+        try {
+            if (statement is PlainSelect) return ValidatedSql(statement, statement, validate(statement))
+            val target: Table
+            val where: Expression?
+            val assignments: List<Pair<Column, Expression>>
+            val kind: StatementKind
+            when (statement) {
+                is Update -> {
+                    validateUpdate(statement)
+                    assignments = readUpdateAssignments(statement)
+                    target = statement.table
+                    where = statement.where
+                    kind = StatementKind.UPDATE
+                }
+                is Delete -> {
+                    validateDelete(statement)
+                    target = statement.table
+                    where = statement.where
+                    assignments = emptyList()
+                    kind = StatementKind.DELETE
+                }
+                else -> fail(ErrorCode.UNSUPPORTED_SQL, "Only SELECT, restricted UPDATE and DELETE are supported.")
+            }
+            if (where == null) fail(ErrorCode.UNSUPPORTED_SQL, "UPDATE/DELETE require WHERE.")
+            val scope = PlainSelect().apply {
+                fromItem = target
+                this.where = where
+                selectItems = listOf(SelectItem(AllColumns()))
+            }
+            val tables = validate(scope)
+            for ((column, value) in assignments) {
+                validateColumn(column)
+                if (column.table != null) fail(ErrorCode.UNSUPPORTED_SQL, "SET target columns must be unqualified.")
+                validateScalarLiteral(value)
+            }
+            return ValidatedSql(statement, scope, tables, kind, assignments)
+        } finally { allowTemplateParameters = false }
+    }
+
+    private fun validateUpdate(update: Update) {
+        validateUpdateSources(update)
+        validateUpdateClauses(update)
+        validateUpdateDialect(update)
+    }
+
+    private fun validateUpdateSources(update: Update) {
+        if (!update.withItemsList.isNullOrEmpty() || update.fromItem != null ||
+            !update.joins.isNullOrEmpty() || !update.startJoins.isNullOrEmpty()
+        ) {
+            fail(ErrorCode.UNSUPPORTED_SQL, UPDATE_SHAPE_ERROR)
+        }
+    }
+
+    private fun validateUpdateClauses(update: Update) {
+        if (update.returningClause != null || update.outputClause != null ||
+            update.select != null || update.isUseSelect || update.isFromBeforeSet ||
+            !update.orderByElements.isNullOrEmpty() || update.limit != null
+        ) {
+            fail(ErrorCode.UNSUPPORTED_SQL, UPDATE_SHAPE_ERROR)
+        }
+    }
+
+    private fun validateUpdateDialect(update: Update) {
+        if (update.option != null || update.forPortionClause != null || update.preferringClause != null ||
+            update.oracleHint != null || update.modifierPriority != null || update.isModifierIgnore
+        ) {
+            fail(ErrorCode.UNSUPPORTED_SQL, UPDATE_SHAPE_ERROR)
+        }
+    }
+
+    private fun readUpdateAssignments(update: Update): List<Pair<Column, Expression>> {
+        val sets = update.updateSets.orEmpty()
+        if (sets.isEmpty() || sets.size > MAX_SET_ASSIGNMENTS) {
+            fail(ErrorCode.INPUT_LIMIT_EXCEEDED, "UPDATE requires 1–256 SET assignments.")
+        }
+        return sets.map { assignment ->
+            context.checkDeadline()
+            // Preserve tuple shape even for a single target: SET (column) = (value).
+            if (assignment.columns is ParenthesedExpressionList<*> ||
+                assignment.columns.size != 1 || assignment.values.size != 1
+            ) {
+                fail(ErrorCode.UNSUPPORTED_SQL, "Tuple SET assignments are unsupported.")
+            }
+            assignment.columns.single() to assignment.values.single()
+        }
+    }
+
+    private fun validateDelete(delete: Delete) {
+        validateDeleteSources(delete)
+        validateDeleteClauses(delete)
+        validateDeleteDialect(delete)
+    }
+
+    private fun validateDeleteSources(delete: Delete) {
+        if (!delete.withItemsList.isNullOrEmpty() || !delete.tables.isNullOrEmpty() ||
+            !delete.usingFromItemList.isNullOrEmpty() || !delete.joins.isNullOrEmpty() || !delete.isHasFrom
+        ) {
+            fail(ErrorCode.UNSUPPORTED_SQL, DELETE_SHAPE_ERROR)
+        }
+    }
+
+    private fun validateDeleteClauses(delete: Delete) {
+        if (delete.returningClause != null || delete.outputClause != null ||
+            !delete.orderByElements.isNullOrEmpty() || delete.limit != null
+        ) {
+            fail(ErrorCode.UNSUPPORTED_SQL, DELETE_SHAPE_ERROR)
+        }
+    }
+
+    private fun validateDeleteDialect(delete: Delete) {
+        if (delete.option != null || delete.forPortionClause != null || delete.preferringClause != null ||
+            delete.oracleHint != null || delete.modifierPriority != null ||
+            delete.isModifierIgnore || delete.isModifierQuick
+        ) {
+            fail(ErrorCode.UNSUPPORTED_SQL, DELETE_SHAPE_ERROR)
+        }
+    }
 
     /** Import-only validation before literal binding; ordinary SQL validation remains strict. */
     fun validateTemplate(select: PlainSelect): List<Table> {
@@ -443,6 +568,9 @@ internal class JSqlParserAstValidator(
         throw AnalysisException(AnalysisError(code, message, queryId = queryId))
 
     private companion object {
+        const val MAX_SET_ASSIGNMENTS = 256
+        const val UPDATE_SHAPE_ERROR = "Only one-table literal SET UPDATE with WHERE is supported."
+        const val DELETE_SHAPE_ERROR = "Only DELETE FROM one table with WHERE is supported."
         const val MAX_COMPARISONS = ConditionLimits.MAX_COMPLEXITY
         const val MAX_TABLES = 3
         const val MAX_ORDER_BY_COLUMNS = 2

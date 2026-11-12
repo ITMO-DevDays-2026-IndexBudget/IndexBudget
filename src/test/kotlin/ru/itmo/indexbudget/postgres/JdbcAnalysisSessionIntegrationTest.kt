@@ -90,6 +90,159 @@ class JdbcAnalysisSessionIntegrationTest {
     }
 
     @Test
+    fun `mixed SELECT UPDATE DELETE use original EXPLAIN and preserve DML report metadata`() {
+        val context = RunContext().apply { startSearch() }
+        val mixed = prepareMixedDmlWorkload(context)
+        val input = mixed.input
+        val observed = mutableListOf<ExplainObservation>()
+        session = JdbcAnalysisSession(observingConnection(observed))
+        val before = recordsChecksum()
+        val indexes = physicalIndexCount()
+        val baseline = session.evaluate(emptyList(), mixed, context)
+        val selected = session.evaluate(candidates, mixed, context)
+        assertEquals(input.queries.map { it.id }.toSet(), selected.costByQueryId.keys)
+        assertEquals(8, observed.size)
+        assertTrue(observed.all { event -> input.queries.any { event.sql == "EXPLAIN (FORMAT JSON) ${it.sql}" } })
+        assertTrue(selected.plansByQueryId.getValue("update").json.contains("ModifyTable"))
+        assertTrue(selected.plansByQueryId.getValue("delete").json.contains("ModifyTable"))
+        assertTrue(selected.costByQueryId.getValue("update") < baseline.costByQueryId.getValue("update"))
+        assertEquals(baseline.costByQueryId.getValue("broad"), selected.costByQueryId.getValue("broad"))
+        assertEquals(0, hypothesisCount(connection))
+        assertEquals(before, recordsChecksum())
+        assertEquals(indexes, physicalIndexCount())
+        val baselineMetrics = MetricsCalculatorImpl().calculate(input, baseline, baseline, BudgetUsage(0, 0, null, 0))
+        val evaluatedBaseline = EvaluatedConfiguration(baseline, baselineMetrics)
+        val report = DefaultReportBuilder().build(input, CandidateBatch(emptyList()),
+            SearchResult.Completed(input.objective, baseline, evaluatedBaseline, evaluatedBaseline), context)
+        assertTrue(HtmlReportRenderer().render(report).contains("ModifyTable"))
+        assertTrue(ru.itmo.indexbudget.report.JsonReportWriter().render(report).contains("row_search_and_preparation"))
+    }
+
+    @Test
+    fun `mixed workload enables server protection against writes and EXPLAIN ANALYZE`() {
+        val context = RunContext()
+        val mixed = prepareMixedDmlWorkload(context)
+        val before = recordsChecksum()
+        val indexes = physicalIndexCount()
+        session.evaluate(emptyList(), mixed, context)
+        for (sql in listOf("UPDATE records SET payload = 'oops' WHERE id = 314",
+            "DELETE FROM records WHERE id = 314", "EXPLAIN ANALYZE DELETE FROM records WHERE id = 314")) {
+            assertEquals("25006", assertThrows(java.sql.SQLException::class.java) { sql(connection, sql) }.sqlState)
+        }
+        assertEquals(before, recordsChecksum())
+        assertEquals(indexes, physicalIndexCount())
+        assertEquals(0, hypothesisCount(connection))
+    }
+
+    @Test
+    fun `failed DML cleans up hypotheses without changing records or physical indexes`() {
+        val mixed = prepareMixedDmlWorkload(RunContext())
+        val before = recordsChecksum()
+        val indexes = physicalIndexCount()
+        val bad = mixed.copy(queries = mixed.queries.map { if (it.id == "update") it.copy(
+            sql = "UPDATE records SET a = CAST('invalid' AS integer) WHERE id = 314") else it })
+        assertEquals(ErrorCode.EXPLAIN_FAILED, assertThrows(AnalysisException::class.java) {
+            session.evaluate(candidates, bad, RunContext())
+        }.error.code)
+        assertEquals(0, hypothesisCount(connection))
+        assertEquals(before, recordsChecksum())
+        assertEquals(indexes, physicalIndexCount())
+    }
+
+    @Test
+    fun `cancelled DML aborts the session without completing a partial cost vector`() {
+        val mixed = prepareMixedDmlWorkload(RunContext())
+        val before = recordsChecksum()
+        val cancelled = RunContext()
+        session = JdbcAnalysisSession(observingConnection(mutableListOf(), beforeExplain = { text ->
+            if (text.contains("UPDATE records r")) cancelled.cancel()
+        }))
+        assertEquals(ErrorCode.CANCELLED, assertThrows(AnalysisException::class.java) {
+            session.evaluate(candidates, mixed, cancelled)
+        }.error.code)
+        assertEquals(0, cancelled.statistics().completedEvaluations)
+        assertTrue(connection.isClosed)
+        connect().use { fresh -> assertEquals(0, hypothesisCount(fresh)) }
+        assertEquals(before, recordsChecksum())
+    }
+
+    @Test
+    fun `mixed workload completes the real pipeline and exports consistent artifacts`(@TempDir directory: Path) {
+        sql(admin, "GRANT UPDATE (payload), DELETE ON $schema.records TO $role")
+        val input = WorkloadInput(listOf(
+            QueryInput("s", "SELECT payload FROM records WHERE a = 314"),
+            QueryInput("u", "UPDATE records SET payload = 'updated' WHERE a = 314"),
+            QueryInput("d", "DELETE FROM records WHERE b = 314"),
+        ), listOf(Profile("day", 1.0, mapOf("s" to 10.0, "u" to 2.0, "d" to 1.0)),
+            Profile("night", 1.0, mapOf("s" to 1.0, "u" to 10.0, "d" to 10.0))),
+            Constraints(100_000_000, 1000.0, queryCostGuards = mapOf("u" to 1.0)),
+            tableWriteRates = mapOf("$schema.records" to TableWriteRates(1.0, 2.0, 3.0)))
+        val before = longScalar(admin, "SELECT sum(id::bigint + a + b + length(payload)) FROM $schema.records")
+        val context = RunContext()
+        // Exercise the real JSON boundary too: successful exports require its source hash.
+        val source = directory.resolve("workload.json")
+        Files.writeString(source, mapper.writeValueAsString(mapOf(
+            "schema_version" to 2,
+            "queries" to input.queries.map { mapOf("id" to it.id, "sql" to it.sql) },
+            "profiles" to input.profiles.map { mapOf("id" to it.id, "weight" to it.weight, "calls_per_hour" to it.callsPerHour) },
+            "constraints" to mapOf("storage_budget_bytes" to 100_000_000, "write_budget_units_per_hour" to 1000,
+                "query_cost_guards" to mapOf("u" to 1.0)),
+            "table_write_rates" to mapOf("$schema.records" to mapOf(
+                "inserts_per_hour" to 1, "updates_per_hour" to 2, "deletes_per_hour" to 3, "source" to "manual")),
+        )))
+        val validatedInput = WorkloadReader().read(source, context)
+        val pipeline = AnalysisPipeline(JSqlParserSqlAnalyzer(), object : AnalysisSessionFactory {
+            override fun open(context: RunContext): AnalysisSession = session
+        }, ProfileAwareCandidateGenerator(), MetricsCalculatorImpl(), ObjectiveComparatorImpl(),
+            LimitedRepairOptimizer(), DefaultReportBuilder(), AtomicReportExporter(HtmlReportRenderer()))
+        val output = directory.resolve("mixed")
+        val result = pipeline.run(validatedInput, output, context)
+        assertEquals(RunStatus.COMPLETED, result.status)
+        assertEquals(setOf("s", "u", "d"), result.baseline?.costByQueryId?.keys)
+        assertEquals(setOf("s", "u", "d"), result.selected?.evaluation?.costByQueryId?.keys)
+        val json = mapper.readTree(Files.readString(output.resolve("report.json")))
+        assertEquals(listOf("select", "update", "delete"), json["queries"].toList().map { it["statement_kind"].asString() })
+        assertEquals("row_search_and_preparation", json["queries"][1]["cost_interpretation"].asString())
+        assertTrue(Files.readString(output.resolve("report.html")).contains("ModifyTable"))
+        for (file in listOf("report.json", "report.html", "indexes.sql"))
+            assertTrue(Files.readString(output.resolve(file)).contains(context.runId))
+        assertEquals(before, longScalar(admin, "SELECT sum(id::bigint + a + b + length(payload)) FROM $schema.records"))
+        assertEquals(1, scalar(admin, "SELECT count(*) FROM pg_indexes WHERE schemaname = '$schema'"))
+        assertTrue(connection.isClosed)
+    }
+
+    @Test
+    fun `DML evaluation refuses an already read write transaction and aborts the session`() {
+        val mixed = workload.copy(queries = workload.queries.map { it.copy(statementKind = StatementKind.DELETE) })
+        connection.autoCommit = false
+        sql(connection, "SELECT 1")
+        val context = RunContext()
+        assertEquals(ErrorCode.DB_CONNECTION_ERROR, assertThrows(AnalysisException::class.java) {
+            session.evaluate(emptyList(), mixed, context)
+        }.error.code)
+        assertTrue(connection.isClosed)
+        assertEquals(0, context.statistics().explainAttempts)
+        assertEquals(50000, scalar(admin, "SELECT count(*) FROM $schema.records"))
+    }
+
+    @Test
+    fun `SELECT only role cannot EXPLAIN DML and gets an explicit privilege error`() {
+        val input = input().copy(queries = listOf(QueryInput("d", "DELETE FROM records WHERE a = 314")),
+            profiles = listOf(Profile("p", 1.0, mapOf("d" to 1.0))))
+        val context = RunContext()
+        val analyzer = JSqlParserSqlAnalyzer()
+        val parsed = analyzer.parse(input, context)
+        val mixed = analyzer.resolve(parsed, session.readCatalog(parsed.referencedTables, context), context)
+        val error = assertThrows(AnalysisException::class.java) { session.evaluate(emptyList(), mixed, context) }.error
+        assertEquals(ErrorCode.EXPLAIN_FAILED, error.code)
+        assertEquals("d", error.queryId)
+        assertEquals("42501", error.details["sql_state"])
+        assertTrue(error.message.contains("separate analysis role"))
+        assertEquals(50000, scalar(admin, "SELECT count(*) FROM $schema.records"))
+        assertEquals(0, hypothesisCount(connection))
+    }
+
+    @Test
     fun `generated INCLUDE uses real sizes costs budgets catalog and retains no benefit case`() {
         // Visibility preparation belongs to the disposable fixture, never to analyze.
         sql(admin, "VACUUM (ANALYZE) $schema.records")
@@ -602,6 +755,27 @@ class JdbcAnalysisSessionIntegrationTest {
             }
         }
     }
+
+    private fun prepareMixedDmlWorkload(context: RunContext): ResolvedWorkload {
+        sql(admin, "GRANT UPDATE, DELETE ON $schema.records TO $role") // Dedicated disposable opt-in role only.
+        val input = WorkloadInput(listOf(
+            QueryInput("select", "SELECT payload FROM records WHERE a = 314"),
+            QueryInput("update", "UPDATE records r SET payload = 'changed' WHERE r.a = 314"),
+            QueryInput("delete", "DELETE FROM records WHERE b = 314"),
+            QueryInput("broad", "UPDATE records SET payload = 'changed' WHERE a > 0"),
+        ), listOf(Profile("p", 1.0, mapOf("select" to 1.0, "update" to 2.0, "delete" to 3.0, "broad" to 1.0))),
+            Constraints(100_000_000, null))
+        val analyzer = JSqlParserSqlAnalyzer()
+        val parsed = analyzer.parse(input, context)
+        val catalog = session.readCatalog(parsed.referencedTables, context)
+        return analyzer.resolve(parsed, catalog, context)
+    }
+
+    private fun recordsChecksum(): Long =
+        longScalar(admin, "SELECT sum(id::bigint + a + b + length(payload)) FROM $schema.records")
+
+    private fun physicalIndexCount(): Int =
+        scalar(admin, "SELECT count(*) FROM pg_indexes WHERE schemaname = '$schema'")
 
     private fun input(): WorkloadInput {
         val queries = listOf(

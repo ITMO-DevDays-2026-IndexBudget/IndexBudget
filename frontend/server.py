@@ -11,7 +11,6 @@ import mimetypes
 import os
 from pathlib import Path
 import queue
-import re
 import signal
 import subprocess
 import threading
@@ -23,6 +22,22 @@ from uuid import UUID, uuid4
 ROOT = Path(__file__).resolve().parent
 REPO = ROOT.parent
 TERMINAL = {"completed", "partial", "failed"}
+MAX_CALLS_PER_HOUR = 1_000_000
+
+
+class ShuttingDownError(RuntimeError):
+    """Новые задания не принимаются после начала штатной остановки."""
+
+
+class FrontendHTTPServer(ThreadingHTTPServer):
+    # Дожидаемся уже начатых HTTP-обработчиков до освобождения общей блокировки.
+    daemon_threads = False
+
+
+def data_directory():
+    directory = Path(os.environ.get("FRONTEND_DATA_DIR") or ROOT / ".local").expanduser().resolve()
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
 
 
 def write_json(path, value):
@@ -40,18 +55,24 @@ def finite(value, minimum=0):
     return type(value) in (int, float) and math.isfinite(value) and value >= minimum
 
 
+def valid_frequency(value):
+    # Проверка диапазона до is_integer также исключает NaN, infinity и огромные int.
+    return (type(value) in (int, float) and 0 <= value <= MAX_CALLS_PER_HOUR
+            and (type(value) is int or value.is_integer()))
+
+
 def validate_request(data, templates):
     """Проверка формы; SQL и полная семантика workload проверяются самим CLI."""
-    if not isinstance(data, dict) or data.get("template_id") not in templates:
+    if (not isinstance(data, dict) or not isinstance(data.get("template_id"), str)
+            or data["template_id"] not in templates):
         raise ValueError("Выберите существующий шаблон.")
     template = templates[data["template_id"]]
-    if data.get("template_version") != template["version"]:
+    if (type(data.get("template_version")) is not type(template["version"])
+            or data["template_version"] != template["version"]):
         raise ValueError("Версия шаблона изменилась. Загрузите шаблон заново.")
     for key in ("schema_sql", "seed_sql"):
-        if not isinstance(data.get(key), str) or not data[key].strip():
-            raise ValueError(f"{key}: нужен непустой SQL.")
-        if re.search(r"^\s*\\", data[key], re.M):
-            raise ValueError(f"{key}: используйте SQL, без метакоманд psql.")
+        if key in data:
+            raise ValueError(f"{key}: схема и данные задаются только серверным шаблоном. Обновите страницу.")
     w = data.get("workload")
     if not isinstance(w, dict) or w.get("schema_version") != 2:
         raise ValueError("Ожидается workload JSON v2.")
@@ -83,8 +104,11 @@ def validate_request(data, templates):
         calls = p.get("calls_per_hour")
         if not isinstance(calls, dict) or set(calls) != set(ids):
             raise ValueError(f"{p['id']}: задайте частоты для всех запросов.")
-        if not all(finite(v) for v in calls.values()) or not any(calls.values()):
-            raise ValueError(f"{p['id']}: частоты неотрицательные, хотя бы одна больше нуля.")
+        for qid, value in calls.items():
+            if not valid_frequency(value):
+                raise ValueError(f"{p['id']} / {qid}: частота должна быть целым числом от 0 до 1 000 000 вызовов/час.")
+        if not any(calls.values()):
+            raise ValueError(f"{p['id']}: хотя бы одна частота должна быть больше нуля.")
     if len(set(profile_ids)) != len(profile_ids):
         raise ValueError("ID профилей должны различаться.")
     if any(not any(p["calls_per_hour"][qid] > 0 for p in profiles) for qid in ids):
@@ -104,8 +128,7 @@ def validate_request(data, templates):
         if w.get(key, default) not in allowed:
             raise ValueError(f"Неверное значение {key}.")
     # Снимок не содержит присланных клиентом путей, подключения или статуса задачи.
-    return {key: copy.deepcopy(data[key]) for key in
-            ("template_id", "template_version", "schema_sql", "seed_sql", "workload")}
+    return {key: copy.deepcopy(data[key]) for key in ("template_id", "template_version", "workload")}
 
 
 class LocalRunner:
@@ -113,6 +136,7 @@ class LocalRunner:
         self.host = host
         self.compose = ["docker", "compose", "-f", str(ROOT / "compose.yaml")]
         self.cli = Path(os.environ.get("FRONTEND_CLI", str(REPO / "build/install/indexbudget/bin/indexbudget")))
+        self.deployment_revision = os.environ.get("FRONTEND_REVISION")
 
     def command(self, args, input=None, timeout=120, env=None):
         process = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -144,9 +168,13 @@ class LocalRunner:
             database = code == 0
         except (OSError, RuntimeError):
             database = False
-        return {"database": database, "cli": self.cli.is_file(), "local_only": self.host == "127.0.0.1"}
+        health = {"database": database, "cli": self.cli.is_file(), "local_only": self.host == "127.0.0.1"}
+        if self.deployment_revision:
+            health["deployment_revision"] = self.deployment_revision
+        return health
 
     def prepare(self, request):
+        # schema_sql/seed_sql — снимок доверенного шаблона, созданный Jobs.submit.
         self.db("DROP DATABASE IF EXISTS frontend_demo WITH (FORCE);\nCREATE DATABASE frontend_demo;", "postgres")
         self.db("CREATE EXTENSION hypopg;\n" + request["schema_sql"])
         self.db(request["seed_sql"])
@@ -182,6 +210,7 @@ class Jobs:
     def __init__(self, directory, runner, templates):
         self.directory, self.runner, self.templates = directory, runner, templates
         self.lock = threading.RLock()
+        self.accepting = True
         self.items = {}
         self.queue = queue.Queue()
         (directory / "jobs").mkdir(parents=True, exist_ok=True)
@@ -210,15 +239,27 @@ class Jobs:
 
     def submit(self, data, kind="analysis"):
         request = validate_request(data, self.templates)
+        # Фиксируем серверный шаблон до очереди: клиент не поставляет DDL/seed,
+        # а обновление шаблонов не изменяет уже принятый запуск и его артефакты.
+        template = self.templates[request["template_id"]]
+        request.update({key: copy.deepcopy(template[key]) for key in ("schema_sql", "seed_sql")})
         id = str(uuid4())
         item = {"run_id": id, "kind": kind, "status": "queued", "created_at": time.time(),
                 "template_id": request["template_id"], "report_url": None, "error": None}
         with self.lock:
+            if not self.accepting:
+                raise ShuttingDownError("Сервер обновляется. Дождитесь перезапуска и повторите отправку.")
             write_json(self.directory / "jobs" / id / "request.json", request)
             self.items[id] = item
             self.update(id)
             self.queue.put(id)
         return self.get(id)
+
+    def begin_shutdown(self):
+        # В одной критической секции с фиксацией и постановкой задания в очередь.
+        # Поэтому после возврата queue.join не может пропустить поздний submit.
+        with self.lock:
+            self.accepting = False
 
     def execute(self, id):
         folder = self.directory / "jobs" / id
@@ -266,6 +307,11 @@ class Jobs:
 
 def make_handler(jobs, templates):
     class Handler(BaseHTTPRequestHandler):
+        def setup(self):
+            super().setup()
+            # Зависший клиент не должен бесконечно удерживать штатную остановку.
+            self.connection.settimeout(15)
+
         def send(self, status, body, content_type="application/json; charset=utf-8"):
             if not isinstance(body, bytes):
                 body = json.dumps(body, ensure_ascii=False, allow_nan=False).encode()
@@ -325,12 +371,19 @@ def make_handler(jobs, templates):
                 self.send(404, {"error": "Операция не найдена."})
                 return
             try:
+                with jobs.lock:
+                    if not jobs.accepting:
+                        raise ShuttingDownError("Сервер обновляется. Дождитесь перезапуска и повторите отправку.")
                 length = int(self.headers.get("Content-Length", "0"))
                 if not 0 < length <= 3 * 1024 * 1024:
                     raise ValueError("Размер запроса должен быть от 1 байта до 3 MiB.")
                 data = json.loads(self.rfile.read(length), parse_constant=lambda v: (_ for _ in ()).throw(ValueError("Некорректное число JSON.")))
                 item = jobs.submit(data, "schema" if path.endswith("schema-previews") else "analysis")
                 self.send(202, {**item, "status_url": f"/api/runs/{item['run_id']}"})
+            except ShuttingDownError as error:
+                self.send(503, {"error": str(error)})
+            except TimeoutError:
+                self.send(408, {"error": "Превышено время получения запроса."})
             except (ValueError, TypeError, UnicodeError) as error:
                 self.send(400, {"error": str(error)})
 
@@ -343,8 +396,7 @@ def main():
     parser.add_argument("--host", default="127.0.0.1")
     args = parser.parse_args()
     templates = {t["id"]: t for t in (read_json(p) for p in sorted((ROOT / "templates").glob("*.json")))}
-    directory = ROOT / ".local"
-    directory.mkdir(exist_ok=True)
+    directory = data_directory()
     # Один исполнитель на рабочую БД, даже если случайно запустили второй сервер.
     import fcntl
     with (directory / "server.lock").open("w") as lock:
@@ -353,18 +405,27 @@ def main():
         except BlockingIOError:
             parser.exit(1, "Локальный сервер уже запущен.\n")
         jobs = Jobs(directory, LocalRunner(args.host), templates)
-        server = ThreadingHTTPServer((args.host, args.port), make_handler(jobs, templates))
-        print(f"IndexBudget → http://{args.host}:{args.port}", flush=True)
+        server = FrontendHTTPServer((args.host, args.port), make_handler(jobs, templates))
+        print(f"IndexBudget → http://{args.host}:{server.server_port}", flush=True)
+        stopping = threading.Event()
         def stop(_signum, _frame):
-            raise KeyboardInterrupt
+            if stopping.is_set():
+                return
+            stopping.set()
+            jobs.begin_shutdown()
+            # shutdown ждёт serve_forever и не может вызываться в его же потоке.
+            threading.Thread(target=server.shutdown, daemon=True).start()
         signal.signal(signal.SIGTERM, stop)
+        signal.signal(signal.SIGINT, stop)
         try:
             server.serve_forever()
-        except KeyboardInterrupt:
-            print("\nЗавершение очереди…", flush=True)
-            jobs.queue.join()
         finally:
+            jobs.begin_shutdown()
+            print("\nЗавершение очереди…", flush=True)
+            # Сначала завершаются обработчики HTTP, затем все принятые задания.
+            # .local/server.lock остаётся захваченным вплоть до публикации отчётов.
             server.server_close()
+            jobs.queue.join()
 
 
 if __name__ == "__main__":

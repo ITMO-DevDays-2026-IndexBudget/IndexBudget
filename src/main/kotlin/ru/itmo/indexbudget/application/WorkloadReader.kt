@@ -66,7 +66,7 @@ class WorkloadReader {
         }
         objectNode(root, Location("workload"), setOf(
             "schema_version", "objective", "queries", "profiles", "constraints", "table_write_rates",
-            "table_write_rates_origin", "analysis_mode", "candidate_ranking", "manual_indexes", "provenance",
+            "table_write_rates_origin", "analysis_mode", "candidate_ranking", "manual_indexes", "provenance", "index_methods",
         ))
         // query_cost_guards keys are cross-checked against queries below, after queries are parsed.
         val requestedMode = when (val value = root.get("analysis_mode")) {
@@ -107,6 +107,15 @@ class WorkloadReader {
         context?.checkDeadline()
         val writeRates = writeRates(root.get("table_write_rates"))
         val writeRatesOrigin = writeRatesOrigin(root.get("table_write_rates_origin"), writeRates, constraints)
+        val methods = root.get("index_methods")?.let { node ->
+            val values = array(node, Location("index_methods"), IndexMethod.entries.size).map { entry ->
+                val name = string(entry, Location("index_methods"))
+                IndexMethod.entries.firstOrNull { it.wireName == name }
+                    ?: invalid(Location("index_methods"), "Expected btree or brin.")
+            }
+            if (values.distinct().size != values.size) invalid(Location("index_methods"), "Repeated index method.")
+            values.toSet()
+        } ?: setOf(IndexMethod.BTREE)
         val manual = manualIndexes(root.get("manual_indexes"))
         if (constraints.writeBudgetUnitsPerHour != null && writeRates == null) {
             invalid(Location("table_write_rates"), "An enabled write budget requires a complete write profile.",
@@ -125,7 +134,7 @@ class WorkloadReader {
         return WorkloadInput(queries, profiles, constraints, objective = objective, tableWriteRates = writeRates,
             tableWriteRatesOrigin = writeRatesOrigin,
             manualIndexes = manual, analysisMode = analysisMode, candidateRanking = candidateRankingOverride ?: requestedRanking,
-            provenance = provenance)
+            provenance = provenance, indexMethods = methods)
     }
 
     private fun manualIndexes(node: JsonNode?): List<IndexDefinition>? {
@@ -133,11 +142,13 @@ class WorkloadReader {
         val location = Location("manual_indexes")
         return array(node, location, 5).mapIndexed { index, value ->
             val at = location.child(index.toString())
-            objectNode(value, at, setOf("schema", "table", "keys"))
+            objectNode(value, at, setOf("schema", "table", "keys", "method"))
+            val method = value.get("method")?.let { string(it, at.child("method")) } ?: "btree"
+            if (IndexMethod.entries.none { it.wireName == method }) invalid(at.child("method"), "Expected btree or brin.")
             val table = TableRef(identifier(value.get("schema"), at.child("schema")), identifier(value.get("table"), at.child("table")))
             val keys = array(value.get("keys"), at.child("keys"), 2).mapIndexed { position, key ->
                 val keyAt = at.child("keys").child(position.toString())
-                objectNode(key, keyAt, setOf("column", "direction", "nulls"))
+                objectNode(key, keyAt, if (method == "brin") setOf("column") else setOf("column", "direction", "nulls"))
                 val column = identifier(key.get("column"), keyAt.child("column"))
                 val direction = when (key.get("direction")?.let { string(it, keyAt.child("direction")) } ?: "asc") {
                     "asc" -> SortDirection.ASC
@@ -153,7 +164,8 @@ class WorkloadReader {
                 IndexKey(ColumnRef(table, column), direction, nulls)
             }
             if (keys.map { it.column }.distinct().size != keys.size) invalid(at, "Repeated index key.")
-            IndexDefinition(table, keys)
+            if (method == "brin" && keys.size != 1) invalid(at.child("keys"), "BRIN requires exactly one column.")
+            IndexDefinition(table, keys, method = method)
         }
     }
 

@@ -56,6 +56,27 @@ class ManualIndexEvaluatorTest {
         assertSame(baseline, result.evaluation)
     }
 
+    @Test fun `manual BRIN requires its own opclass and shares budgets with B-tree`() {
+        val brin = definition.copy(method = "brin")
+        val missing = assertThrows(AnalysisException::class.java) {
+            service.prepare(listOf(brin), catalog, workload, RunContext())
+        }
+        assertEquals(ErrorCode.INVALID_INPUT, missing.error.code)
+        assertEquals("manual_indexes.0.keys.0", missing.error.details["field"])
+        val withBrin = catalog.copy(tables = catalog.tables.map { t -> t.copy(columns = t.columns.map {
+            it.copy(defaultOperatorClasses = mapOf("brin" to "pg_catalog.int4_minmax_ops"))
+        }) })
+        val prepared = service.prepare(listOf(definition, brin, brin), withBrin, workload, RunContext())
+        assertEquals(2, prepared.candidates.size)
+        assertEquals(setOf("brin", "btree"), prepared.candidates.map { it.definition.method }.toSet())
+        val sized = prepared.candidates.map { it.copy(estimatedBytes = 100) }
+        val usage = metrics.assessBudget(sized, workload.input).usage
+        assertEquals(240, usage.budgetedBytes)
+        assertEquals(2, usage.indexCount)
+        val units = sized.map { metrics.assessBudget(listOf(it), workload.input).usage.writeUnitsPerHour }
+        assertEquals(units[0], units[1], "Equal proxy values are not claims about physical write costs")
+    }
+
     @Test fun `unknown column is rejected before evaluation`() {
         val bad = definition.copy(keys = listOf(IndexKey(ColumnRef(table, "missing"))))
         val error = assertThrows(AnalysisException::class.java) {

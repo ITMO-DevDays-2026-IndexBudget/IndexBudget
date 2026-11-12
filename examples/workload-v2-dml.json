@@ -1,0 +1,13 @@
+{
+  "schema_version": 2,
+  "queries": [
+    {"id": "read", "sql": "SELECT id, value FROM public.records WHERE group_id = 42"},
+    {"id": "update", "sql": "UPDATE public.records r SET value = 7 WHERE r.group_id = 42"},
+    {"id": "delete", "sql": "DELETE FROM public.records WHERE group_id = 43 AND value < 10"}
+  ],
+  "profiles": [
+    {"id": "day", "weight": 2, "calls_per_hour": {"read": 100, "update": 10, "delete": 1}},
+    {"id": "night", "weight": 1, "calls_per_hour": {"read": 5, "update": 100, "delete": 20}}
+  ],
+  "constraints": {"storage_budget_bytes": 8388608, "write_budget_units_per_hour": null, "max_indexes": 3}
+}

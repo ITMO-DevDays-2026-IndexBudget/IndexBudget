@@ -31,6 +31,21 @@ class ObservedWorkloadImporterTest {
     private val options: Map<String, Any?> = mapOf("constraints" to mapOf("storage_budget_bytes" to 1048576,
         "write_budget_units_per_hour" to null), "objective" to "robust")
 
+    @Test fun `restricted DML imports through selection frequencies and full semantic validation`() {
+        for ((template, example, kind) in listOf(
+            Triple("UPDATE public.records SET value=$1 WHERE group_id=$2",
+                "UPDATE public.records SET value=7 WHERE group_id=1", StatementKind.UPDATE),
+            Triple("DELETE FROM public.records WHERE group_id=$1",
+                "DELETE FROM public.records WHERE group_id=1", StatementKind.DELETE),
+        )) {
+            val result = build(frequencies(template), listOf(SqlExample(key(), example, listOf("pg_catalog", "public"))))
+            assertNull(result.error)
+            assertEquals(kind, result.resolvedQueries.single().statementKind)
+            assertEquals(3600.0, read(result).profiles.single().callsPerHour.values.single())
+            assertTrue(read(result).queries.single().sql.startsWith(kind.name))
+        }
+    }
+
     @Test fun `template catalog includes its own unqualified table before comparing physical schemas`() {
         val archive = snapshot.tables.single().copy(ref = TableRef("archive", "records"))
         val available = snapshot.tables + archive
@@ -211,6 +226,28 @@ class ObservedWorkloadImporterTest {
         assertEquals(2, read(result).queries.map { it.id }.distinct().size)
         assertEquals("NESTED_STATEMENT", tree(result.manifest)["entries"].single { !it["key"]["toplevel"].booleanValue() }["reason"].asString())
         assertEquals(7200.0, tree(result.manifest)["periods"][0]["available_calls_per_hour"].doubleValue())
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = [
+        "DELETE FROM public.records USING (SELECT id FROM public.records) AS other WHERE records.id = other.id",
+        "UPDATE public.records SET (value) = (1) WHERE id = 1",
+    ])
+    fun `unsupported DML excludes only that observation and retains valid SELECT`(unsupported: String) {
+        val before = listOf(row(100), row(100).copy(queryid = 2, query = unsupported))
+        val after = listOf(row(160), row(160).copy(queryid = 2, query = unsupported))
+        val input = FrequencyCalculator().calculate(listOf(FrequencyWindow("day", 1.0,
+            capture(0, before), capture(60, after))))
+        val result = build(input)
+        val entries = tree(result.manifest)["entries"].toList()
+        val excluded = entries.single { it["key"]["queryid"].asString() == "2" }
+        assertEquals("excluded", excluded["status"].asString())
+        assertEquals("UNSUPPORTED_STATEMENT", excluded["reason"].asString())
+        assertEquals("UNSUPPORTED_SQL", excluded["details"].asString())
+        assertEquals("selected", entries.single { it["key"]["queryid"].asString() == "1" }["status"].asString())
+        assertEquals(1, read(result).queries.size)
+        assertEquals(3600.0, read(result).profiles.single().callsPerHour.values.single())
+        assertEquals(StatementKind.SELECT, result.resolvedQueries.single().statementKind)
     }
 
     @Test fun `unknown windows never become zero and all excluded identities keep reasons`() {

@@ -311,7 +311,9 @@ class HtmlReportRenderer : ReportRenderer {
     }
 
     private fun shortDefinition(candidate: IndexCandidate, report: AnalysisReport): String =
-        "${shortTable(candidate.definition.table, report)}(" + candidate.definition.keys.joinToString { it.column.name } + ")" +
+        shortTable(candidate.definition.table, report) +
+            (if (candidate.definition.method == "btree") "" else " · ${candidate.definition.method} ") +
+            "(" + candidate.definition.keys.joinToString { it.column.name } + ")" +
             candidate.definition.includedColumns.takeIf { it.isNotEmpty() }?.joinToString(", ", " INCLUDE (", ")") { it.name }.orEmpty()
 
     private fun effectPercent(effect: CostEffect): String = when {
@@ -511,6 +513,9 @@ class HtmlReportRenderer : ReportRenderer {
 
     private fun StringBuilder.queries(report: AnalysisReport, includeDetails: Boolean = false) {
         section("queries", "Каким запросам поможет выбранный набор", "Оценка одного выполнения запроса, planner cost")
+        if (report.statementKinds.values.any { it != StatementKind.SELECT }) {
+            append("<p class=\"notice\">Для UPDATE/DELETE cost описывает поиск и подготовку строк. ModifyTable не оценивает фактическую запись, WAL, блокировки или триггеры; это не прогноз времени изменения данных. Частота вызовов не заменяет write rates таблицы.</p>")
+        }
         append("<p>До — существующие индексы; с набором — они же и все предложенные. Меньшая оценка лучше.</p>")
         val baseline = report.result.baseline
         val selected = report.result.selected?.evaluation
@@ -568,6 +573,7 @@ class HtmlReportRenderer : ReportRenderer {
             append("<h3>Полный ID</h3>")
             pre(id)
             append("<dl class=\"values\">")
+            report.statementKinds[id]?.let { entry("Вид SQL", it.name) }
             entry("Baseline cost", number(baseline?.costByQueryId?.get(id)))
             entry("Selected cost", number(selected?.costByQueryId?.get(id)))
             entry("Снижение cost, %", effects[id]?.selected?.let { percent(it.gainPercent, it.baselineCost) } ?: "Нет данных")
@@ -745,6 +751,7 @@ class HtmlReportRenderer : ReportRenderer {
 
     private fun StringBuilder.method(report: AnalysisReport, includeComparison: Boolean = false) {
         section("method", "Как получена оценка и где её границы", "")
+        append("<p>Write proxy — условная модель по числу колонок: одинаковое число колонок B-tree и BRIN не означает одинаковую реальную цену записи.</p>")
         append("<p><strong>Baseline</strong> — оценка с существующими индексами. Новые наборы оценены целиком через HypoPG, без физического построения. Поиск ограничен и не гарантирует лучший возможный набор.</p>")
         append("<details><summary>Ограничения методики</summary><p>Вывод относится только к переданным SQL и параметрам. Время запросов и записи, фактический размер индексов и конкуренция запросов не измерены. Planner cost не обещает SLA.</p></details>")
         append("<details><summary>Точные метрики выбранного набора</summary><p>Baseline — существующие реальные индексы. Selected — весь добавленный гипотетический набор. Planner cost не переводится во время выполнения.</p><dl class=\"values\">")
@@ -793,6 +800,7 @@ class HtmlReportRenderer : ReportRenderer {
         entry("Длительность анализа, мс", number(report.durationMillis))
         entry("Режим анализа", modeName(report.analysisMode))
         entry("Рейтинг shortlist", rankingName(report.candidateRanking))
+        entry("Методы индексов", report.indexMethods.sortedBy { it.ordinal }.joinToString { it.wireName })
         entry("Причины остановки", report.result.diagnostics.stopReasons.joinToString { it.name }.ifEmpty { "Нет данных" })
         entry("Завершённые этапы", report.result.diagnostics.completedPhases.joinToString(" → ") { it.name.lowercase(Locale.ROOT) }.ifEmpty { "Нет завершённых этапов" })
         entry("Приложение", report.environment.applicationVersion)
@@ -909,7 +917,7 @@ class HtmlReportRenderer : ReportRenderer {
     private fun definition(candidate: IndexCandidate): String =
         "${tableName(candidate.definition.table)} · ${candidate.definition.method} (" +
             candidate.definition.keys.joinToString { key ->
-                "${key.column.name} ${key.direction.name} NULLS ${key.nulls.name}" +
+                key.column.name + (if (candidate.definition.method == "btree") " ${key.direction.name} NULLS ${key.nulls.name}" else "") +
                     (key.collation?.let { " COLLATE $it" } ?: "") + (key.operatorClass?.let { " $it" } ?: "")
             } + ")" + candidate.definition.includedColumns.takeIf { it.isNotEmpty() }
                 ?.joinToString(", ", " INCLUDE (", ")") { it.name }.orEmpty()
@@ -945,6 +953,8 @@ class HtmlReportRenderer : ReportRenderer {
 
     private fun candidateReason(reason: CandidateReason): String = when (reason) {
         CandidateReason.EXACT_EXISTING_DUPLICATE -> "Точный реальный дубль"
+        CandidateReason.NO_BRIN_OPERATOR_CLASS -> "Нет подходящего BRIN opclass"
+        CandidateReason.METHOD_VARIANT_LIMIT -> "Общий предел вариантов методов"
         CandidateReason.NO_BTREE_OPERATOR_CLASS -> "Нет подходящего B-tree opclass"
         CandidateReason.COLUMN_SHORTLIST_TRUNCATED -> "Отсечение колонок"
         CandidateReason.INCLUDE_PAYLOAD_LIMIT -> "Лимит INCLUDE-колонок"

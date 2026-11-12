@@ -52,12 +52,11 @@ class ObservedWorkloadImporter(private val catalog: ImportCatalog) {
             if (rows.map { it?.query }.distinct().size != 1) { exclude("TEMPLATE_CHANGED_BETWEEN_WINDOWS"); continue }
             val template = requireNotNull(rows.first()?.query)
             if (template.toByteArray(Charsets.UTF_8).size > 64 * 1024) { exclude("SQL_SIZE_LIMIT"); continue }
-            val statements = try { net.sf.jsqlparser.parser.CCJSqlParserUtil.parseStatements(template) }
-                catch (_: net.sf.jsqlparser.JSQLParserException) { exclude("UNSUPPORTED_STATEMENT"); continue }
-                finally { context.checkDeadline() }
-            if (statements.size != 1 || statements[0] !is net.sf.jsqlparser.statement.select.PlainSelect) {
-                exclude("UNSUPPORTED_STATEMENT"); continue
-            }
+            val templateTables = try { matcher.referencedTables(template) }
+                catch (error: AnalysisException) {
+                    if (error.error.code !in setOf(ErrorCode.UNSUPPORTED_SQL, ErrorCode.INVALID_INPUT, ErrorCode.INPUT_LIMIT_EXCEEDED)) throw error
+                    exclude("UNSUPPORTED_STATEMENT", error.error.code.name); continue
+                }
             if (rows.all { it?.callsPerHour == 0.0 }) { exclude("NO_CALLS"); continue }
             if (example == null) { exclude("MISSING_EXAMPLE"); continue }
             if (example.searchPath.isEmpty() || example.searchPath.first() != "pg_catalog" ||
@@ -70,7 +69,7 @@ class ObservedWorkloadImporter(private val catalog: ImportCatalog) {
                 val one = WorkloadInput(listOf(QueryInput(id, example.sql)), listOf(Profile("validation", 1.0, mapOf(id to 1.0))),
                     Constraints(0, null))
                 val parsed = sql.parse(one, context)
-                val snapshot = catalog.read(parsed.referencedTables + matcher.referencedTables(template), example.searchPath, context)
+                val snapshot = catalog.read(parsed.referencedTables + templateTables, example.searchPath, context)
                 val resolved = sql.resolve(parsed, snapshot, context).queries.single()
                 if (!matcher.match(requireNotNull(rows.first()?.query), example.sql, snapshot)) {
                     exclude("TEMPLATE_MISMATCH"); continue

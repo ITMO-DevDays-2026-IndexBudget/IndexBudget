@@ -1,4 +1,4 @@
-# Формат отчёта v3
+# Форматы отчёта v3 и v4
 
 Нормативные требования к поведению — [спецификация v0.2, §8](../IndexBudget-spec-v0.2.md#8-архитектура-cli-и-отчёты).
 Здесь зафиксирован JSON-контракт реализации #19 с расширениями INCLUDE #79 и сводки #68. `DefaultReportBuilder` собирает общий
@@ -6,6 +6,10 @@
 получает ту же модель для HTML. Сериализация внутренних Kotlin-классов не определяет wire-формат.
 
 JSON записывается в UTF-8. Все перечисленные поля присутствуют, включая поля со значением `null`.
+Для #103 `queries[].statement_kind` имеет значения `select`, `update`, `delete`,
+а `cost_interpretation` — `planner_cost` или `row_search_and_preparation` для DML.
+Без AST-метаданных (например, ранняя ошибка) оба поля null; вид SQL не угадывается по тексту.
+HTML поясняет, что ModifyTable cost не включает фактическую запись, WAL/блокировки/триггеры.
 Статус, objective, comparison scope, фазы, направления ключей и `source` записываются строчными
 английскими значениями. Устойчивые коды ошибок, предупреждений и причин сохраняют верхний регистр.
 Числа costs — единицы планировщика, размеры — байты, длительности — миллисекунды, write units —
@@ -22,7 +26,7 @@ JSON записывается в UTF-8. Все перечисленные пол
 
 | Поле | Тип и смысл |
 | --- | --- |
-| `schema_version`, `spec_version` | `3` и `"0.2"` |
+| `schema_version`, `spec_version` | `3` для B-tree-only, `4` при разрешённом или ручном BRIN; spec `"0.2"` |
 | `run_id` | ID одного запуска, общий для JSON/HTML/SQL |
 | `input_hash` | SHA-256 исходного валидированного JSON; `null`, если hash не был получен при failed |
 | `duration_millis` | Длительность до сборки модели; время записи файлов сюда не входит |
@@ -30,6 +34,8 @@ JSON записывается в UTF-8. Все перечисленные пол
 | `status` | `completed`, `partial` или `failed` |
 | `analysis_mode` | Эффективный режим `fast`, `normal` или `deep`, с учётом приоритета CLI над JSON; доступен и для failed |
 | `candidate_ranking` | Эффективный рейтинг `frequency` или экспериментальный `baseline_cost` с учётом CLI; сохраняется при completed/partial/failed и раннем завершении до shortlist |
+| `index_methods` | Эффективные автоматические методы: непустой массив `btree`/`brin` в стабильном порядке; старый отчёт без поля означает только B-tree |
+| `write_proxy_note` | Разъяснение: одинаковое число колонок разных методов не доказывает равную реальную цену записи |
 | `selected_objective` | `robust` или `mean`, критерий, управлявший поиском |
 | `comparison_scope` | Всегда `evaluated_sets`: оба incumbents из одного исследованного пула |
 | `incumbents_coincide` | Совпадают ли отсортированные IDs двух наборов; `null` для failed |
@@ -43,7 +49,7 @@ JSON записывается в UTF-8. Все перечисленные пол
 | `write_proxy_model` | Всегда `row_changes_times_key_and_include_columns`; payload оплачивается как ключ |
 | `table_write_rates` | Объект по физическим `schema.table` либо `null`; значения содержат `inserts_per_hour`, `updates_per_hour`, `deletes_per_hour`, `source` (`manual` или `observed`) |
 | `table_write_rates_origin` | Происхождение наблюдаемого окна записи (`window`, `complete`, `reasons`) либо `null` для ручного ввода |
-| `queries` | Общий список SQL в исходном порядке; поля `id`, `sql`, `baseline_cost`, `selected_cost`, `regression` |
+| `queries` | Общий список SQL в исходном порядке; поля `id`, `sql`, `statement_kind`, `cost_interpretation`, `baseline_cost`, `selected_cost`, `regression` |
 | `baseline` | Сохранённая полная оценка пустого гипотетического набора; `null`, если полного baseline нет |
 | `selected` | Та же конфигурация, что `best_robust` или `best_mean` по выбранному objective; `null` для failed |
 | `best_robust`, `best_mean` | Полные сохранённые конфигурации из общего пула; `null` для failed |
@@ -431,3 +437,15 @@ run ID и `input_hash: null`, исходные идентификаторы и S
 его SHA-256 и доступные факты сохранены в
 [отдельном ресурсе](../src/testFixtures/resources/report/recorded-series-sample.json);
 это повторный рендер без нового запуска БД, не замена исходного импортированного примера.
+
+## BRIN и несовместимость readers (#114)
+
+Report v4 имеет структуру v3, но допускает `definition.method: "brin"` и
+`direction: null`, `nulls: null` у его ключа: сортировка неприменима. Поле `method`
+обязательно также в `manual_requested_indexes`. BRIN — одна колонка, стандартные
+параметры, default opclass метода, без INCLUDE. Readers, умеющие только v3,
+должны отклонять v4: восстанавливать BRIN как B-tree запрещено. Запуск с BRIN
+сохраняет v4 даже при пустом результате или failed. Экспортёр отвергает модель,
+которая пытается записать BRIN под schema_version 3. B-tree-only остаётся v3.
+Диагностика добавляет `BRIN_RANGE`, `NO_BRIN_OPERATOR_CLASS` и
+`METHOD_VARIANT_LIMIT`. [Подробности и сохранённый прогон](brin.md).

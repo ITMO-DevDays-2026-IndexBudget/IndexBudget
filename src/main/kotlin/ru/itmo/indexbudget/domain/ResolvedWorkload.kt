@@ -1,6 +1,7 @@
 package ru.itmo.indexbudget.domain
 
 enum class PredicateSource { WHERE, JOIN }
+enum class StatementKind { SELECT, UPDATE, DELETE }
 
 /** Leaf indices refer to the complete, ordered ResolvedQuery.predicates vector. No DNF expansion. */
 sealed interface ResolvedCondition {
@@ -49,6 +50,8 @@ data class ResolvedQuery(
     val selectsAllColumns: Boolean = false,
     /** Null means the legacy conjunctive vector (or no conditions). Production preserves the tree. */
     val condition: ResolvedCondition? = null,
+    val statementKind: StatementKind = StatementKind.SELECT,
+    val modifiedColumns: Set<ColumnRef> = emptySet(),
 )
 
 data class ResolvedWorkload(

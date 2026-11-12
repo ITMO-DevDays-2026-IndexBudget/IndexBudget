@@ -11,7 +11,7 @@ class JsonReportWriter {
         .build()
 
     fun render(report: AnalysisReport): String {
-        require(report.schemaVersion == 3 && report.specVersion == "0.2") { "Expected report v3 / spec 0.2" }
+        report.validateMethodFormat()
         val result = report.result
         val input = report.input
         val comparisons = report.queryComparisons.associateBy { it.queryId }
@@ -26,6 +26,7 @@ class JsonReportWriter {
             "status" to result.status.name.lowercase(),
             "analysis_mode" to report.analysisMode.name.lowercase(),
             "candidate_ranking" to report.candidateRanking.wireName,
+            "index_methods" to report.indexMethods.sortedBy { it.ordinal }.map { it.wireName },
             "selected_objective" to result.selectedObjective.name.lowercase(),
             "comparison_scope" to report.comparisonScope.name.lowercase(),
             "incumbents_coincide" to report.incumbentsCoincide,
@@ -48,6 +49,7 @@ class JsonReportWriter {
                 "outcomes" to report.costGuards.map(::costGuard),
             ),
             "write_proxy_model" to "row_changes_times_key_and_include_columns",
+            "write_proxy_note" to "Equal column counts do not imply equal real maintenance costs across index methods.",
             "table_write_rates" to input?.tableWriteRates?.toSortedMap()?.mapValues { (_, rates) -> linkedMapOf(
                 "inserts_per_hour" to rates.insertsPerHour,
                 "updates_per_hour" to rates.updatesPerHour,
@@ -66,6 +68,10 @@ class JsonReportWriter {
             "queries" to input?.queries?.map { query -> linkedMapOf(
                 "id" to query.id,
                 "sql" to query.sql,
+                "statement_kind" to report.statementKinds[query.id]?.name?.lowercase(),
+                "cost_interpretation" to report.statementKinds[query.id]?.let {
+                    if (it == StatementKind.SELECT) "planner_cost" else "row_search_and_preparation"
+                },
                 "baseline_cost" to comparisons[query.id]?.baselineCost,
                 "selected_cost" to comparisons[query.id]?.selectedCost,
                 "regression" to comparisons[query.id]?.regression,
@@ -78,9 +84,10 @@ class JsonReportWriter {
                 .map(::candidate),
             "candidates" to report.candidates.candidates.sortedBy { it.id }.map(::candidate),
             "manual_requested_indexes" to input?.manualIndexes?.map { definition -> linkedMapOf(
-                "schema" to definition.table.schema, "table" to definition.table.name,
+                "schema" to definition.table.schema, "table" to definition.table.name, "method" to definition.method,
                 "keys" to definition.keys.map { key -> linkedMapOf("column" to key.column.name,
-                    "direction" to key.direction.name.lowercase(), "nulls" to key.nulls.name.lowercase()) },
+                    "direction" to key.direction.name.lowercase().takeIf { definition.method == "btree" },
+                    "nulls" to key.nulls.name.lowercase().takeIf { definition.method == "btree" }) },
             ) },
             "manual_comparison" to report.manualComparison?.let(::manualComparison),
             "candidate_diagnostics" to candidateDiagnostics(report.candidates.diagnostics),
@@ -231,8 +238,8 @@ class JsonReportWriter {
             "unique" to value.definition.unique,
             "keys" to value.definition.keys.map { key -> linkedMapOf(
                 "column" to column(key.column),
-                "direction" to key.direction.name.lowercase(),
-                "nulls" to key.nulls.name.lowercase(),
+                "direction" to key.direction.name.lowercase().takeIf { value.definition.method == "btree" },
+                "nulls" to key.nulls.name.lowercase().takeIf { value.definition.method == "btree" },
                 "collation" to key.collation,
                 "operator_class" to key.operatorClass,
             ) },
