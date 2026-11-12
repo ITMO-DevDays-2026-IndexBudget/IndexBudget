@@ -162,12 +162,24 @@ class JdbcAnalysisSessionIntegrationTest {
             tableWriteRates = mapOf("$schema.records" to TableWriteRates(1.0, 2.0, 3.0)))
         val before = longScalar(admin, "SELECT sum(id::bigint + a + b + length(payload)) FROM $schema.records")
         val context = RunContext()
+        // Exercise the real JSON boundary too: successful exports require its source hash.
+        val source = directory.resolve("workload.json")
+        Files.writeString(source, mapper.writeValueAsString(mapOf(
+            "schema_version" to 2,
+            "queries" to input.queries.map { mapOf("id" to it.id, "sql" to it.sql) },
+            "profiles" to input.profiles.map { mapOf("id" to it.id, "weight" to it.weight, "calls_per_hour" to it.callsPerHour) },
+            "constraints" to mapOf("storage_budget_bytes" to 100_000_000, "write_budget_units_per_hour" to 1000,
+                "query_cost_guards" to mapOf("u" to 1.0)),
+            "table_write_rates" to mapOf("$schema.records" to mapOf(
+                "inserts_per_hour" to 1, "updates_per_hour" to 2, "deletes_per_hour" to 3, "source" to "manual")),
+        )))
+        val validatedInput = WorkloadReader().read(source, context)
         val pipeline = AnalysisPipeline(JSqlParserSqlAnalyzer(), object : AnalysisSessionFactory {
             override fun open(context: RunContext): AnalysisSession = session
         }, ProfileAwareCandidateGenerator(), MetricsCalculatorImpl(), ObjectiveComparatorImpl(),
             LimitedRepairOptimizer(), DefaultReportBuilder(), AtomicReportExporter(HtmlReportRenderer()))
         val output = directory.resolve("mixed")
-        val result = pipeline.run(input, output, context)
+        val result = pipeline.run(validatedInput, output, context)
         assertEquals(RunStatus.COMPLETED, result.status)
         assertEquals(setOf("s", "u", "d"), result.baseline?.costByQueryId?.keys)
         assertEquals(setOf("s", "u", "d"), result.selected?.evaluation?.costByQueryId?.keys)
