@@ -135,4 +135,3 @@ Kotlin/JVM · JDK 25 · Spring Boot в режиме CLI · Gradle Wrapper · Pos
 - [Спецификация](IndexBudget-spec-v0.2.md) и [контракты](docs/contracts.md) — форматы и правила расчётов.
 - [Эксперимент с наблюдаемыми бюджетами](docs/experiments/observed-budgets-2026-11-12/README.md) — подробные результаты сравнения.
 - [Общий стенд](deploy/db/README.md) — обновления БД и сохранение данных.
-- [Разработка и ревью](ai/README.md), [AGENTS.md](AGENTS.md) — контекст для участников и агентов.
