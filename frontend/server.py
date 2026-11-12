@@ -21,6 +21,7 @@ from urllib.parse import unquote, urlsplit
 from uuid import UUID, uuid4
 
 from scenarios import load_templates
+from prepared_dataset import prepare_clone
 
 ROOT = Path(__file__).resolve().parent
 REPO = ROOT.parent
@@ -330,24 +331,25 @@ class LocalRunner:
         if role not in {"frontend_reader", "frontend_scenarios"}:
             raise ValueError("Неизвестная роль доверенного frontend-датасета.")
         self.analysis_role = role
-        self.db("DROP DATABASE IF EXISTS frontend_demo WITH (FORCE);\nCREATE DATABASE frontend_demo;", "postgres")
-        self.db("CREATE EXTENSION hypopg;\n" + request["schema_sql"])
-        self.db(request["seed_sql"])
-        self.db("""ANALYZE;
-DO $$ BEGIN
+        snapshot = prepare_clone(self.db, request, lambda database: self.configure_roles(role, database))
+        catalog = json.loads(self.db((ROOT / "catalog.sql").read_text()))
+        catalog["dataset_snapshot"] = snapshot
+        return catalog
+
+    def configure_roles(self, role, database):
+        self.db("""DO $$ BEGIN
  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'frontend_reader') THEN
    CREATE ROLE frontend_reader LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE;
  END IF;
 END $$;
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
-REVOKE TEMPORARY ON DATABASE frontend_demo FROM PUBLIC;
 DO $$ DECLARE s record; BEGIN
  FOR s IN SELECT nspname FROM pg_namespace
    WHERE nspname NOT LIKE 'pg_%' AND nspname <> 'information_schema' LOOP
    EXECUTE format('GRANT USAGE ON SCHEMA %I TO frontend_reader', s.nspname);
    EXECUTE format('GRANT SELECT ON ALL TABLES IN SCHEMA %I TO frontend_reader', s.nspname);
  END LOOP;
-END $$;""")
+END $$;""", database)
         if role == "frontend_scenarios":
             # Только собственная пересозданная demo-БД. SELECT-only роль не расширяется.
             self.db("""DO $$ BEGIN
@@ -357,8 +359,7 @@ END $$;""")
 END $$;
 GRANT frontend_reader TO frontend_scenarios;
 GRANT UPDATE (payload), DELETE ON public.records TO frontend_scenarios;
-ALTER ROLE frontend_scenarios SET default_transaction_read_only = on;""")
-        return json.loads(self.db((ROOT / "catalog.sql").read_text()))
+ALTER ROLE frontend_scenarios SET default_transaction_read_only = on;""", database)
 
     def analyze(self, workload, output, series=None):
         if not self.cli.is_file():

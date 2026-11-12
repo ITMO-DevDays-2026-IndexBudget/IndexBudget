@@ -14,6 +14,8 @@ def main():
     parser.add_argument('--url', default='http://127.0.0.1:8090')
     parser.add_argument('--verify-local-database', action='store_true',
                         help='Проверить неизменность строк и DML-роль в той же отдельной Compose-БД.')
+    parser.add_argument('--repeatability-only', action='store_true',
+                        help='Три одинаковых запуска обычного режима на подготовленных клонах.')
     args = parser.parse_args()
     base = args.url.rstrip('/')
     database = None
@@ -61,12 +63,44 @@ def main():
             assert error.code == 400
             assert json.load(error)['error']
 
+    def verify_repeatability():
+        reference = None
+        common = next(t for t in templates if t['id'] == '04-scenarios')
+        for repeat in range(3):
+            repeated = payload(common)
+            repeated['workload']['analysis_mode'] = 'normal'
+            result = wait(post('/api/runs', repeated))
+            assert result['status'] in ('completed', 'partial'), result
+            prefix = result['report_url'].rsplit('/', 1)[0]
+            report = json.loads(get(prefix + '/report.json'))
+            catalog = json.loads(get(prefix + '/schema.json'))
+            reasons = report['diagnostics']['stop_reasons']
+            assert not set(reasons) & {'DEADLINE_EXCEEDED', 'EXPLAIN_LIMIT', 'CANCELLED',
+                                       'CONNECTION_LOST', 'EVALUATION_FAILED'}, reasons
+            retained = {name: {'ids': report[name]['candidate_ids'], 'costs': report[name]['cost_by_query_id'],
+                               'metrics': report[name]['metrics']}
+                        for name in ('baseline', 'selected', 'best_robust', 'best_mean')}
+            current = {'snapshot': catalog['dataset_snapshot'], 'evaluations': retained,
+                       'candidates': sorted(c['id'] for c in report['candidates']), 'stop_reasons': reasons}
+            if reference is None:
+                reference = current
+            else:
+                assert current == reference, f'Default repeated run {repeat + 1} changed: {current}'
+            if database:
+                visible = json.loads(database.db("SELECT to_json(bool_and(relallvisible = relpages AND relpages > 0)) "
+                    "FROM pg_class WHERE oid IN ('public.records'::regclass, 'public.groups'::regclass);"))
+                assert visible is True
+        print('PASS three default runs: same statistics/visibility, baseline, pool, incumbents and selected costs', flush=True)
+
     assert b'IndexBudget' in get('/')
     for asset in ('/app.js', '/style.css'):
         assert len(get(asset)) > 100
     health = json.loads(get('/api/health'))
     assert health['database'] and health['cli'], health
     templates = json.loads(get('/api/templates'))
+    if args.repeatability_only:
+        verify_repeatability()
+        return
     assert {t['id'] for t in templates} == {'01-records', '02-shop', '03-wide', '04-scenarios', '04-events-brin', '05-lookup-hash'}
     for template in templates:
         assert template['workload']['index_methods'] == ['btree', 'brin', 'hash']
@@ -230,6 +264,7 @@ def main():
     assert [c['definition']['method'] for c in report['selected_indexes']] == ['hash']
     assert report['selected']['cost_by_query_id']['lookup_recent'] == report['baseline']['cost_by_query_id']['lookup_recent']
     print('PASS lookup: 8 MiB selects hash, 16 MiB selects hash + B-tree', flush=True)
+    verify_repeatability()
     broken = payload(templates[0])
     broken['workload']['queries'][0]['sql'] = 'SELECT missing_demo_column FROM public.records'
     failure = wait(post('/api/runs', broken))
