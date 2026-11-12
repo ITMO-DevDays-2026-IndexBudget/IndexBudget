@@ -116,7 +116,9 @@ class ManualComparisonPipelineTest {
         assertEquals(RunStatus.PARTIAL, result.status)
         assertSavedAutomatic(run, result)
         assertNoManualCosts(run, ErrorCode.DEADLINE_EXCEEDED)
-        val candidates = checkNotNull(checkNotNull(run.report) { "Expected report to be available" }.manualComparison) { "Expected manualComparison to be available" }.candidates
+        val report = checkNotNull(run.report) { "Expected report to be available" }
+        val manual = checkNotNull(report.manualComparison) { "Expected manualComparison to be available" }
+        val candidates = manual.candidates
         assertNotNull(candidates[0].estimatedBytes)
         assertNotNull(candidates[0].budgetedBytes)
         assertNull(candidates[1].estimatedBytes)
@@ -158,7 +160,8 @@ class ManualComparisonPipelineTest {
     }
 
     private fun assertNoManualCosts(run: Harness, code: ErrorCode) {
-        val manual = checkNotNull(checkNotNull(run.report) { "Expected report to be available" }.manualComparison) { "Expected manualComparison to be available" }
+        val report = checkNotNull(run.report) { "Expected report to be available" }
+        val manual = checkNotNull(report.manualComparison) { "Expected manualComparison to be available" }
         assertEquals(ManualComparisonStatus.FAILED, manual.status)
         assertEquals(code, checkNotNull(manual.error) { "Expected error to be available" }.code)
         assertNull(manual.evaluation)

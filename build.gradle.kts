@@ -25,6 +25,7 @@ dependencies {
     implementation("com.github.jsqlparser:jsqlparser:5.4")
 
     testImplementation("org.springframework.boot:spring-boot-starter-test")
+    testImplementation(kotlin("compiler-embeddable"))
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
     testFixturesImplementation(kotlin("stdlib"))
     testFixturesImplementation(platform(org.springframework.boot.gradle.plugin.SpringBootPlugin.BOM_COORDINATES))
