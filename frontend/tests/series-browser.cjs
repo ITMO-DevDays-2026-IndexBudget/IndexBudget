@@ -45,7 +45,7 @@ const cli = path.resolve(process.env.FRONTEND_CLI || 'build/install/indexbudget/
       const job = await response.json();
       // Reload during the job: browser must resume polling by saved run ID, not submit another job.
       await page.goto(`${base}/?run=${job.run_id}`);
-      await page.waitForURL('**/reports/*/report.html', {timeout: 720000});
+      await page.waitForURL(/\/reports\/[^/]+\/(?:report|demo-series)\.html$/, {timeout: 720000});
       const reportBase = `${base}/reports/${job.run_id}/`;
       const folder = path.join(output, mode);
       await fs.mkdir(folder, {recursive: true});

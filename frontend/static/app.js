@@ -441,7 +441,13 @@ function updateSeriesSettings() {
 function seriesRequest() {
   if ($('launch-mode').value !== 'series') return null;
   const parts = $('series-values').value.split(',').map(v => v.trim());
-  const values = parts.map(v => v === '' ? NaN : Number(v));
+  const values = parts.map(v => {
+    if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(v)) return NaN;
+    const value = Number(v);
+    const nonzero = /[1-9]/.test(v.split(/e/i)[0]);
+    if ((value === 0 && nonzero) || (v.startsWith('-') && nonzero)) return NaN;
+    return value;
+  });
   if (values.length < 3 || values.length > 5 || values.some(v => !Number.isFinite(v) || v < 0) || new Set(values).size !== values.length) throw new Error('Задайте 3–5 различных неотрицательных бюджетов.');
   const budget = $('series-budget').value;
   if (budget === 'storage_budget_bytes' && values.some(v => !Number.isSafeInteger(v))) throw new Error('Для места задайте точные целые байты.');
@@ -621,12 +627,12 @@ async function init() {
     templates=await api('/api/templates');
     let draft;
     try { draft=JSON.parse(localStorage.getItem(draftKey)); } catch {}
+    if (draft?.seriesUI) for (const id of ['launch-mode','series-budget','series-values','series-timeout']) if (typeof draft.seriesUI[id] === 'string') $(id).value = draft.seriesUI[id];
+    updateSeriesSettings();
     const restored = restoreDraft(draft, templates);
     if (restored) {
       ({state, guardsText, manualText} = restored); renderAll(); persist();
     } else loadTemplate(templates[0].id);
-    if (draft?.seriesUI) for (const id of ['launch-mode','series-budget','series-values','series-timeout']) if (typeof draft.seriesUI[id] === 'string') $(id).value = draft.seriesUI[id];
-    updateSeriesSettings();
     $('workspace').disabled=false; $('analyze').disabled=false; $('start-tour').disabled=false;
     const id=new URLSearchParams(location.search).get('run');
     if(id) { activeJob=id; setBusy(true); poll(id); }

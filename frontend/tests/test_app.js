@@ -175,3 +175,37 @@ test('повторы, неверное число и отрицательные 
     assert.throws(() => ui.run('seriesRequest()'));
   }
 });
+
+test('положительный и отрицательный underflow серии отвергаются до отправки', () => {
+  const ui = app();
+  ui.element('launch-mode').value = 'series';
+  ui.element('series-budget').value = 'write_budget_units_per_hour';
+  ui.element('series-timeout').value = '600';
+  for (const text of ['1e-400,1,2', '-1e-400,1,2']) {
+    ui.element('series-values').value = text;
+    assert.throws(() => ui.run('seriesRequest()'));
+  }
+});
+
+test('init восстанавливает серию до первого persist и следующая вкладка читает тот же выбор', async () => {
+  const ui = app();
+  const draft = {state: {template_id: templates[0].id, template_version: templates[0].version, workload: copy(templates[0].workload)},
+    guardsText: '', manualText: '', seriesUI: {'launch-mode':'series','series-budget':'write_budget_units_per_hour','series-values':'0, 25, 100','series-timeout':'120'}};
+  ui.set('initialDraft', draft);
+  ui.run(`localStorage.getItem = () => JSON.stringify(initialDraft);
+    api = async p => p === '/api/templates' ? testTemplates : {database:true,cli:true,local_only:true};
+    renderAll = () => {}; tour = {maybeStart(){}}; location = {search:''};
+    document.querySelector = () => ({});`);
+  ui.set('URLSearchParams', URLSearchParams);
+  await ui.run('init()');
+  const saved = JSON.parse(ui.stored.values().next().value);
+  assert.deepEqual(saved.seriesUI, draft.seriesUI);
+  const second = app();
+  second.set('initialDraft', saved);
+  second.set('URLSearchParams', URLSearchParams);
+  second.run(`localStorage.getItem = () => JSON.stringify(initialDraft);
+    api = async p => p === '/api/templates' ? testTemplates : {database:true,cli:true,local_only:true};
+    renderAll = () => {}; tour = {maybeStart(){}}; location = {search:''}; document.querySelector = () => ({});`);
+  await second.run('init()');
+  assert.deepEqual(JSON.parse(second.stored.values().next().value).seriesUI, draft.seriesUI);
+});

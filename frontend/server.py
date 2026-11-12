@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+from decimal import Decimal
 import html
 import json
 import math
@@ -49,6 +50,71 @@ def write_json(path, value):
 
 def read_json(path):
     return json.loads(path.read_text())
+
+
+def http_json(raw):
+    def number(text):
+        exact = Decimal(text)
+        value = float(exact)
+        if not exact.is_finite() or not math.isfinite(value) or (exact != 0 and value == 0):
+            raise ValueError("Число JSON теряет ненулевое значение или выходит за диапазон.")
+        return value
+    return json.loads(raw, parse_float=number,
+                      parse_constant=lambda _: (_ for _ in ()).throw(ValueError("Некорректное число JSON.")))
+
+
+def series_terminal_status(usable, exit_code, core_status):
+    match (usable, exit_code, core_status):
+        case (False, _, _):
+            return "failed"
+        case (True, 0, "completed"):
+            return "completed"
+        case _:
+            return "partial"
+
+
+def series_result(directory, run_id, request, item, code, reason):
+    """Publish actual saved artifacts plus a terminal demo view; never rewrite core snapshots."""
+    staged = directory / "jobs" / run_id / "export"
+    published = directory / "reports" / run_id
+    saved = published if published.is_dir() else staged
+    published.parent.mkdir(parents=True, exist_ok=True)
+    summary = read_json(saved / "series.json") if (saved / "series.json").is_file() else {}
+    available = []
+    usable = False
+    for report in sorted(saved.glob("*/report.json")):
+        if not report.resolve().is_relative_to(saved.resolve()):
+            continue
+        try:
+            point = read_json(report)
+        except (OSError, ValueError):
+            continue
+        selected = point.get("selected")
+        if point.get("status") in {"completed", "partial"} and isinstance(selected, dict) and isinstance(selected.get("candidate_ids"), list):
+            usable = True
+        for name in ("report.html", "report.json", "indexes.sql"):
+            artifact = report.parent / name
+            if artifact.is_file(): available.append(artifact.relative_to(saved).as_posix())
+    if not summary and not available:
+        raise RuntimeError(reason or "Серия не сохранила результатов.")
+    status = series_terminal_status(usable, code, summary.get("status"))
+    cause = None if status == "completed" else reason or "Серия остановлена. Показаны сохранённые результаты."
+    write_json(saved / "workload.json", request["workload"])
+    write_json(saved / "series-request.json", request["series"])
+    write_json(saved / "schema.json", item.get("catalog", {"tables": [], "unavailable": True}))
+    write_json(saved / "demo-config.json", {**{k: v for k, v in request.items() if k != "workload"},
+                                         "run_id": run_id, "series_id": summary.get("series_id")})
+    links = (["report.html"] if (saved / "report.html").is_file() else []) + (["series.json"] if summary else []) + available
+    page = ('<!doctype html><html lang="ru"><meta charset="utf-8"><title>Результаты серии</title>'
+            '<h1>Серия: ' + html.escape(status) + '</h1><p>' + html.escape(cause or "Серия завершена.") + '</p>'
+            '<p>Отчёт CLI ниже — сохранённый снимок. Его running не означает, что процесс продолжает работу.</p><ul>'
+            + ''.join('<li><a href="' + html.escape(link, quote=True) + '">' + html.escape(link) + '</a></li>' for link in links) + '</ul></html>')
+    pending = saved / '.demo-series.pending'
+    pending.write_text(page); pending.replace(saved / 'demo-series.html')
+    if saved == staged: staged.rename(published)
+    return dict(status=status, error=cause, report_url=f"/reports/{run_id}/demo-series.html",
+                series_url=f"/reports/{run_id}/series.json" if summary else None,
+                points=summary.get("points", []), cli_exit_code=code, finished_at=time.time())
 
 
 def finite(value, minimum=0):
@@ -157,7 +223,7 @@ def validate_request(data, templates):
 
 
 def report_artifact(directory, parts):
-    allowed = {"report.html", "report.json", "indexes.sql", "workload.json", "demo-config.json", "schema.json", "series.json", "series.html", "series-request.json"}
+    allowed = {"report.html", "demo-series.html", "report.json", "indexes.sql", "workload.json", "demo-config.json", "schema.json", "series.json", "series.html", "series-request.json"}
     try:
         if len(parts) < 3 or str(UUID(parts[1])) != parts[1] or parts[-1] not in allowed:
             return None
@@ -262,22 +328,19 @@ class Jobs:
         (directory / "reports").mkdir(exist_ok=True)
         for path in (directory / "jobs").glob("*/status.json"):
             item = read_json(path)
-            if item["status"] not in TERMINAL:
+            if item["status"] not in TERMINAL or (item["status"] == "failed" and not item.get("report_url")):
                 item.update(status="failed", error="Сервер перезапущен. Отправьте запуск повторно.")
                 # Resume observation of saved series artifacts, never rerun against a changed dataset.
                 run_id = item["run_id"]
                 published = directory / "reports" / run_id
                 staged = path.parent / "export"
                 saved = published if published.is_dir() else staged
-                if (saved / "series.json").is_file() and (saved / "report.html").is_file():
+                if (saved / "series.json").is_file() or list(saved.glob("*/report.json")):
                     try:
-                        summary = read_json(saved / "series.json")
-                        if saved == staged:
-                            staged.rename(published)
-                        item.update(status="partial", report_url=f"/reports/{run_id}/report.html",
-                                    series_url=f"/reports/{run_id}/series.json", points=summary.get("points", []),
-                                    error="Сервер перезапущен. Сохранены опубликованные результаты серии.")
-                    except (OSError, ValueError):
+                        request = read_json(path.parent / "request.json")
+                        item.update(series_result(directory, run_id, request, item, None,
+                            "Сервер перезапущен. Процесс остановлен; показаны сохранённые результаты."))
+                    except (OSError, ValueError, KeyError, RuntimeError):
                         pass
                 write_json(path, item)
             self.items[item["run_id"]] = item
@@ -349,7 +412,7 @@ class Jobs:
                 try:
                     code, stdout, stderr = self.runner.analyze(folder / "workload.json", staging, folder / "series-request.json")
                 except RuntimeError as error:
-                    if not (staging / "series.json").is_file() or not (staging / "report.html").is_file():
+                    if not (staging / "series.json").is_file() and not list(staging.glob("*/report.json")):
                         raise
                     code, stdout, stderr = 1, "", str(error)
             finally:
@@ -359,20 +422,8 @@ class Jobs:
             code, stdout, stderr = self.runner.analyze(folder / "workload.json", staging)
         (folder / "cli.log").write_text(stdout + "\n" + stderr)
         if "series" in request:
-            series_path = staging / "series.json"
-            saved = read_json(series_path) if series_path.is_file() else {}
-            if not saved or not (staging / "report.html").is_file():
-                raise RuntimeError("Серия не опубликовала пригодный отчёт: " + (stderr.strip()[-1000:] or str(code)))
-            write_json(staging / "workload.json", request["workload"])
-            write_json(staging / "series-request.json", request["series"])
-            write_json(staging / "schema.json", catalog)
-            write_json(staging / "demo-config.json", {**{k: v for k, v in request.items() if k != "workload"}, "run_id": id, "series_id": saved.get("series_id")})
-            staging.rename(self.directory / "reports" / id)
-            status = "completed" if code == 0 and saved.get("status") == "completed" else (
-                "partial" if any(p.get("artifacts", {}).get("report.html") for p in saved.get("points", [])) else "failed")
-            self.update(id, status=status, points=saved.get("points", []), cli_exit_code=code,
-                        error=(stderr.strip()[-3000:] or "Серия остановлена до получения результатов.") if status == "failed" else None,
-                        report_url=f"/reports/{id}/report.html", series_url=f"/reports/{id}/series.json", finished_at=time.time())
+            self.update(id, **series_result(self.directory, id, request, self.items[id], code,
+                                           stderr.strip()[-3000:] or None))
             return
         report_path = staging / "report.json"
         report = read_json(report_path) if report_path.is_file() else {}
@@ -444,7 +495,7 @@ def make_handler(jobs, templates):
             elif path in ("/reports", "/reports/"):
                 entries = sorted((jobs.directory / "reports").iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)
                 links = "".join(
-                    f'<li><a href="/reports/{p.name}/report.html">{html.escape(p.name)}</a> '
+                    f'<li><a href="/reports/{p.name}/{"demo-series.html" if (p / "demo-series.html").is_file() else "report.html"}">{html.escape(p.name)}</a> '
                     f'<a href="/reports/{p.name}/{"series.json" if (p / "series.json").is_file() else "report.json"}">JSON</a>'
                     + (f' · <a href="/reports/{p.name}/indexes.sql">SQL</a>' if not (p / "series.json").is_file() else '')
                     + '</li>' for p in entries if p.is_dir())
@@ -474,7 +525,7 @@ def make_handler(jobs, templates):
                 length = int(self.headers.get("Content-Length", "0"))
                 if not 0 < length <= 3 * 1024 * 1024:
                     raise ValueError("Размер запроса должен быть от 1 байта до 3 MiB.")
-                data = json.loads(self.rfile.read(length), parse_constant=lambda v: (_ for _ in ()).throw(ValueError("Некорректное число JSON.")))
+                data = http_json(self.rfile.read(length))
                 item = jobs.submit(data, "schema" if path.endswith("schema-previews") else "analysis")
                 self.send(202, {**item, "status_url": f"/api/runs/{item['run_id']}"})
             except ShuttingDownError as error:
