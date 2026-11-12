@@ -2,6 +2,15 @@
 # Exact seed v1 in an OWN disposable container. Never uses .env or the shared stand.
 set -Eeuo pipefail
 cd "$(dirname "$0")/.."
+test_filter='ru.itmo.indexbudget.examples.DemoScenario*'
+case "${1:-}" in
+    '') [[ $# == 0 ]] || exit 2 ;;
+    --observed-budgets)
+        [[ $# == 1 ]] || exit 2
+        test_filter='ru.itmo.indexbudget.experiments.ObservedBudgetIntegrationTest'
+        ;;
+    *) echo 'Usage: bash demo/check-scenarios.sh [--observed-budgets]' >&2; exit 2 ;;
+esac
 container=''
 image="indexbudget-scenarios-test-$$"
 cleanup() {
@@ -34,4 +43,4 @@ address=$(docker port "$container" 5432/tcp)
 port=${address##*:}
 [[ "$port" =~ ^[0-9]+$ ]] || { echo 'Cannot determine test database port.' >&2; exit 1; }
 export INDEXBUDGET_SCENARIOS_TEST_URL="jdbc:postgresql://127.0.0.1:$port/indexbudget"
-./gradlew --no-daemon test --rerun-tasks --tests 'ru.itmo.indexbudget.examples.DemoScenario*'
+./gradlew --no-daemon test --rerun-tasks --tests "$test_filter"
