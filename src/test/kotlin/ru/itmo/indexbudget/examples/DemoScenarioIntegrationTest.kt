@@ -25,7 +25,7 @@ class DemoScenarioIntegrationTest {
     private val mapper = JsonMapper()
 
     @Test
-    fun `published seed workload and budget series complete the actual pipeline without changing data`() {
+    fun `published seed workload and budget series preserve usable bounded results without changing data`() {
         val output = Files.createTempDirectory(Path.of("build"), "scenario-runs-")
         admin().use { admin ->
             assertEquals("v1", scalar(admin, "SELECT version FROM demo_meta.seed_status WHERE ready"))
@@ -53,7 +53,7 @@ class DemoScenarioIntegrationTest {
                 }, shutdownCancellation = ShutdownCancellation { AutoCloseable {} })
 
             val main = pipeline.run(input, output.resolve("main"), context)
-            assertEquals(RunStatus.COMPLETED, main.status)
+            requireUsableOutcome(main)
             val mainReport = reports.last()
             assertTrue(checkNotNull(main.selected).evaluation.candidateIds.size >= 2,
                 "This fixed demo must actually permit selecting 2+ indexes, not only set max_indexes=5")
@@ -94,7 +94,14 @@ class DemoScenarioIntegrationTest {
                 val request = BudgetSeriesReader().read(root.resolve(file), seriesContext)
                 val result = BudgetSeriesPipeline(pipeline, ShutdownCancellation { AutoCloseable {} })
                     .run(sameInput, request, output.resolve(file.removeSuffix(".json")), seriesContext)
-                assertEquals(SeriesStatus.COMPLETED, result.status, file)
+                assertNull(result.preparationError, file)
+                for (point in result.points) {
+                    val saved = checkNotNull(point.result) { "$file point ${point.ordinal}: ${point.error}" }
+                    requireUsableOutcome(saved)
+                    assertEquals(saved.status.name, point.status.name, file)
+                }
+                assertEquals(if (result.points.any { it.status == SeriesPointStatus.PARTIAL })
+                    SeriesStatus.PARTIAL else SeriesStatus.COMPLETED, result.status, file)
                 assertTrue(result.points.all { it.conditionsMatch == true }, file)
                 assertTrue(result.points.first().result?.selected?.evaluation?.candidateIds?.isEmpty() == true, file)
                 assertTrue(checkNotNull(result.points.last().result?.selected).evaluation.candidateIds.size >= 2, file)
@@ -121,14 +128,36 @@ class DemoScenarioIntegrationTest {
                 "seed_version" to "v1", "seed_sha256" to HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(seed)),
                 "postgres_version" to mainReport.environment.postgresVersion, "hypopg_version" to mainReport.environment.hypopgVersion,
                 "input_hash" to mainReport.inputHash, "data_unchanged" to true, "physical_indexes_unchanged" to true,
+                "main_status" to main.status.name.lowercase(), "main_stop_reasons" to main.diagnostics.stopReasons.map { it.name },
                 "main_selected_count" to main.selected?.evaluation?.candidateIds?.size,
                 "baseline_costs" to main.baseline?.costByQueryId, "selected_costs" to main.selected?.evaluation?.costByQueryId,
                 "series_selected_counts" to seriesResults.mapValues { (_, result) ->
                     result.points.map { it.result?.selected?.evaluation?.candidateIds?.size } },
+                "series_outcomes" to seriesResults.mapValues { (_, result) -> mapOf(
+                    "status" to result.status.name.lowercase(),
+                    "points" to result.points.map { point -> mapOf("status" to point.status.name.lowercase(),
+                        "stop_reasons" to point.result?.diagnostics?.stopReasons?.map { it.name }) },
+                ) },
             )) + "\n")
             // Stable evidence directory is for CI downloads; never rewrite earlier run artifacts.
             Files.writeString(evidence.resolve("runs-directory.txt"), output.toString() + "\n")
         }
+    }
+
+    /** Normal mode can exhaust fixed-S0 repair; that is usable partial, never completed. */
+    private fun requireUsableOutcome(result: SearchResult) {
+        assertTrue(result.status in setOf(RunStatus.COMPLETED, RunStatus.PARTIAL))
+        if (result.status == RunStatus.PARTIAL) {
+            assertEquals(setOf(ErrorCode.REPAIR_LIMIT), result.diagnostics.errors.map { it.code }.toSet())
+            assertTrue(StopReason.REPAIR_LIMIT in result.diagnostics.stopReasons)
+            assertTrue(result.diagnostics.stopReasons.all { it in setOf(
+                StopReason.NO_IMPROVEMENT, StopReason.MAX_INDEXES, StopReason.REPAIR_LIMIT) })
+            assertEquals(result.diagnostics.limits.maxRepairAttempts, result.diagnostics.statistics.repairAttempts)
+        } else assertTrue(result.diagnostics.errors.isEmpty())
+        assertNotNull(result.baseline)
+        assertNotNull(result.bestRobust)
+        assertNotNull(result.bestMean)
+        assertNotNull(result.selected)
     }
 
     private fun analysis(): Connection = DriverManager.getConnection(System.getenv("INDEXBUDGET_SCENARIOS_TEST_URL"),
